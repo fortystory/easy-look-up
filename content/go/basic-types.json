@@ -1,0 +1,111 @@
+{
+  "id": "basic-types",
+  "title": "基本类型与变量",
+  "entries": [
+    {
+      "title": "整型",
+      "description": "Go 的整型分有符号（int、int8…int64）和无符号（uint、uint8…uint64）两族。不写位数就是 int，在 64 位机器上占 8 字节。",
+      "code": "var age int = 18\nvar small int8 = 127\nvar count uint = 0\nfmt.Println(age, small, count)",
+      "lang": "go",
+      "notes": "整数溢出不会报错，会绕回（wrap around）变成负数。需要固定宽度就用 int32 / int64，别用 int。"
+    },
+    {
+      "title": "浮点型",
+      "description": "浮点默认是 float64。需要 float32 时必须显式写出来——不带小数点的字面量按整数处理，带小数点的按 float64 处理。",
+      "code": "var pi float64 = 3.14159\nvar ratio float32 = 0.5\nvar half = 0.5\nfmt.Println(pi, ratio, half)",
+      "lang": "go",
+      "notes": "不要用 == 比较两个浮点数是否相等，误差会咬你。金额也别用浮点，用整数存分。"
+    },
+    {
+      "title": "字符串",
+      "description": "string 是一段不可变的 UTF-8 字节序列。普通字面量用双引号，需要原样保留反斜杠和换行时用反引号。",
+      "code": "var name string = \"张三\"\nvar raw = `C:\\path\\to\\file`\nfmt.Println(name, raw, len(name))",
+      "lang": "go",
+      "notes": "len() 返回的是字节数，不是字符数。一个中文字符占 3 字节，len(\"中文\") 是 6。要字符数用 utf8.RuneCountInString。"
+    },
+    {
+      "title": "布尔",
+      "description": "bool 只有 true 和 false 两个值。Go 不接受整数或 0/1 充当布尔值。",
+      "code": "var ok bool = true\nvar failed bool\nfmt.Println(ok, failed)",
+      "lang": "go",
+      "notes": "Go 没有 C 那种「非零即真」的写法，if 的条件本身必须是 bool。"
+    },
+    {
+      "title": "零值",
+      "description": "Go 的变量声明后一定有值，不需要先赋初值就能直接用。数值是 0，字符串是空串，布尔是 false，指针是 nil。",
+      "code": "var i int\nvar s string\nvar b bool\nvar p *int\nfmt.Println(i, s, b, p == nil)",
+      "lang": "go",
+      "notes": "结构体和数组同理：各字段、各元素取各自的零值。零值往往就是能直接用的合理值，比如 bytes.Buffer{} 和 sync.Mutex{}。"
+    },
+    {
+      "title": "常量 const",
+      "description": "常量在编译期就确定，运行期不能改。和变量一样支持批量声明。",
+      "code": "const pi = 3.14159\nconst (\n\tMaxSize = 1024\n\tMinSize = 1\n)\nconst TimeoutSeconds int = 30\nfmt.Println(pi, MaxSize, MinSize, TimeoutSeconds)",
+      "lang": "go",
+      "notes": "常量没有内存地址，不能取指针，也不能传给需要 *int 的地方。"
+    },
+    {
+      "title": "用 var 声明变量",
+      "description": "var 是完整的声明写法，函数内和包级都能用（包级就是全局变量）。类型可以写出来，也可以省略让编译器推断。",
+      "code": "var name string\nvar age int = 18\nvar x, y int = 1, 2\nname = \"张三\"\nfmt.Println(name, age, x, y)",
+      "lang": "go",
+      "notes": "var x int 和 var x = 0 等价，零值就是那个类型的默认初值。"
+    },
+    {
+      "title": "短声明 :=",
+      "description": ":= 一步完成声明和赋值，只能用在函数内。左边必须全是新变量，右边可以混着已有变量。",
+      "code": "name := \"张三\"\nage := 18\nx, y := 1, 2\nfmt.Println(name, age, x, y)",
+      "lang": "go",
+      "notes": "左边至少要有一个新变量，否则编译报错「no new variables on left side of :=」。"
+    },
+    {
+      "title": "var 还是 :=",
+      "description": "函数内优先用 :=；需要零值、或者类型已经明确时就用 var。包级变量只能用 var。",
+      "code": "var count int\ncount = 10\ntotal := count + 5\nfmt.Println(count, total)",
+      "lang": "go",
+      "notes": "「=」是赋值，「:=」是声明。x := 1 之后再写 x = 2 合法；反过来光写 x = 1 会编译报错，因为 x 还没声明。"
+    },
+    {
+      "title": "类型转换",
+      "description": "Go 不做隐式类型转换，两种类型之间必须显式写出来。数值类型互转是安全的，不会 panic。",
+      "code": "var i int = 65\nvar c rune = 'A'\nvar b byte = byte(c)\nvar s string = string(rune(b))\nvar f float64 = float64(i) / 2\nfmt.Println(i, c, b, s, f)",
+      "lang": "go",
+      "notes": "string(rune) 和 string(byte) 完全不同：前者解出字符，后者按 UTF-8 编码。byte 转换会截断——byte('中') 这样的常量转换直接编译报错（constant 20013 overflows byte），而对变量做 byte(c) 会在运行期截断成低位字节 45，也就是 \"-\"。"
+    },
+    {
+      "title": "查看一个值的类型",
+      "description": "用 %T 可以打印一个值在运行时的类型，想确认字面量被推断成了什么类型时很好用。",
+      "code": "var x = 42\nfmt.Printf(\"%T\\n\", x)\nfmt.Printf(\"%T\\n\", \"hi\")\nfmt.Printf(\"%T\\n\", 0.5)",
+      "lang": "go",
+      "notes": "字面量的默认类型：整数是 int，带小数点是 float64，字符串是 string。"
+    },
+    {
+      "title": "未使用的变量会编译报错",
+      "description": "Go 要求局部变量必须被使用，否则编译不过。这是有意设计的，防止遗留用不到的变量。",
+      "code": "x := 1\n// x 从未被使用 —— 编译报错：\n// declared and not used: x",
+      "lang": "go",
+      "notes": "确实想丢弃一个值，用 _ 显式接收：_ = someFunc()，这样不会报错。"
+    },
+    {
+      "title": "多变量声明与赋值",
+      "description": "多个同类型的变量可以一行声明，类型只写一次。多变量赋值是同时进行的，右边先全部求值再一起赋。",
+      "code": "var a, b int = 1, 2\na, b = b, a\nvar c, d = 1, \"hi\"\nfmt.Println(a, b, c, d)",
+      "lang": "go",
+      "notes": "a, b = b, a 能正确交换两个值，靠的就是「同时赋值」这个语义。"
+    },
+    {
+      "title": "字符串与字符",
+      "description": "单引号是字符字面量，类型是 rune（int32 的别名）；byte 是 uint8 的别名。两者不等价。",
+      "code": "var ch rune = '中'\nvar b byte = 'A'\nvar s = \"中文\"\nfmt.Println(ch, b, len(s))",
+      "lang": "go",
+      "notes": "'A' 可以当 byte 用，但 '中' 不行——它超出了 uint8 的范围。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：常量、var 与 :=、不同类型、类型转换、布尔判断。",
+      "code": "package main\n\nimport \"fmt\"\n\nconst taxRate = 0.06\n\nfunc main() {\n\tvar name string = \"张三\"\n\tage := 18\n\tvar price float64 = 18.5\n\tquantity := 2\n\tvar paid bool = true\n\n\tvar subtotal = price * float64(quantity)\n\tvar total = subtotal * (1 + taxRate)\n\n\tfmt.Printf(\"%s 年龄 %d，买了 %d 件，合计 %.2f 元\\n\", name, age, quantity, total)\n\tfmt.Printf(\"类型: %T %T %T\\n\", age, price, paid)\n\n\tif paid {\n\t\tfmt.Println(\"已付款\")\n\t}\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}
