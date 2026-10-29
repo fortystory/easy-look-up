@@ -17,6 +17,13 @@ go run .
 - `/go` —— Go 语言
 - `/stdlib` —— Go 标准库
 - `/gin` —— Gin 框架
+- `/interview-go` —— Go 语言与运行时面试题
+- `/interview-concurrency` —— 并发与高并发面试题
+- `/interview-gin` —— Gin 面试题
+- `/interview-mysql` —— MySQL 面试题
+- `/interview-redis` —— Redis 面试题
+- `/interview-web` —— Web 与 HTTP 面试题
+- `/interview-network` —— 网络与 TCP/IP 面试题
 
 ## 跑测试
 
@@ -32,7 +39,8 @@ go test ./...
 ├── content/                    内容（JSON，按类别分目录）
 │   ├── go/                     Go 语言
 │   ├── stdlib/                 Go 标准库
-│   └── gin/                    Gin 框架
+│   ├── gin/                    Gin 框架
+│   └── interview-*/            面试题（问答型条目）
 ├── internal/
 │   ├── content/                加载并解析内容
 │   └── site/                   路由、模板渲染、静态资源
@@ -54,6 +62,8 @@ go test ./...
 ## 怎么加一条内容
 
 内容放在 `content/<类别>/<分组>.json`，一个分组一个文件。字段格式和写作要求见 [docs/content-guide.md](docs/content-guide.md)。
+
+内容有两种形态：**代码片段型**（有 `code`，讲「某个语法怎么写」）和**问答型**（有 `answer` 数组，讲「面试常问的某个问题」）。面试题的标题写成问句，答案拆成 3–6 个要点。
 
 ### 1. 建文件
 
