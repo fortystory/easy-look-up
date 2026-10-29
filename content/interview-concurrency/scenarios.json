@@ -24,7 +24,7 @@
         "最后一道防线是唯一约束：订单表对 (活动 ID, 用户 ID) 建唯一索引，同一用户同一活动只允许一条订单，靠数据库拦重复",
         "事后必须对账：Redis 预扣总量、DB 实际订单量、支付成功量三者定时核对，差异要告警并能补单，不能只靠「扣减逻辑看着对」"
       ],
-      "code": "package main\\n\\nimport (\\n\\t\\\"fmt\\\"\\n\\t\\\"sync\\\"\\n)\\n\\nfunc main() {\\n\\tvar mu sync.Mutex\\n\\tstock := 10\\n\\n\\t// 判断库存和扣减必须在同一个临界区里完成\\n\\tbuy := func() bool {\\n\\t\\tmu.Lock()\\n\\t\\tdefer mu.Unlock()\\n\\t\\tif stock <= 0 {\\n\\t\\t\\treturn false\\n\\t\\t}\\n\\t\\tstock--\\n\\t\\treturn true\\n\\t}\\n\\n\\tvar wg sync.WaitGroup\\n\\tfor i := 0; i < 100; i++ {\\n\\t\\twg.Add(1)\\n\\t\\tgo func() {\\n\\t\\t\\tdefer wg.Done()\\n\\t\\t\\tbuy()\\n\\t\\t}()\\n\\t}\\n\\twg.Wait()\\n\\tfmt.Println(\\\"剩余库存\\\", stock) // 不会变成负数\\n}",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\nfunc main() {\n\tvar mu sync.Mutex\n\tstock := 10\n\n\t// 判断库存和扣减必须在同一个临界区里完成\n\tbuy := func() bool {\n\t\tmu.Lock()\n\t\tdefer mu.Unlock()\n\t\tif stock <= 0 {\n\t\t\treturn false\n\t\t}\n\t\tstock--\n\t\treturn true\n\t}\n\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 100; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tbuy()\n\t\t}()\n\t}\n\twg.Wait()\n\tfmt.Println(\"剩余库存\", stock) // 不会变成负数\n}",
       "lang": "go",
       "notes": "常见追问：Redis 扣了 DB 没写成功，库存不就少了？——会，所以要有「MQ 重试 + 死信 + 定时对账补偿」的闭环，只扣不减必然亏库存。常见追问：Redis 扣减和 DB 扣减谁说了算？——以 Redis 的原子扣减决定能不能抢到，DB 只是最终记账，两边靠对账保持一致。"
     },
@@ -74,7 +74,7 @@
         "优化二是游标分页（seek method）：where id > last_id order by id limit 10，用上一页最后一个 ID 当游标，每次只扫需要的行",
         "优化三是书签分页：第一页就把排序键的值一起返回给前端，翻页带上这个值；总条数用估算值或单独缓存，别每页都 count(*)"
       ],
-      "code": "package main\\n\\nimport \\\"fmt\\\"\\n\\nfunc main() {\\n\\tids := make([]int, 0, 100000)\\n\\tfor i := 1; i <= 100000; i++ {\\n\\t\\tids = append(ids, i)\\n\\t}\\n\\n\\t// 游标分页：带上上一页的最后一个 ID，只扫当前需要的行\\n\\tpageSize, lastID := 10, 0\\n\\tpage := make([]int, 0, pageSize)\\n\\tfor _, id := range ids {\\n\\t\\tif id <= lastID {\\n\\t\\t\\tcontinue // 跳过已经翻过的部分\\n\\t\\t}\\n\\t\\tpage = append(page, id)\\n\\t\\tlastID = id\\n\\t\\tif len(page) == pageSize {\\n\\t\\t\\tbreak\\n\\t\\t}\\n\\t}\\n\\tfmt.Println(page) // [1 2 3 4 5 6 7 8 9 10]\\n}",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tids := make([]int, 0, 100000)\n\tfor i := 1; i <= 100000; i++ {\n\t\tids = append(ids, i)\n\t}\n\n\t// 游标分页：带上上一页的最后一个 ID，只扫当前需要的行\n\tpageSize, lastID := 10, 0\n\tpage := make([]int, 0, pageSize)\n\tfor _, id := range ids {\n\t\tif id <= lastID {\n\t\t\tcontinue // 跳过已经翻过的部分\n\t\t}\n\t\tpage = append(page, id)\n\t\tlastID = id\n\t\tif len(page) == pageSize {\n\t\t\tbreak\n\t\t}\n\t}\n\tfmt.Println(page) // [1 2 3 4 5 6 7 8 9 10]\n}",
       "lang": "go",
       "notes": "常见追问：游标分页的代价是什么？——不能任意跳页（没法直接到第 500 页），排序键必须唯一，或者额外加一个唯一列做 tiebreaker。常见追问：count(*) 为什么也慢？——它要全表扫描统计行数，大表上要改用估算值、采样或单独缓存。"
     },
@@ -88,7 +88,7 @@
         "精度要分级：浏览量这类展示型数据可以最终一致甚至近似，余额、金额这类必须强一致，不能套用这套方案",
         "兜底手段：Redis 重启会丢计数，所以 DB 基线必须保留、Redis 开 AOF 持久化，并接受「重启后短时间内计数偏小」这个已知代价"
       ],
-      "code": "package main\\n\\nimport \\\"fmt\\\"\\n\\nfunc main() {\\n\\tconst shards = 10\\n\\tcounts := make([]int64, shards)\\n\\n\\t// 写：随机选一片累加，把热点 key 摊开\\n\\tfor i := 0; i < 1000; i++ {\\n\\t\\tcounts[i%shards]++\\n\\t}\\n\\n\\t// 读：把所有分片求和\\n\\tvar total int64\\n\\tfor _, c := range counts {\\n\\t\\ttotal += c\\n\\t}\\n\\tfmt.Println(total) // 1000\\n}",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tconst shards = 10\n\tcounts := make([]int64, shards)\n\n\t// 写：随机选一片累加，把热点 key 摊开\n\tfor i := 0; i < 1000; i++ {\n\t\tcounts[i%shards]++\n\t}\n\n\t// 读：把所有分片求和\n\tvar total int64\n\tfor _, c := range counts {\n\t\ttotal += c\n\t}\n\tfmt.Println(total) // 1000\n}",
       "lang": "go",
       "notes": "常见追问：Redis 挂了计数怎么办？——展示型数据降级为只读 DB 基线，强一致的数据本来就不该放 Redis。常见追问：分片计数求和不准怎么办？——求和是最终一致的，误差上限就是一个落库周期内的增量。常见追问：能不能用 HyperLogLog？——适合「去重后的量级估算」，但拿不到精确值，也没法做差量合并。"
     },
@@ -102,7 +102,7 @@
         "解法二更常用：每个 goroutine 或每个工作线程各持一个独立的 rand.New(rand.NewSource(seed))，互不共享就没有锁；注意各自分支的 seed 要错开，否则拿到的是同一串随机数",
         "结论先行：只是要「随机」用于打散（负载均衡、抽样、随机排序），直接用包级函数即可，它本身并发安全；要可复现、可控的随机序列（固定种子的测试、加密）才自己 rand.New，Go 1.22 起还可以用 math/rand/v2"
       ],
-      "code": "package main\\n\\nimport (\\n\\t\\\"fmt\\\"\\n\\t\\\"math/rand\\\"\\n\\t\\\"sync\\\"\\n)\\n\\nfunc main() {\\n\\t// 方式一：共享同一个 *Rand，所有调用都要加锁保护\\n\\tshared := rand.New(rand.NewSource(42))\\n\\tvar mu sync.Mutex\\n\\tvar wg sync.WaitGroup\\n\\tfor i := 0; i < 10; i++ {\\n\\t\\twg.Add(1)\\n\\t\\tgo func() {\\n\\t\\t\\tdefer wg.Done()\\n\\t\\t\\tmu.Lock()\\n\\t\\t\\tdefer mu.Unlock()\\n\\t\\t\\t_ = shared.Intn(100)\\n\\t\\t}()\\n\\t}\\n\\twg.Wait()\\n\\n\\t// 方式二：每个 goroutine 一个独立 Rand，互不共享就没有锁\\n\\tlocal := rand.New(rand.NewSource(7))\\n\\tfmt.Println(local.Intn(100), shared.Intn(100))\\n}",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"math/rand\"\n\t\"sync\"\n)\n\nfunc main() {\n\t// 方式一：共享同一个 *Rand，所有调用都要加锁保护\n\tshared := rand.New(rand.NewSource(42))\n\tvar mu sync.Mutex\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 10; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tmu.Lock()\n\t\t\tdefer mu.Unlock()\n\t\t\t_ = shared.Intn(100)\n\t\t}()\n\t}\n\twg.Wait()\n\n\t// 方式二：每个 goroutine 一个独立 Rand，互不共享就没有锁\n\tlocal := rand.New(rand.NewSource(7))\n\tfmt.Println(local.Intn(100), shared.Intn(100))\n}",
       "lang": "go",
       "notes": "常见追问：加密场景该用哪个？——用 crypto/rand，math/rand 的输出是可预测的，不能用于密码和 token。常见追问：rand.New(rand.NewSource(1)) 每次结果都一样？——是，同 seed 必然同序列，这正是测试要的效果；生产环境不要固定 seed。"
     },
@@ -116,7 +116,7 @@
         "Go 标准库没有现成的外部排序实现，实践里通常用 bufio.Scanner 分块读 + sort.Slice 块内排序 + container/heap 多路归并自己拼",
         "单机也放不下时用分布式办法：按值域或 hash 分片，各分片内部排好序，上层再做一次归并；或者直接依赖数据库的 ORDER BY，但要配合索引和分页策略"
       ],
-      "code": "package main\\n\\nimport (\\n\\t\\\"fmt\\\"\\n\\t\\\"sort\\\"\\n)\\n\\n// 两路归并：把两个有序片段合成一个有序片段\\nfunc merge(a, b []int) []int {\\n\\tout := make([]int, 0, len(a)+len(b))\\n\\ti, j := 0, 0\\n\\tfor i < len(a) && j < len(b) {\\n\\t\\tif a[i] <= b[j] {\\n\\t\\t\\tout = append(out, a[i])\\n\\t\\t\\ti++\\n\\t\\t} else {\\n\\t\\t\\tout = append(out, b[j])\\n\\t\\t\\tj++\\n\\t\\t}\\n\\t}\\n\\tout = append(out, a[i:]...)\\n\\treturn append(out, b[j:]...)\\n}\\n\\nfunc main() {\\n\\tdata := []int{5, 3, 9, 1, 7, 2, 8, 4}\\n\\tchunk := 3\\n\\n\\t// 第一阶段：分块读入内存并各自排序，得到多个有序顺串\\n\\tvar runs [][]int\\n\\tfor i := 0; i < len(data); i += chunk {\\n\\t\\tend := i + chunk\\n\\t\\tif end > len(data) {\\n\\t\\t\\tend = len(data)\\n\\t\\t}\\n\\t\\tblock := append([]int(nil), data[i:end]...)\\n\\t\\tsort.Ints(block)\\n\\t\\truns = append(runs, block)\\n\\t}\\n\\n\\t// 第二阶段：多路归并成最终结果\\n\\tresult := runs[0]\\n\\tfor _, r := range runs[1:] {\\n\\t\\tresult = merge(result, r)\\n\\t}\\n\\tfmt.Println(result) // [1 2 3 4 5 7 8 9]\\n}",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\n// 两路归并：把两个有序片段合成一个有序片段\nfunc merge(a, b []int) []int {\n\tout := make([]int, 0, len(a)+len(b))\n\ti, j := 0, 0\n\tfor i < len(a) && j < len(b) {\n\t\tif a[i] <= b[j] {\n\t\t\tout = append(out, a[i])\n\t\t\ti++\n\t\t} else {\n\t\t\tout = append(out, b[j])\n\t\t\tj++\n\t\t}\n\t}\n\tout = append(out, a[i:]...)\n\treturn append(out, b[j:]...)\n}\n\nfunc main() {\n\tdata := []int{5, 3, 9, 1, 7, 2, 8, 4}\n\tchunk := 3\n\n\t// 第一阶段：分块读入内存并各自排序，得到多个有序顺串\n\tvar runs [][]int\n\tfor i := 0; i < len(data); i += chunk {\n\t\tend := i + chunk\n\t\tif end > len(data) {\n\t\t\tend = len(data)\n\t\t}\n\t\tblock := append([]int(nil), data[i:end]...)\n\t\tsort.Ints(block)\n\t\truns = append(runs, block)\n\t}\n\n\t// 第二阶段：多路归并成最终结果\n\tresult := runs[0]\n\tfor _, r := range runs[1:] {\n\t\tresult = merge(result, r)\n\t}\n\tfmt.Println(result) // [1 2 3 4 5 7 8 9]\n}",
       "lang": "go",
       "notes": "常见追问：为什么用堆而不是每次线性找最小？——k 路归并每输出一个元素要比较 k 次，最小堆把这一步从 O(k) 降到 O(log k)。常见追问：桶排序或基数排序什么时候更合适？——数据是整数且值域可控时基数排序能做到 O(n)，但通用外部排序场景堆归并更稳妥。"
     },
@@ -130,7 +130,7 @@
         "Snowflake 是另一条路：1 位符号 + 41 位毫秒时间戳 + 5 位数据中心 + 5 位机器 + 12 位序列，单机每毫秒 4096 个 ID，趋势递增且无中心节点，代价是依赖时钟不漂移",
         "选型标准：要求全局唯一且大致有序选 Snowflake 或号段；要求绝对唯一且不暴露业务量选 UUID；要求短小、连续、便于存储和索引（尤其 MySQL 主键）选号段模式"
       ],
-      "code": "package main\\n\\nimport (\\n\\t\\\"fmt\\\"\\n\\t\\\"sync\\\"\\n\\t\\\"time\\\"\\n)\\n\\n// 简化版 Snowflake：时间戳 + 机器位 + 序列号\\nconst (\\n\\tworkerIDBits = 5\\n\\tseqBits      = 12\\n\\tmaxWorkerID  = -1 ^ (-1 << workerIDBits)\\n\\tmaxSeq       = -1 ^ (-1 << seqBits)\\n)\\n\\ntype snowflake struct {\\n\\tmu        sync.Mutex\\n\\tworkerID  int64\\n\\tlastStamp int64\\n\\tseq       int64\\n}\\n\\nfunc (s *snowflake) next() int64 {\\n\\ts.mu.Lock()\\n\\tdefer s.mu.Unlock()\\n\\tnow := time.Now().UnixMilli()\\n\\tif now == s.lastStamp {\\n\\t\\ts.seq = (s.seq + 1) & maxSeq\\n\\t\\tif s.seq == 0 {\\n\\t\\t\\t// 同一毫秒的序列用完了，等下一毫秒\\n\\t\\t\\tfor now <= s.lastStamp {\\n\\t\\t\\t\\tnow = time.Now().UnixMilli()\\n\\t\\t\\t}\\n\\t\\t}\\n\\t} else {\\n\\t\\ts.seq = 0\\n\\t}\\n\\ts.lastStamp = now\\n\\treturn (now << (workerIDBits + seqBits)) | (s.workerID << seqBits) | s.seq\\n}\\n\\nfunc main() {\\n\\tg := &snowflake{workerID: 1}\\n\\ta := g.next()\\n\\tb := g.next()\\n\\tfmt.Println(a < b) // 趋势递增\\n}",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n\t\"time\"\n)\n\n// 简化版 Snowflake：时间戳 + 机器位 + 序列号\nconst (\n\tworkerIDBits = 5\n\tseqBits      = 12\n\tmaxWorkerID  = -1 ^ (-1 << workerIDBits)\n\tmaxSeq       = -1 ^ (-1 << seqBits)\n)\n\ntype snowflake struct {\n\tmu        sync.Mutex\n\tworkerID  int64\n\tlastStamp int64\n\tseq       int64\n}\n\nfunc (s *snowflake) next() int64 {\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tnow := time.Now().UnixMilli()\n\tif now == s.lastStamp {\n\t\ts.seq = (s.seq + 1) & maxSeq\n\t\tif s.seq == 0 {\n\t\t\t// 同一毫秒的序列用完了，等下一毫秒\n\t\t\tfor now <= s.lastStamp {\n\t\t\t\tnow = time.Now().UnixMilli()\n\t\t\t}\n\t\t}\n\t} else {\n\t\ts.seq = 0\n\t}\n\ts.lastStamp = now\n\treturn (now << (workerIDBits + seqBits)) | (s.workerID << seqBits) | s.seq\n}\n\nfunc main() {\n\tg := &snowflake{workerID: 1}\n\ta := g.next()\n\tb := g.next()\n\tfmt.Println(a < b) // 趋势递增\n}",
       "lang": "go",
       "notes": "常见追问：Snowflake 怎么保证不重复？——同一毫秒内靠序列号自增，序列用完就等下一毫秒；不同机器的机器位不同，保证不同节点不会生成相同 ID。常见追问：时钟回拨怎么办？——回拨幅度小于几毫秒就等时钟追平，超过阈值应该拒绝发号并告警，而不是硬发。常见追问：为什么号段模式更适合 MySQL 主键？——ID 单调递增，写入是顺序追加，减少随机 IO 和页分裂。"
     },
@@ -144,12 +144,12 @@
         "内存是硬约束：ZSet 占用随元素数增长，只保留 Top N 或按时间窗口滚动清理，否则单个榜单就能把 Redis 撑爆",
         "要有降级路径：定时把榜单快照写到文件或 DB，Redis 不可用时读快照，保证「榜单能看」而不是「整个页面报错」"
       ],
-      "code": "package main\\n\\nimport (\\n\\t\\\"fmt\\\"\\n\\t\\\"sort\\\"\\n)\\n\\ntype rank struct {\\n\\tUserID string\\n\\tScore  int64\\n}\\n\\nfunc main() {\\n\\t// 用 map + 排序模拟 Redis ZSet 的两个核心操作\\n\\tscores := map[string]int64{\\n\\t\\t\\\"u1\\\": 100,\\n\\t\\t\\\"u2\\\": 300,\\n\\t\\t\\\"u3\\\": 200,\\n\\t}\\n\\n\\t// ZINCRBY：给某个成员加分\\n\\tscores[\\\"u1\\\"] += 50\\n\\n\\t// ZREVRANGE：按分数倒序取前 N 名\\n\\tall := make([]rank, 0, len(scores))\\n\\tfor id, s := range scores {\\n\\t\\tall = append(all, rank{UserID: id, Score: s})\\n\\t}\\n\\tsort.Slice(all, func(i, j int) bool {\\n\\t\\tif all[i].Score == all[j].Score {\\n\\t\\t\\treturn all[i].UserID < all[j].UserID // 同分时用 member 字典序兜底\\n\\t\\t}\\n\\t\\treturn all[i].Score > all[j].Score\\n\\t})\\n\\tfmt.Println(all[:2]) // Top 2\\n}",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\ntype rank struct {\n\tUserID string\n\tScore  int64\n}\n\nfunc main() {\n\t// 用 map + 排序模拟 Redis ZSet 的两个核心操作\n\tscores := map[string]int64{\n\t\t\"u1\": 100,\n\t\t\"u2\": 300,\n\t\t\"u3\": 200,\n\t}\n\n\t// ZINCRBY：给某个成员加分\n\tscores[\"u1\"] += 50\n\n\t// ZREVRANGE：按分数倒序取前 N 名\n\tall := make([]rank, 0, len(scores))\n\tfor id, s := range scores {\n\t\tall = append(all, rank{UserID: id, Score: s})\n\t}\n\tsort.Slice(all, func(i, j int) bool {\n\t\tif all[i].Score == all[j].Score {\n\t\t\treturn all[i].UserID < all[j].UserID // 同分时用 member 字典序兜底\n\t\t}\n\t\treturn all[i].Score > all[j].Score\n\t})\n\tfmt.Println(all[:2]) // Top 2\n}",
       "lang": "go",
       "notes": "常见追问：Redis ZSet 是怎么实现的？——跳表加哈希表，插入和查找 O(log n)，范围查询 O(log n + M)。常见追问：并发更新同一个成员的分安全吗？——Redis 单线程执行命令，天然串行；分库分表场景下同 key 的更新也要路由到同一分片。"
     },
     {
-      "title": "定时任务在多实例部署下怎么保证不被重复执行？",
+      "title": "多实例部署的定时任务怎么保证只执行一次？分布式锁、选主、分片怎么选？",
       "answer": [
         "最直接的做法是分布式锁：执行前抢一把带 TTL 的锁（Redis SET NX EX 或 etcd），拿到锁才执行，执行中续租，结束后释放",
         "锁必须带过期时间并支持续租（看门狗），否则实例崩溃后锁挂死、任务永远不再执行；释放锁要用唯一 token 比对后再删（Lua 脚本），不能直接 DEL",
@@ -170,7 +170,7 @@
         "落库场景一般是「本地队列 + 批量写入」或「MQ 解耦」：业务只写文件或发消息，后台消费者批量落库并处理失败重试",
         "代价是可能丢日志：进程崩溃时 channel 里还没落盘的就没了，所以关键日志要有同步落盘的降级路径"
       ],
-      "code": "package main\\n\\nimport (\\n\\t\\\"fmt\\\"\\n\\t\\\"sync\\\"\\n)\\n\\nfunc main() {\\n\\t// 有界 channel：业务线程只负责投递，不等落盘\\n\\tch := make(chan string, 1024)\\n\\tvar wg sync.WaitGroup\\n\\n\\t// 单独的 goroutine 攒批写盘\\n\\twg.Add(1)\\n\\tgo func() {\\n\\t\\tdefer wg.Done()\\n\\t\\tbuf := make([]string, 0, 64)\\n\\t\\tfor msg := range ch {\\n\\t\\t\\tbuf = append(buf, msg)\\n\\t\\t\\tif len(buf) >= cap(buf) {\\n\\t\\t\\t\\tfmt.Println(\\\"批量写入\\\", buf)\\n\\t\\t\\t\\tbuf = buf[:0]\\n\\t\\t\\t}\\n\\t\\t}\\n\\t\\tif len(buf) > 0 {\\n\\t\\t\\tfmt.Println(\\\"批量写入\\\", buf)\\n\\t\\t}\\n\\t}()\\n\\n\\tfor i := 0; i < 100; i++ {\\n\\t\\tch <- fmt.Sprintf(\\\"log-%d\\\", i)\\n\\t}\\n\\tclose(ch)\\n\\twg.Wait()\\n}",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\nfunc main() {\n\t// 有界 channel：业务线程只负责投递，不等落盘\n\tch := make(chan string, 1024)\n\tvar wg sync.WaitGroup\n\n\t// 单独的 goroutine 攒批写盘\n\twg.Add(1)\n\tgo func() {\n\t\tdefer wg.Done()\n\t\tbuf := make([]string, 0, 64)\n\t\tfor msg := range ch {\n\t\t\tbuf = append(buf, msg)\n\t\t\tif len(buf) >= cap(buf) {\n\t\t\t\tfmt.Println(\"批量写入\", buf)\n\t\t\t\tbuf = buf[:0]\n\t\t\t}\n\t\t}\n\t\tif len(buf) > 0 {\n\t\t\tfmt.Println(\"批量写入\", buf)\n\t\t}\n\t}()\n\n\tfor i := 0; i < 100; i++ {\n\t\tch <- fmt.Sprintf(\"log-%d\", i)\n\t}\n\tclose(ch)\n\twg.Wait()\n}",
       "lang": "go",
       "notes": "常见追问：异步写日志会不会打乱顺序？——多 goroutine 并发写时顺序不保证，要顺序就给每条日志带序号或 trace id，排查时按序号还原。常见追问：怎么防止日志把磁盘写满？——限速、采样、滚动清理、磁盘水位监控。"
     },
@@ -184,7 +184,7 @@
         "业务侧兜底：消息带版本号或业务时间戳，消费时发现比当前版本旧就直接丢弃；用 Redis ZSet 做延迟队列时用 score 同时表达优先级和时间",
         "全局有序（整个 topic 同时只有一条消息在处理）代价极高，通常只保证「同一实体、同一业务键」的局部有序"
       ],
-      "code": "package main\\n\\nimport \\\"fmt\\\"\\n\\ntype message struct {\\n\\tVersion int64\\n\\tPayload string\\n}\\n\\nfunc main() {\\n\\t// 消费端收到乱序的消息，用版本号丢弃过期消息\\n\\tmsgs := []message{\\n\\t\\t{Version: 3, Payload: \\\"余额更新到 30\\\"},\\n\\t\\t{Version: 1, Payload: \\\"余额更新到 10\\\"},\\n\\t\\t{Version: 2, Payload: \\\"余额更新到 20\\\"},\\n\\t}\\n\\n\\tvar last int64\\n\\tfor _, m := range msgs {\\n\\t\\tif m.Version <= last {\\n\\t\\t\\tfmt.Println(\\\"丢弃过期消息\\\", m.Payload)\\n\\t\\t\\tcontinue\\n\\t\\t}\\n\\t\\tlast = m.Version\\n\\t\\tfmt.Println(\\\"处理\\\", m.Payload)\\n\\t}\\n}",
+      "code": "package main\n\nimport \"fmt\"\n\ntype message struct {\n\tVersion int64\n\tPayload string\n}\n\nfunc main() {\n\t// 消费端收到乱序的消息，用版本号丢弃过期消息\n\tmsgs := []message{\n\t\t{Version: 3, Payload: \"余额更新到 30\"},\n\t\t{Version: 1, Payload: \"余额更新到 10\"},\n\t\t{Version: 2, Payload: \"余额更新到 20\"},\n\t}\n\n\tvar last int64\n\tfor _, m := range msgs {\n\t\tif m.Version <= last {\n\t\t\tfmt.Println(\"丢弃过期消息\", m.Payload)\n\t\t\tcontinue\n\t\t}\n\t\tlast = m.Version\n\t\tfmt.Println(\"处理\", m.Payload)\n\t}\n}",
       "lang": "go",
       "notes": "常见追问：Exactly-once 能保证吗？——端到端 exactly-once 很难，实践里多是 at-least-once 投递加幂等消费。常见追问：顺序消费吞吐上不去怎么办？——按 key 分区并行，不同 key 之间不需要顺序，只要控制住「需要有序的实体数量」即可。"
     }

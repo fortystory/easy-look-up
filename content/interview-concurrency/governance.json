@@ -35,7 +35,7 @@
         "代价互为镜像：令牌桶让下游看到尖峰，需要下游扛得住；漏桶对下游更友好，但牺牲了响应延迟和突发吞吐",
         "选型上：API 网关、防刷、允许短时突发的场景用令牌桶；出站流量要匀速、对第三方接口配速用漏桶"
       ],
-      "code": "tokens := 5.0 // 桶里当前有多少令牌\nrate := 2.0 // 每秒补充多少个令牌\nburst := 5.0 // 桶容量，也就是突发上限\nlast := time.Now()\nnow := time.Now()\ntokens += now.Sub(last).Seconds() * rate // 按流逝的时间补充令牌\nif tokens > burst {\n\ttokens = burst\n}\nif tokens >= 1 {\n\ttokens--\n\tfmt.Println(\"放行\")\n} else {\n\tfmt.Println(\"限流\")\n}",
+      "code": "tokens := 5.0 // 桶里当前有多少令牌\nrate := 2.0   // 每秒补充多少个令牌\nburst := 5.0  // 桶容量，也就是突发上限\nlast := time.Now()\nnow := time.Now()\ntokens += now.Sub(last).Seconds() * rate // 按流逝的时间补充令牌\nif tokens > burst {\n\ttokens = burst\n}\nif tokens >= 1 {\n\ttokens--\n\tfmt.Println(\"放行\")\n} else {\n\tfmt.Println(\"限流\")\n}",
       "lang": "go",
       "notes": "常见追问：令牌桶的 rate 和 burst 怎么定？——rate 是长期平均 QPS，burst 按能容忍的突发量设，粒度通常和限流窗口对齐。常见追问：桶初始化是满还是空？——一般初始化为满，表示启动瞬间允许一次预突发。常见错误回答：漏桶会丢掉请求——是否丢弃取决于实现，桶满时通常是拒绝（429），静默丢弃是另一种策略。"
     },
@@ -97,7 +97,7 @@
         "舱壁按「依赖 + 重要级别」划分：核心依赖给大池，非关键依赖给小池，甚至不给额度直接失败",
         "舱壁是资源维度的保护、熔断是行为维度的开关，两者互补；舱壁切太细整体利用率下降，切太粗等于没隔离，要按压测数据定"
       ],
-      "code": "sem := make(chan struct{}, 5) // 最多 5 个并发请求进入下游\nsem <- struct{}{} // 占用一个并发额度\ndefer func() { <-sem }() // 请求结束时归还额度\nfmt.Println(\"已获得下游并发额度\")",
+      "code": "sem := make(chan struct{}, 5) // 最多 5 个并发请求进入下游\nsem <- struct{}{}             // 占用一个并发额度\ndefer func() { <-sem }()      // 请求结束时归还额度\nfmt.Println(\"已获得下游并发额度\")",
       "lang": "go",
       "notes": "常见追问：Go 里还有哪些隔离手段？——errgroup 限并发、独立的 http.Transport（连接池独立）、独立部署实例、用消息队列做异步削峰。常见追问：什么时候必须做隔离？——依赖会长时间阻塞时（等数据库、调第三方、读慢盘）。常见错误回答：舱壁隔离就是把线程池调大——那只是扩大共享资源池，一个慢请求仍然能把它占满。"
     },
@@ -123,7 +123,7 @@
         "只加指数退避不加抖动仍然会同步：客户端启动时刻相同、退避序列相同，重试时刻照样撞在一起",
         "总预算约束：总重试时间必须小于调用方的剩余超时预算，常见只允许 2–3 次重试"
       ],
-      "code": "attempt := 3\nbase := 100 * time.Millisecond\nwait := base * time.Duration(1<<attempt) // 指数退避：base * 2^attempt\njitter := time.Duration(time.Now().UnixNano() % int64(wait/2)) // 抖动量\nfmt.Println(\"第\", attempt, \"次重试前等待\", wait+jitter/2)",
+      "code": "attempt := 3\nbase := 100 * time.Millisecond\nwait := base * time.Duration(1<<attempt)                       // 指数退避：base * 2^attempt\njitter := time.Duration(time.Now().UnixNano() % int64(wait/2)) // 抖动量\nfmt.Println(\"第\", attempt, \"次重试前等待\", wait+jitter/2)",
       "lang": "go",
       "notes": "常见追问：full jitter 和 equal jitter 有什么区别？——full jitter 完全随机（0 到 wait），分布最平滑；equal jitter 固定一半、随机一半，有下限保证不会立刻重试。常见追问：重试次数怎么定？——按幂等性和剩余延迟预算定，通常 2–3 次。常见错误回答：退避就是固定等 1 秒再试——那只是把同步重试推迟了，尖峰还在原地。"
     },
