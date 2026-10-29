@@ -1,5 +1,5 @@
 Category: enhancement
-Status: ready-for-agent
+Status: resolved
 
 # 06: 复制按钮
 
@@ -9,8 +9,8 @@ Status: ready-for-agent
 
 **Blocked by:** 02 详情页最小链路
 
-- [ ] 每个代码块有一个复制按钮
-- [ ] 点击后代码全文进入剪贴板
-- [ ] 使用 `navigator.clipboard.writeText`，在它不可用时有 `execCommand` 兜底
-- [ ] 复制成功有可见反馈（按钮文案变化或提示），失败也有反馈
-- [ ] 代码块里的换行和缩进被原样保留，复制出来的代码能直接粘贴进编辑器运行
+- [x] 每个代码块有一个复制按钮
+- [x] 点击后代码全文进入剪贴板
+- [x] 使用 `navigator.clipboard.writeText`，在它不可用时有 `execCommand` 兜底
+- [x] 复制成功有可见反馈（按钮文案变化或提示），失败也有反馈
+- [x] 代码块里的换行和缩进被原样保留，复制出来的代码能直接粘贴进编辑器运行

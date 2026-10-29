@@ -1,5 +1,5 @@
 Category: enhancement
-Status: ready-for-agent
+Status: resolved
 
 # 08: 失败要响亮
 
@@ -11,8 +11,8 @@ Status: ready-for-agent
 
 **Blocked by:** 02 详情页最小链路
 
-- [ ] 内容 JSON 非法时，服务启动即 panic 退出，错误信息指出出错的文件
-- [ ] 内容字段缺失（比如缺 title）同样导致启动失败，不做静默默认值
-- [ ] 未知路径返回 404 状态码
-- [ ] 内容层测试覆盖 panic 路径，断言错误信息里含文件名
-- [ ] HTTP 层测试覆盖 404 路径
+- [x] 内容 JSON 非法时，服务启动即 panic 退出，错误信息指出出错的文件
+- [x] 内容字段缺失（比如缺 title）同样导致启动失败，不做静默默认值
+- [x] 未知路径返回 404 状态码
+- [x] 内容层测试覆盖 panic 路径，断言错误信息里含文件名
+- [x] HTTP 层测试覆盖 404 路径
