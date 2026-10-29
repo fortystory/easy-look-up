@@ -32,6 +32,7 @@ type entryView struct {
 	Code        template.HTML
 	RawCode     string
 	Notes       string
+	Answer      []string
 	SearchText  string
 }
 
@@ -139,17 +140,27 @@ func toView(category content.Category) (detailView, error) {
 	for _, group := range category.Groups {
 		gv := groupView{ID: group.ID, Title: group.Title}
 		for _, entry := range group.Entries {
-			code, err := highlight(entry.Code, entry.Lang)
-			if err != nil {
-				return detailView{}, fmt.Errorf("高亮 %s/%s 的代码: %w", group.ID, entry.Title, err)
+			var code template.HTML
+			if entry.Code != "" {
+				highlighted, err := highlight(entry.Code, entry.Lang)
+				if err != nil {
+					return detailView{}, fmt.Errorf("高亮 %s/%s 的代码: %w", group.ID, entry.Title, err)
+				}
+				code = highlighted
 			}
+
+			// 搜索文本：标题、说明、答案要点、常见坑
+			search := []string{entry.Title, entry.Description, entry.Notes}
+			search = append(search, entry.Answer...)
+
 			gv.Entries = append(gv.Entries, entryView{
 				Title:       entry.Title,
 				Description: entry.Description,
 				Code:        code,
 				RawCode:     entry.Code,
 				Notes:       entry.Notes,
-				SearchText:  strings.Join([]string{entry.Title, entry.Description, entry.Notes}, " "),
+				Answer:      entry.Answer,
+				SearchText:  strings.Join(search, " "),
 			})
 		}
 		view.Groups = append(view.Groups, gv)

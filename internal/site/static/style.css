@@ -272,6 +272,21 @@ main > h1 {
 	font-size: 0.92rem;
 }
 
+/* 问答类条目的答案要点 */
+.answer {
+	padding-left: 1.25rem;
+	margin: 0 0 0.8rem;
+	font-size: 0.93rem;
+}
+
+.answer li {
+	margin-bottom: 0.35rem;
+}
+
+.answer li:last-child {
+	margin-bottom: 0;
+}
+
 .notes {
 	padding: 0.6rem 0.8rem;
 	margin: 0 0 0.8rem;

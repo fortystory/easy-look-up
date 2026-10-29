@@ -25,7 +25,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTENT_DIR = os.path.join(ROOT, "content")
 
-REQUIRED_ENTRY_FIELDS = ("title", "description", "code", "lang")
+REQUIRED_ENTRY_FIELDS = ("title",)
 REQUIRED_GROUP_FIELDS = ("id", "title", "entries")
 
 # 顶层 func 声明。函数体内不允许嵌套 func（方法和具名函数都不行），
@@ -230,17 +230,33 @@ def check_group_file(path, tmp):
     entries = data.get("entries", [])
     if not entries:
         problems.append(("条目", False, "分组没有任何条目", ""))
-    if not any("组合示例" in e.get("title", "") for e in entries):
+
+    # 代码片段型分组末尾要有「组合示例」；问答型分组（用 answer 而不是 code）不要
+    is_qa = any(e.get("answer") and not e.get("code") for e in entries)
+    if not is_qa and not any("组合示例" in e.get("title", "") for e in entries):
         problems.append(("组合示例", False, "末尾缺少「组合示例」条目", ""))
 
     for i, entry in enumerate(entries, 1):
+        name = entry.get("title", "第 %d 条" % i)
         missing = [f for f in REQUIRED_ENTRY_FIELDS if f not in entry]
         if missing:
-            problems.append((entry.get("title", "第 %d 条" % i), False,
-                             "缺少字段 %s" % ", ".join(missing), ""))
+            problems.append((name, False, "缺少字段 %s" % ", ".join(missing), ""))
             continue
-        ok, msg, extra = check_entry(entry, tmp)
-        problems.append((entry.get("title", "第 %d 条" % i), ok, msg, extra))
+
+        has_code = bool(entry.get("code"))
+        has_answer = bool(entry.get("answer"))
+        if not has_code and not has_answer:
+            problems.append((name, False, "既没有 code 也没有 answer", ""))
+            continue
+        if has_code and not entry.get("lang"):
+            problems.append((name, False, "有 code 但没有 lang", ""))
+            continue
+
+        if has_code:
+            ok, msg, extra = check_entry(entry, tmp)
+            problems.append((name, ok, msg, extra))
+        else:
+            problems.append((name, True, "问答条目", ""))
 
     return problems
 

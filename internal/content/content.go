@@ -14,6 +14,8 @@ type Entry struct {
 	Code        string `json:"code"`
 	Lang        string `json:"lang"`
 	Notes       string `json:"notes"`
+	// Answer 是问答类条目的答案要点。代码片段类条目不用这个字段。
+	Answer []string `json:"answer"`
 }
 
 type Group struct {
@@ -105,8 +107,12 @@ func loadGroup(fsys fs.FS, name string) (Group, error) {
 	}
 
 	for i, entry := range group.Entries {
-		if entry.Title == "" || entry.Code == "" {
-			return Group{}, fmt.Errorf("解析 %s: 第 %d 个条目缺少 title 或 code", name, i+1)
+		if entry.Title == "" {
+			return Group{}, fmt.Errorf("解析 %s: 第 %d 个条目缺少 title", name, i+1)
+		}
+		// 代码片段类条目必须有 code；问答类条目用 answer，可以没有 code
+		if entry.Code == "" && len(entry.Answer) == 0 {
+			return Group{}, fmt.Errorf("解析 %s: 第 %d 个条目既没有 code 也没有 answer", name, i+1)
 		}
 	}
 

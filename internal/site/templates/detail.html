@@ -45,12 +45,19 @@
 				{{range .Entries}}
 				<article class="entry" data-search="{{.SearchText}}">
 					<h3>{{.Title}}</h3>
-					<p class="desc">{{.Description}}</p>
+					{{if .Description}}<p class="desc">{{.Description}}</p>{{end}}
+					{{if .Answer}}
+					<ul class="answer">
+						{{range .Answer}}<li>{{.}}</li>{{end}}
+					</ul>
+					{{end}}
 					{{if .Notes}}<aside class="notes">{{.Notes}}</aside>{{end}}
+					{{if .Code}}
 					<div class="code">
 						<button class="copy-btn" type="button" data-code="{{.RawCode}}">复制</button>
 						{{.Code}}
 					</div>
+					{{end}}
 				</article>
 				{{end}}
 			</section>

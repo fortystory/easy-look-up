@@ -241,3 +241,35 @@ func TestStyleSheetHasSidebarLayout(t *testing.T) {
 		}
 	}
 }
+
+// 问答型条目：答案是分点列表，可以没有代码块。
+func TestDetailPageQaEntry(t *testing.T) {
+	fsys := fstest.MapFS{
+		"go/qa.json": &fstest.MapFile{Data: []byte(`{
+			"id": "qa",
+			"title": "问答分组",
+			"entries": [
+				{
+					"title": "goroutine 和线程有什么区别？",
+					"answer": ["goroutine 是 Go 运行时调度的轻量级栈", "线程由操作系统调度"]
+				}
+			]
+		}`)},
+	}
+	h := newRouter(t, fsys)
+	body := get(t, h, "/go").Body.String()
+
+	for _, want := range []string{
+		"goroutine 和线程有什么区别？",
+		`<ul class="answer">`,
+		"goroutine 是 Go 运行时调度的轻量级栈",
+		"线程由操作系统调度",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("响应体里没有 %q", want)
+		}
+	}
+	if strings.Contains(body, "<pre") {
+		t.Error("没有代码的条目不该渲染出代码块")
+	}
+}
