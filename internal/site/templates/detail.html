@@ -31,30 +31,32 @@
 		</div>
 	</header>
 
-	<main>
-		<h1>{{.Title}}</h1>
-
-		<nav class="group-nav">
+	<div class="page">
+		<nav class="group-nav" aria-label="分组导航">
 			{{range .Groups}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
 		</nav>
 
-		{{range .Groups}}
-		<section class="group" id="{{.ID}}">
-			<h2>{{.Title}}</h2>
-			{{range .Entries}}
-			<article class="entry" data-search="{{.SearchText}}">
-				<h3>{{.Title}}</h3>
-				<p class="desc">{{.Description}}</p>
-				{{if .Notes}}<aside class="notes">{{.Notes}}</aside>{{end}}
-				<div class="code">
-					<button class="copy-btn" type="button" data-code="{{.RawCode}}">复制</button>
-					{{.Code}}
-				</div>
-			</article>
+		<main>
+			<h1>{{.Title}}</h1>
+
+			{{range .Groups}}
+			<section class="group" id="{{.ID}}">
+				<h2>{{.Title}}</h2>
+				{{range .Entries}}
+				<article class="entry" data-search="{{.SearchText}}">
+					<h3>{{.Title}}</h3>
+					<p class="desc">{{.Description}}</p>
+					{{if .Notes}}<aside class="notes">{{.Notes}}</aside>{{end}}
+					<div class="code">
+						<button class="copy-btn" type="button" data-code="{{.RawCode}}">复制</button>
+						{{.Code}}
+					</div>
+				</article>
+				{{end}}
+			</section>
 			{{end}}
-		</section>
-		{{end}}
-	</main>
+		</main>
+	</div>
 
 	<footer class="site-footer">快速查找 · 内容以 JSON 存放于仓库</footer>
 </body>

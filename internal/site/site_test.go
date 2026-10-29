@@ -206,3 +206,38 @@ func TestDetailPageIsCompressed(t *testing.T) {
 		t.Errorf("Content-Encoding = %q, 期望 %q", w.Header().Get("Content-Encoding"), "gzip")
 	}
 }
+
+// 分组导航放在内容前面，宽屏时是左侧栏。
+func TestDetailPageHasSidebarNav(t *testing.T) {
+	h := newRouter(t, fakeFS())
+	body := get(t, h, "/go").Body.String()
+
+	navIndex := strings.Index(body, `<nav class="group-nav"`)
+	mainIndex := strings.Index(body, "<main>")
+	if navIndex < 0 {
+		t.Fatal("页面里没有分组导航")
+	}
+	if mainIndex < 0 {
+		t.Fatal("页面里没有 main")
+	}
+	if navIndex > mainIndex {
+		t.Error("分组导航应该在内容前面")
+	}
+}
+
+// 样式表里有把导航变成左侧栏的规则。
+func TestStyleSheetHasSidebarLayout(t *testing.T) {
+	h := newRouter(t, fakeFS())
+	body := get(t, h, "/static/style.css").Body.String()
+
+	for _, want := range []string{
+		".page",
+		"grid-template-columns",
+		"@media (min-width: 900px)",
+		".group-nav a.active",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("样式表里没有 %q", want)
+		}
+	}
+}

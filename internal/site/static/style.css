@@ -138,22 +138,38 @@ a:hover {
 	background: var(--border-soft);
 }
 
-/* ---------- 主体 ---------- */
+/* ---------- 页面骨架：左侧分组导航 + 右侧内容 ---------- */
+
+.page {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 1.25rem;
+	max-width: 76rem;
+	margin: 0 auto;
+	padding: 1.25rem 1.25rem 4rem;
+}
 
 main {
+	/* 代码块可能很宽，不加会被撑破网格 */
+	min-width: 0;
+}
+
+/* 首页没有侧边栏，单独给个宽度 */
+.home {
 	max-width: 56rem;
 	margin: 0 auto;
 	padding: 1.5rem 1.25rem 4rem;
 }
 
 main > h1 {
-	margin: 0.5rem 0 1rem;
+	margin: 0.25rem 0 1rem;
 	font-size: 1.7rem;
 	line-height: 1.3;
 }
 
 /* ---------- 分组导航 ---------- */
 
+/* 窄屏：横排在内容上方 */
 .group-nav {
 	position: sticky;
 	top: 3.4rem;
@@ -162,7 +178,6 @@ main > h1 {
 	flex-wrap: wrap;
 	gap: 0.4rem;
 	padding: 0.6rem 0;
-	margin-bottom: 1rem;
 	background: var(--bg);
 	border-bottom: 1px solid var(--border-soft);
 }
@@ -180,6 +195,49 @@ main > h1 {
 	color: var(--fg);
 	text-decoration: none;
 	border-color: var(--border);
+}
+
+/* 当前所在的分组 */
+.group-nav a.active {
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-color: var(--accent);
+}
+
+/* 宽屏：导航变成左侧栏 */
+@media (min-width: 900px) {
+	.page {
+		grid-template-columns: 13rem minmax(0, 1fr);
+		gap: 2.5rem;
+	}
+
+	.group-nav {
+		top: 4.2rem;
+		align-self: start;
+		flex-direction: column;
+		flex-wrap: nowrap;
+		gap: 0.15rem;
+		max-height: calc(100vh - 5.5rem);
+		overflow-y: auto;
+		padding: 0 1rem 1rem 0;
+		border-right: 1px solid var(--border-soft);
+		border-bottom: none;
+	}
+
+	.group-nav a {
+		padding: 0.3rem 0.6rem;
+		background: transparent;
+		border-color: transparent;
+		border-radius: 6px;
+	}
+
+	.group-nav a:hover {
+		background: var(--bg-soft);
+	}
+
+	.group-nav a.active {
+		background: var(--accent-soft);
+	}
 }
 
 /* ---------- 分组与条目 ---------- */
@@ -354,7 +412,8 @@ main > h1 {
 		top: 7.2rem;
 	}
 
-	main {
+	.page,
+	.home {
 		padding: 1rem 0.9rem 3rem;
 	}
 
@@ -364,6 +423,11 @@ main > h1 {
 
 	.copy-btn {
 		opacity: 1;
+	}
+
+	/* 顶栏折成两行，锚点要多留点偏移 */
+	html {
+		scroll-padding-top: 9rem;
 	}
 }
 

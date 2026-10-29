@@ -1,6 +1,6 @@
 // 快速查找 —— 前端交互
 //
-// 只做三件事：主题切换、搜索过滤、复制代码。
+// 做四件事：主题切换、搜索过滤、复制代码、侧边栏高亮当前分组。
 // 全部是原生 JavaScript，不依赖任何框架和 CDN。
 
 (function () {
@@ -39,6 +39,57 @@
 		});
 	}
 
+	/* ---------- 侧边栏高亮当前分组 ---------- */
+
+	var navLinks = Array.prototype.slice.call(document.querySelectorAll(".group-nav a"));
+	var sections = navLinks
+		.map(function (a) {
+			return document.getElementById(a.getAttribute("href").slice(1));
+		})
+		.filter(Boolean);
+	var ticking = false;
+
+	// 滚动到哪个分组，就把侧边栏里对应的那一项标成当前
+	function updateActive() {
+		ticking = false;
+		if (!sections.length) {
+			return;
+		}
+
+		var offset = 120;
+		var current = null;
+		sections.forEach(function (s) {
+			if (s.hidden) {
+				// 被搜索过滤掉的分组不算
+				return;
+			}
+			if (s.getBoundingClientRect().top <= offset) {
+				current = s;
+			}
+		});
+		if (!current) {
+			return;
+		}
+
+		navLinks.forEach(function (a) {
+			a.classList.toggle("active", a.getAttribute("href") === "#" + current.id);
+		});
+	}
+
+	if (sections.length) {
+		window.addEventListener(
+			"scroll",
+			function () {
+				if (!ticking) {
+					ticking = true;
+					window.requestAnimationFrame(updateActive);
+				}
+			},
+			{ passive: true }
+		);
+		updateActive();
+	}
+
 	/* ---------- 搜索过滤 ---------- */
 
 	var input = document.getElementById("search");
@@ -60,6 +111,8 @@
 				});
 				group.hidden = visible === 0;
 			});
+			// 过滤后要重新算当前分组
+			updateActive();
 		}
 
 		input.addEventListener("input", applyFilter);
