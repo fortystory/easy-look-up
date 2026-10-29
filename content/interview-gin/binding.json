@@ -1,0 +1,224 @@
+{
+  "id": "binding",
+  "title": "Gin 请求解析与参数绑定",
+  "entries": [
+    {
+      "title": "c.Query、c.DefaultQuery、c.QueryArray 有什么区别？",
+      "description": "从 URL 查询串里取值的三个方法，区别在于「参数没传怎么办」和「同名参数怎么办」。",
+      "answer": [
+        "c.Query(key) 取 URL 查询串里的值，取不到返回空串，它就是 c.Request.URL.Query().Get(key) 的快捷方式",
+        "c.DefaultQuery(key, def) 只在参数根本没出现时返回默认值；参数出现了但值是空串（?page=），返回的还是空串",
+        "c.QueryArray(key) 返回同名参数的全部值，?tag=web&tag=api 得到两个元素；参数不存在时返回 nil",
+        "要区分「没传」和「传了空串」用 c.GetQuery(key)，它返回 (值, 是否存在) 两个值",
+        "这几个方法只认 URL 上的查询串，POST 请求体里的表单字段要用 c.PostForm"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.GET(\"/search\", func(c *gin.Context) {\n\t\t// 参数存在就返回它的值，不存在返回空串\n\t\tq := c.Query(\"q\")\n\t\t// 只有参数没传时才用默认值；传了空串照样返回空串\n\t\tpage := c.DefaultQuery(\"page\", \"1\")\n\t\tsize := c.DefaultQuery(\"size\", \"20\")\n\t\t// 同名参数出现多次时拿到全部\n\t\ttags := c.QueryArray(\"tag\")\n\t\t// 参数不存在时拿到的是 nil\n\t\tmissing := c.QueryArray(\"missing\")\n\t\t// 想区分「没传」和「传了空串」用 GetQuery\n\t\traw, ok := c.GetQuery(\"q\")\n\t\tc.JSON(http.StatusOK, gin.H{\n\t\t\t\"q\":       q,\n\t\t\t\"page\":    page,\n\t\t\t\"size\":    size,\n\t\t\t\"tags\":    tags,\n\t\t\t\"missing\": missing,\n\t\t\t\"raw\":     raw,\n\t\t\t\"exists\":  ok,\n\t\t})\n\t})\n\n\t// page 传了但是空串，size 根本没传\n\treq := httptest.NewRequest(http.MethodGet, \"/search?q=go&page=&tag=web&tag=api\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：?page= 和完全不带 page 有什么区别？——前者参数存在但值是空的，DefaultQuery 返回空串，后者才返回默认值，要区分就用 GetQuery 的第二个返回值。常见错误回答：「DefaultQuery 遇到空值也给默认值」——错，它只看参数在不在，不看值。追问：参数名大小写敏感吗？——敏感，Page 和 page 是两个参数。"
+    },
+    {
+      "title": "c.Param 怎么拿到路径参数？路径参数和查询参数该怎么选？",
+      "description": "路由里冒号后面那一段就是路径参数，取值用 c.Param。",
+      "answer": [
+        "c.Param(key) 拿的是路由里声明的路径参数，名字必须和路由一致：r.GET(\"/users/:id\", ...) 对应 c.Param(\"id\")",
+        "路由里没声明的参数名取不到，返回空串；取到的值一律是字符串，要自己 strconv 转换",
+        "路径参数是路由的一部分，每个请求拿到的是同一组名字，适合当资源标识；查询参数是 URL 后面 ? 之后的键值对，适合筛选、排序、分页",
+        "通配路由用 *path 声明，c.Param(\"path\") 拿到的是斜杠后面整段，包括中间的斜杠",
+        "要一次绑定多个路径参数就用 c.ShouldBindUri，靠结构体上的 uri tag 对应路由里的名字"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strconv\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.GET(\"/users/:id/posts/:postID\", func(c *gin.Context) {\n\t\t// 路径参数的名字就是路由里冒号后面那一段\n\t\tid := c.Param(\"id\")\n\t\tpostID := c.Param(\"postID\")\n\t\t// 路由里没声明的参数取不到，返回空串\n\t\tmissing := c.Param(\"nope\")\n\t\t// 路径参数一律是字符串，要自己转\n\t\tn, err := strconv.Atoi(id)\n\t\tif err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": \"id 必须是数字\"})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, gin.H{\"id\": n, \"post_id\": postID, \"missing\": missing})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/users/42/posts/7\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：路径参数一定要转成数字吗？——要，c.Param 返回的是字符串，ID 是数字类型时得 strconv.Atoi，转换失败要自己回 400。常见错误回答：「取不到路径参数会 panic」——不会，返回空串，所以写错参数名会静默拿到空值。追问：路由改了参数名会怎样？——c.Param 取不到就是空串，接口行为悄悄变了。"
+    },
+    {
+      "title": "c.PostForm 和 c.PostFormArray 怎么用？能取到 URL 上的查询参数吗？",
+      "description": "从 POST 表单体里取字段的方法，以及它和 c.Query 的分工。",
+      "answer": [
+        "c.PostForm(key) 只从 POST 的表单体里取值：application/x-www-form-urlencoded 或者 multipart/form-data",
+        "URL 上的查询串它取不到，查询参数要用 c.Query；反过来 c.Query 也取不到请求体里的表单字段",
+        "c.DefaultPostForm(key, def) 只在字段没出现时给默认值，字段出现了但是空串照样返回空串",
+        "c.PostFormArray(key) 返回同名字段的全部值，比如 checkbox 或者多选下拉提交的多个同名项",
+        "表单体解析一次就缓存在请求上，所以同一个请求里先 c.PostForm 再 c.ShouldBind 不会丢数据；真正一次性的是 JSON 请求体"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.POST(\"/login\", func(c *gin.Context) {\n\t\t// 只认 POST 的表单体：urlencoded 或 multipart\n\t\tname := c.PostForm(\"name\")\n\t\t// 没传才用默认值\n\t\trole := c.DefaultPostForm(\"role\", \"guest\")\n\t\t// 同名参数出现多次时拿到全部\n\t\ttags := c.PostFormArray(\"tag\")\n\t\t// query 参数在这里取不到\n\t\tfromQuery := c.Query(\"from\")\n\t\tc.JSON(http.StatusOK, gin.H{\n\t\t\t\"name\":      name,\n\t\t\t\"role\":      role,\n\t\t\t\"tags\":      tags,\n\t\t\t\"fromQuery\": fromQuery,\n\t\t})\n\t})\n\n\tbody := \"name=tom&role=admin&tag=a&tag=b\"\n\treq := httptest.NewRequest(http.MethodPost, \"/login?from=query\", strings.NewReader(body))\n\treq.Header.Set(\"Content-Type\", \"application/x-www-form-urlencoded\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：表单字段和上传文件能一起取吗？——能，multipart 请求里既有普通字段也有文件，c.PostForm 取字段，c.FormFile 取文件。追问：为什么 PostForm 取不到 query？——它只解析请求体，查询串归 c.Request.URL.Query()。追问：GET 请求能用 PostForm 吗？——取不到，GET 没有表单体。"
+    },
+    {
+      "title": "ShouldBind 和 Bind 有什么区别？",
+      "description": "两个都按 Content-Type 自动选绑定器，区别在于失败之后谁接管响应。",
+      "answer": [
+        "两者选绑定器的方式一样：都按请求方法和 Content-Type 自动挑，GET 或表单走 Form，application/json 走 JSON，XML、YAML 同理",
+        "ShouldBind 只把错误返回给你，自己不写任何响应，状态码和响应体都由你决定",
+        "Bind 内部走 MustBindWith：绑定或校验失败时直接 AbortWithError(400)，把处理器链中断，并把错误塞进 c.Errors",
+        "中断指的是后续的处理器不再执行；当前处理器里 Bind 后面的代码照样会跑，所以必须自己 return，否则会写第二次响应",
+        "Bind 失败时响应体是空的，错误信息要去 c.Errors.Last().Err 里找；想让响应体也有内容就得用 Should 系列自己写"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\n\t// 第二个处理器：Bind 失败时链被中断，压根轮不到它\n\tsecondRan := false\n\tmark := func(c *gin.Context) {\n\t\tsecondRan = true\n\t}\n\n\tr.POST(\"/bind\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.BindJSON(&u); err != nil {\n\t\t\t// Bind 失败时已经写了 400 并中断，响应体是空的\n\t\t\tfmt.Println(\"bind 的错误：\", c.Errors.Last().Err)\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t}, mark)\n\n\tr.POST(\"/should\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\t// Should 系列不写响应，状态码和响应体都由你决定\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t}, mark)\n\n\tbody := `{\"name\":\"\"}`\n\tfor _, path := range []string{\"/bind\", \"/should\"} {\n\t\tsecondRan = false\n\t\treq := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))\n\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%s -> %d %q 后续处理器执行=%v\\n\", path, w.Code, w.Body.String(), secondRan)\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：中间件里该用哪个？——鉴权、限流这类中间件自己用 c.Abort 系列控制；业务接口用 Should 系列自己决定响应格式。常见错误回答：「Bind 失败后整个请求都不会执行」——只有后续处理器不执行，当前处理器后面的代码照样跑。追问：Bind 写了 400 后我再写响应会怎样？——报 headers were already written。"
+    },
+    {
+      "title": "ShouldBindJSON、ShouldBindQuery、ShouldBindUri、ShouldBindYAML、ShouldBindXML 各绑定什么？",
+      "description": "五个 Should 系列的差别只在于「数据从哪儿来、什么格式解析」。",
+      "answer": [
+        "ShouldBindJSON、ShouldBindXML、ShouldBindYAML 解析请求体，分别按 JSON、XML、YAML 解码，不管请求头里的 Content-Type 写没写对",
+        "ShouldBindQuery 只取 URL 查询参数，请求体一概不看，字段对应关系看结构体上的 form tag",
+        "ShouldBindUri 只取路由里的路径参数，字段对应关系看结构体上的 uri tag",
+        "方法名要写对：是 ShouldBindYAML，YAML 四个字母全大写，Gin 里没有 ShouldBindYaml 这个方法",
+        "ShouldBind 不指定格式，靠方法和 Content-Type 自动选；GET 请求一律走表单绑定，POST 没写 Content-Type 也走表单绑定",
+        "选哪个看数据在哪：请求体用 JSON/XML/YAML，URL 上用 Query，路由占位符用 Uri；除非对方明确要求，接口只留 JSON"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 一个结构体上写好几个 tag，每个绑定器只看自己那一个\ntype Payload struct {\n\tName string `json:\"name\" xml:\"name\" yaml:\"name\" uri:\"name\" form:\"name\"`\n\tAge  int    `json:\"age\" xml:\"age\" yaml:\"age\" uri:\"age\" form:\"age\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\n\t// 请求体按 JSON 解\n\tr.POST(\"/json\", func(c *gin.Context) {\n\t\tvar p Payload\n\t\tif err := c.ShouldBindJSON(&p); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, p)\n\t})\n\n\t// 只取 URL 上的查询参数\n\tr.GET(\"/query\", func(c *gin.Context) {\n\t\tvar p Payload\n\t\tif err := c.ShouldBindQuery(&p); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, p)\n\t})\n\n\t// 只取路由里的路径参数\n\tr.GET(\"/uri/:name\", func(c *gin.Context) {\n\t\tvar p Payload\n\t\tif err := c.ShouldBindUri(&p); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, p)\n\t})\n\n\t// 请求体按 XML 解\n\tr.POST(\"/xml\", func(c *gin.Context) {\n\t\tvar p Payload\n\t\tif err := c.ShouldBindXML(&p); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, p)\n\t})\n\n\t// 请求体按 YAML 解\n\tr.POST(\"/yaml\", func(c *gin.Context) {\n\t\tvar p Payload\n\t\tif err := c.ShouldBindYAML(&p); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, p)\n\t})\n\n\tcases := []struct {\n\t\tmethod      string\n\t\tpath        string\n\t\tbody        string\n\t\tcontentType string\n\t}{\n\t\t{http.MethodPost, \"/json\", `{\"name\":\"tom\",\"age\":18}`, \"application/json\"},\n\t\t{http.MethodGet, \"/query?name=tom&age=18\", \"\", \"\"},\n\t\t{http.MethodGet, \"/uri/tom\", \"\", \"\"},\n\t\t{http.MethodPost, \"/xml\", `<Payload><name>tom</name><age>18</age></Payload>`, \"application/xml\"},\n\t\t{http.MethodPost, \"/yaml\", \"name: tom\\nage: 18\\n\", \"application/yaml\"},\n\t}\n\tfor _, tc := range cases {\n\t\treq := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))\n\t\tif tc.contentType != \"\" {\n\t\t\treq.Header.Set(\"Content-Type\", tc.contentType)\n\t\t}\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%s -> %d %s\\n\", tc.path, w.Code, w.Body.String())\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：ShouldBind 和 ShouldBindJSON 怎么选？——接口只收 JSON 就用 ShouldBindJSON，行为固定，不会因为调用方漏写 Content-Type 就悄悄走成表单绑定。追问：YAML 绑定用的哪个库？——goccy/go-yaml，字段名对应 yaml tag。常见错误回答：「ShouldBindJSON 会检查 Content-Type」——不会，它无条件按 JSON 解。"
+    },
+    {
+      "title": "结构体上的 form、json、uri、binding 四个 tag 分别在什么时候生效？",
+      "description": "四个 tag 各管各的，混写在一个结构体上是常见做法。",
+      "answer": [
+        "form tag 生效于表单绑定和查询参数绑定，ShouldBind 走表单、ShouldBindQuery 都看它",
+        "json tag 生效于 JSON 绑定（ShouldBindJSON）",
+        "uri tag 生效于路径参数绑定（ShouldBindUri）",
+        "binding tag 是校验规则，不管用哪个绑定器都会跑一遍：绑定完拿到的结构体都要过一遍 validator",
+        "同一个结构体上四个 tag 可以一起写，互不影响，一个结构体就能同时接表单、JSON 和路径参数",
+        "没写 tag 时按 Go 字段名原样匹配，而且大小写敏感：字段 ID 只匹配 id，字段 Name 不匹配 name，所以字段多了一定要写 tag"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 四个 tag 各管各的\ntype User struct {\n\tName string `form:\"name\" json:\"name\" uri:\"name\" binding:\"required\"`\n\tAge  int    `form:\"age\" json:\"age\" uri:\"age\" binding:\"gte=0\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\n\t// 表单绑定：看 form tag\n\tr.POST(\"/form\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBind(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// JSON 绑定：看 json tag\n\tr.POST(\"/json\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 路径绑定：看 uri tag\n\tr.GET(\"/uri/:name\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindUri(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 查询参数绑定：也看 form tag\n\tr.GET(\"/query\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindQuery(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 表单：form tag 生效\n\treq := httptest.NewRequest(http.MethodPost, \"/form\", strings.NewReader(\"name=tom&age=18\"))\n\treq.Header.Set(\"Content-Type\", \"application/x-www-form-urlencoded\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"/form ->\", w.Code, w.Body.String())\n\n\t// JSON：json tag 生效，缺 name 被 binding tag 拦下\n\treq2 := httptest.NewRequest(http.MethodPost, \"/json\", strings.NewReader(`{\"age\":18}`))\n\treq2.Header.Set(\"Content-Type\", \"application/json\")\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req2)\n\tfmt.Println(\"/json ->\", w2.Code, w2.Body.String())\n\n\t// 路径参数：uri tag 生效\n\treq3 := httptest.NewRequest(http.MethodGet, \"/uri/tom\", nil)\n\tw3 := httptest.NewRecorder()\n\tr.ServeHTTP(w3, req3)\n\tfmt.Println(\"/uri ->\", w3.Code, w3.Body.String())\n\n\t// 查询参数：binding tag 照样校验，缺 required 的 name 就报错\n\treq4 := httptest.NewRequest(http.MethodGet, \"/query?age=18\", nil)\n\tw4 := httptest.NewRecorder()\n\tr.ServeHTTP(w4, req4)\n\tfmt.Println(\"/query ->\", w4.Code, w4.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：字段叫 ID，路由是 :id，能绑上吗？——绑不上，没有 uri tag 时按字段名 \"ID\" 匹配，路由参数名是 \"id\"，大小写不同。常见错误回答：「binding tag 只在 JSON 绑定时校验」——所有绑定器都会校验，查询参数绑定也一样。追问：xml、yaml、header 的 tag 呢？——分别对应 ShouldBindXML、ShouldBindYAML、ShouldBindHeader，同样是各管各的。"
+    },
+    {
+      "title": "binding tag 支持哪些校验规则？min、max、len 有什么区别？",
+      "description": "binding tag 里能写 validator 的内置规则，字符串和数字的规则含义不一样。",
+      "answer": [
+        "常用规则：required 必填、min/max 最小最大、len 精确长度、oneof 枚举、email 邮箱、url 链接、gte/lte 数值范围、omitempty 空值时跳过校验",
+        "min/max 用在字符串上是长度、在数字上是取值范围；len 是精确长度，只对字符串、切片、数组、map 生效",
+        "多条规则用逗号分隔，required,min=2,max=16 表示既必填又限制长度",
+        "oneof 的候选值用空格分隔，写成 oneof=admin,editor 会失效",
+        "字符串的长度按字符数算，中文一个字算一个，不是字节数",
+        "可选字段就别加 required；想让字段为空时也跳过其它规则，用 omitempty"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype Register struct {\n\tName  string `json:\"name\" binding:\"required,min=2,max=16\"`\n\tAge   int    `json:\"age\" binding:\"gte=18,lte=60\"`\n\tCode  string `json:\"code\" binding:\"required,len=6\"`\n\tRole  string `json:\"role\" binding:\"required,oneof=admin editor guest\"`\n\tEmail string `json:\"email\" binding:\"omitempty,email\"`\n\tSite  string `json:\"site\" binding:\"omitempty,url\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.POST(\"/register\", func(c *gin.Context) {\n\t\tvar reg Register\n\t\tif err := c.ShouldBindJSON(&reg); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, reg)\n\t})\n\n\t// 每条规则各错一个\n\tbody := `{\"name\":\"t\",\"age\":10,\"code\":\"12345\",\"role\":\"root\",\"email\":\"not-an-email\",\"site\":\"example\"}`\n\treq := httptest.NewRequest(http.MethodPost, \"/register\", strings.NewReader(body))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：还有哪些内置规则？——一票：startswith、endswith、contains、uuid、ip、datetime、dive（切片逐元素校验）等。追问：规则写在哪个 tag 里？——binding tag，validator 的 tag 名被 gin 改成了 binding。追问：怎么让错误信息是中文？——gin 不自带，要在返回结构化错误时自己翻译。"
+    },
+    {
+      "title": "绑定失败或者校验不通过，应该返回什么状态码？",
+      "description": "Gin 不会替你决定状态码，用哪套 API 就决定了谁来写。",
+      "answer": [
+        "最常见的约定是 400：请求体不是合法 JSON、字段类型不对、必填字段缺失都归它",
+        "422 Unprocessable Entity 语义是「格式没问题但内容不合法」，适合把解析错误和校验错误分开：解析错 400，校验错 422",
+        "Content-Type 不对是 415，方法不对是 405，路由不存在是 404，这几个是 HTTP 语义定死的",
+        "用 Should 系列时状态码是你自己写的，gin 不插手；用 Bind 系列时 gin 直接写 400 并中断",
+        "请求体超限是 413，gin v1.12 的 MustBindWith 会识别 http.MaxBytesError 并返回 413，其余绑定错误才返回 400",
+        "团队里最好统一一种约定写进接口文档，别一个接口一种码，对外接口还应该把错误码放在响应体的固定字段里"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n\tAge  int    `json:\"age\" binding:\"gte=18\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\n\t// 校验不过：400\n\tr.POST(\"/strict\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 格式对但内容不合法：422 也是常见选择\n\tr.POST(\"/semantic\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusUnprocessableEntity, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// Content-Type 不对：415\n\tr.POST(\"/json-only\", func(c *gin.Context) {\n\t\tif c.ContentType() != \"application/json\" {\n\t\t\tc.JSON(http.StatusUnsupportedMediaType, gin.H{\"error\": \"只收 application/json\"})\n\t\t\treturn\n\t\t}\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// body 不是合法 JSON：400\n\treq := httptest.NewRequest(http.MethodPost, \"/strict\", strings.NewReader(`{\"name\":`))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"/strict ->\", w.Code, w.Body.String())\n\n\t// 校验不过：422\n\tbody := `{\"name\":\"tom\",\"age\":10}`\n\treq2 := httptest.NewRequest(http.MethodPost, \"/semantic\", strings.NewReader(body))\n\treq2.Header.Set(\"Content-Type\", \"application/json\")\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req2)\n\tfmt.Println(\"/semantic ->\", w2.Code, w2.Body.String())\n\n\t// Content-Type 不对：415\n\treq3 := httptest.NewRequest(http.MethodPost, \"/json-only\", strings.NewReader(body))\n\treq3.Header.Set(\"Content-Type\", \"text/plain\")\n\tw3 := httptest.NewRecorder()\n\tr.ServeHTTP(w3, req3)\n\tfmt.Println(\"/json-only ->\", w3.Code, w3.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：校验失败该 400 还是 422？——看团队约定，RESTful 讨论里 422 更精确，但很多网关和客户端只认 400。常见错误回答：「校验失败返回 500」——500 是服务端自己的错，参数不对是客户端的错。追问：Bind 系列的 400 能改吗？——不能，要自己控制就用 Should 系列。"
+    },
+    {
+      "title": "校验失败怎么返回结构化的错误，而不是一坨字符串？",
+      "description": "校验错误本身是有结构的，把它转成 JSON 数组返回，前端才能按字段提示。",
+      "answer": [
+        "校验失败时 err 的动态类型是 validator.ValidationErrors，它是一个 FieldError 切片，可以遍历",
+        "每条 FieldError 能拿到：fe.Field() 字段名、fe.Tag() 没过的规则、fe.Param() 规则的参数、fe.Value() 出错的值、fe.StructField() Go 结构体字段名",
+        "常见做法是自己定义一个 FieldError 结构体（field、rule、message），遍历后转成 JSON 数组返回，前端就能按字段高亮表单",
+        "先用 errors.As(err, &ve) 判断是不是校验错误；断言不上说明是 JSON 语法错误或类型不匹配，那种错误没有字段信息，只能整体报",
+        "直接返回 err.Error() 也能用，但那是给开发者看的文本，会暴露内部结构体名，对外接口不合适",
+        "想让错误里的字段名跟 json tag 一致，可以给 validator 注册 RegisterTagNameFunc，之后 fe.Field() 返回的就是 json 里的名字"
+      ],
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n\t\"github.com/go-playground/validator/v10\"\n)\n\ntype User struct {\n\tName  string `json:\"name\" binding:\"required,min=2\"`\n\tAge   int    `json:\"age\" binding:\"gte=18\"`\n\tEmail string `json:\"email\" binding:\"required,email\"`\n}\n\n// 一条结构化的错误\ntype FieldError struct {\n\tField   string `json:\"field\"`\n\tRule    string `json:\"rule\"`\n\tParam   string `json:\"param,omitempty\"`\n\tMessage string `json:\"message\"`\n}\n\n// 把绑定错误转成结构化的列表\nfunc toFieldErrors(err error) []FieldError {\n\tvar ve validator.ValidationErrors\n\tif !errors.As(err, &ve) {\n\t\t// 不是校验错误，是 JSON 语法错误或者类型不匹配\n\t\treturn []FieldError{{Field: \"_\", Rule: \"parse\", Message: err.Error()}}\n\t}\n\tout := make([]FieldError, 0, len(ve))\n\tfor _, fe := range ve {\n\t\tout = append(out, FieldError{\n\t\t\tField:   fe.Field(),\n\t\t\tRule:    fe.Tag(),\n\t\t\tParam:   fe.Param(),\n\t\t\tMessage: fmt.Sprintf(\"%s 不满足 %s 规则\", fe.Field(), fe.Tag()),\n\t\t})\n\t}\n\treturn out\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"errors\": toFieldErrors(err)})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\tbody := `{\"name\":\"t\",\"age\":10,\"email\":\"bad\"}`\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(body))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：errors.As 和类型断言 err.(validator.ValidationErrors) 有啥区别？——断言要求 err 本身就是那个类型，As 还能穿透包装过的错误，更稳。追问：一个字段同时违反两条规则怎么显示？——每个规则各产生一条 FieldError，遍历时会看到多条。追问：错误信息要翻译成中文怎么做？——自己映射规则名到中文文案，gin 和 validator 都不自带。"
+    },
+    {
+      "title": "怎么注册自定义校验规则？",
+      "description": "内置规则不够用时，往 gin 用的那个 validator 实例里注册一条自己的。",
+      "answer": [
+        "Gin 用的是 go-playground/validator，通过 binding.Validator.Engine() 拿到底层那个 *validator.Validate 实例",
+        "拿到后调 RegisterValidation(\"规则名\", func(fl validator.FieldLevel) bool { ... })，之后 binding tag 里直接写规则名，多条规则照常用逗号分隔",
+        "规则要赶在第一次绑定之前注册好，放 init() 里最保险；注册的是全局实例，所有用 gin 的地方都能用",
+        "规则函数里 fl.Field() 拿到当前字段的值，fl.Param() 拿到规则参数，fl.Parent() 拿到父结构体，做跨字段判断要用它",
+        "跨字段校验（两次密码一致、开始时间早于结束时间）要用 RegisterStructValidation 注册结构体级校验，字段级规则做不到",
+        "注册同名规则不会报错，后注册的会覆盖先注册的；规则名非法（空字符串）才会返回 error，名字里带特殊字符会 panic"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n\t\"github.com/gin-gonic/gin/binding\"\n\t\"github.com/go-playground/validator/v10\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required,no_space\"`\n}\n\n// 规则要赶在第一次绑定之前注册好\nfunc init() {\n\tif v, ok := binding.Validator.Engine().(*validator.Validate); ok {\n\t\t_ = v.RegisterValidation(\"no_space\", func(fl validator.FieldLevel) bool {\n\t\t\treturn !strings.Contains(fl.Field().String(), \" \")\n\t\t})\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\tfor _, body := range []string{`{\"name\":\"tom\"}`, `{\"name\":\"tom hsu\"}`} {\n\t\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(body))\n\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Println(w.Code, w.Body.String())\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：注册规则有线程安全问题吗？——有，validator 官方说明 RegisterValidation 不是并发安全的，要在初始化阶段做完再服务请求。常见错误回答：「每个请求注册一次」——注册是全局的，注册一次就够，反复注册反而会覆盖别人的实现。追问：规则怎么拿到别的字段？——字段级规则拿不到，用结构体级校验。"
+    },
+    {
+      "title": "绑定到 map 和绑定到结构体，怎么选？",
+      "description": "结构体是默认答案，map 是参数形状不固定时的例外。",
+      "answer": [
+        "字段固定、要校验、要类型安全就用结构体：binding tag 能挂在字段上，JSON 里的数字直接进 int 字段",
+        "形状不固定（透传 webhook、动态配置、schema 还没定）才用 map，map 收什么字段都不报错",
+        "绑到 map 不会触发 binding 校验：校验器只认结构体上的 tag，map 的键没法挂规则",
+        "JSON 绑到 map[string]any 时数字会变成 float64，大整数会丢精度；开 binding.EnableDecoderUseNumber 能拿到 json.Number",
+        "JSON 绑到 map[string]string 要求每个值都是字符串，出现数字直接报 unmarshal 错误",
+        "表单绑到 map 要先 make 出来再传指针，传 nil map 会 panic；JSON 绑到 map 不用初始化"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n\tAge  int    `json:\"age\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\n\t// 绑到结构体：字段固定，类型固定，还能校验\n\tr.POST(\"/struct\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 绑到 map：形状不固定时用，什么字段都收\n\tr.POST(\"/map-any\", func(c *gin.Context) {\n\t\tm := map[string]any{}\n\t\tif err := c.ShouldBindJSON(&m); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, m)\n\t})\n\n\t// 绑到 map[string]string：值必须都是字符串\n\tr.POST(\"/map-string\", func(c *gin.Context) {\n\t\tm := map[string]string{}\n\t\tif err := c.ShouldBindJSON(&m); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, m)\n\t})\n\n\tcases := []struct {\n\t\tpath string\n\t\tbody string\n\t}{\n\t\t{\"/struct\", `{\"name\":\"tom\",\"age\":18}`},\n\t\t{\"/struct\", `{\"age\":18}`},\n\t\t{\"/map-any\", `{\"name\":\"tom\",\"age\":18}`},\n\t\t{\"/map-string\", `{\"name\":\"tom\",\"age\":18}`},\n\t\t{\"/map-any\", `{}`},\n\t}\n\tfor _, tc := range cases {\n\t\treq := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))\n\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%s <- %s -> %d %s\\n\", tc.path, tc.body, w.Code, w.Body.String())\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：绑到 map 会校验吗？——不会，binding tag 只对结构体生效，这是选结构体的主要理由。常见错误回答：「map 绑定更灵活所以更好」——灵活是代价，没有类型也没有校验，接口一旦对外就要改。追问：怎么既灵活又有校验？——绑到 map 再手工校验，或者定义一个带 map 字段的结构体。"
+    },
+    {
+      "title": "文件上传怎么写？FormFile 和 SaveUploadedFile 分别做什么？",
+      "description": "取文件、看元信息、落盘三步，路径和大小都得自己把关。",
+      "answer": [
+        "c.FormFile(\"file\") 取上传的文件，返回 *multipart.FileHeader 和 error，字段名对不上时返回 http.ErrMissingFile",
+        "FileHeader 里有客户端给的文件名 fh.Filename、字节数 fh.Size、Content-Type fh.Header.Get(\"Content-Type\")，落盘前要先校验这些",
+        "c.SaveUploadedFile(fh, \"路径\") 把文件写到磁盘，目录不存在会自己创建，默认权限 0750；想自己控制内容就用 fh.Open() 自己拷贝",
+        "文件名是客户端给的，不能直接拼路径，否则是目录穿越漏洞，要自己重命名，并校验后缀、大小和 MIME",
+        "内存上限是 engine.MaxMultipartMemory，默认 32MB；超过的部分 net/http 会转成临时文件，超大文件要考虑清理临时目录",
+        "一次传多个文件用 c.MultipartForm() 拿到整个 *multipart.Form，再遍历 fh.File[\"files\"]"
+      ],
+      "code": "package main\n\nimport (\n\t\"bytes\"\n\t\"fmt\"\n\t\"mime/multipart\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\t\"path/filepath\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.POST(\"/upload\", func(c *gin.Context) {\n\t\t// 取上传的文件，没有这个字段时返回 http.ErrMissingFile\n\t\tfh, err := c.FormFile(\"file\")\n\t\tif err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\t// 文件名、大小这些元信息都在 FileHeader 里\n\t\tinfo := gin.H{\"filename\": fh.Filename, \"size\": fh.Size}\n\n\t\t// 直接落盘，SaveUploadedFile 会自己建目录\n\t\tdir, err := os.MkdirTemp(\"\", \"upload\")\n\t\tif err != nil {\n\t\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tdefer os.RemoveAll(dir)\n\t\tdst := filepath.Join(dir, fh.Filename)\n\t\tif err := c.SaveUploadedFile(fh, dst); err != nil {\n\t\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tdata, err := os.ReadFile(dst)\n\t\tif err != nil {\n\t\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tinfo[\"content\"] = string(data)\n\t\tc.JSON(http.StatusOK, info)\n\t})\n\n\t// 造一个 multipart 请求\n\tvar buf bytes.Buffer\n\tw := multipart.NewWriter(&buf)\n\tfw, err := w.CreateFormFile(\"file\", \"hello.txt\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tif _, err := fw.Write([]byte(\"hello gin\")); err != nil {\n\t\tpanic(err)\n\t}\n\t_ = w.WriteField(\"desc\", \"测试文件\")\n\tif err := w.Close(); err != nil {\n\t\tpanic(err)\n\t}\n\n\treq := httptest.NewRequest(http.MethodPost, \"/upload\", &buf)\n\treq.Header.Set(\"Content-Type\", w.FormDataContentType())\n\trec := httptest.NewRecorder()\n\tr.ServeHTTP(rec, req)\n\tfmt.Println(rec.Code, rec.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：怎么限制上传多大？——FormFile 之前先看 fh.Size 判大小，再配合 http.MaxBytesReader 卡住请求体总量。常见错误回答：「SaveUploadedFile 会自动改文件名」——不会，它按你给的路径写，文件名得你自己处理。追问：大文件怎么不占内存？——超出的部分 net/http 已经落临时文件，读的时候用 fh.Open() 流式拷贝。"
+    },
+    {
+      "title": "怎么限制请求体的大小？",
+      "description": "限制要卡在读取之前，超限和普通错误要用不同状态码区分。",
+      "answer": [
+        "标准做法是 http.MaxBytesReader(c.Writer, c.Request.Body, limit)，它给读取加了上限，超了返回 *http.MaxBytesError",
+        "配合 ShouldBindJSON 用 errors.As(err, &maxErr) 判断是超限还是别的错，超限回 413，其它回 400",
+        "用 Bind 系列时 gin v1.12 自己识别 MaxBytesError 并返回 413，其余绑定错误返回 400",
+        "限制请求头大小是 http.Server 的 MaxHeaderBytes，默认 1MB；限制 multipart 的内存占用是 engine.MaxMultipartMemory",
+        "MaxBytesReader 要在绑定之前把 c.Request.Body 换掉，绑定之后再换就来不及了",
+        "光限大小不够，还要防压缩包炸弹（解压后体积暴涨）和请求频率过速，这两样得另外处理"
+      ],
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\t// 把请求体限制在 1KB，超了读取时直接报错\n\t\tc.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024)\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\t// 超限是 413，其余的解析、校验错误是 400\n\t\t\tvar maxErr *http.MaxBytesError\n\t\t\tif errors.As(err, &maxErr) {\n\t\t\t\tc.JSON(http.StatusRequestEntityTooLarge, gin.H{\"error\": \"请求体太大\", \"limit\": maxErr.Limit})\n\t\t\t\treturn\n\t\t\t}\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 超限\n\tbig := `{\"name\":\"` + strings.Repeat(\"a\", 2048) + `\"}`\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(big))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"超限 ->\", w.Code, w.Body.String())\n\n\t// 正常\n\treq2 := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(`{\"name\":\"tom\"}`))\n\treq2.Header.Set(\"Content-Type\", \"application/json\")\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req2)\n\tfmt.Println(\"正常 ->\", w2.Code, w2.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：MaxBytesReader 和 io.LimitReader 有什么区别？——MaxBytesReader 还能让服务端知道要断开连接，LimitReader 只是读少了。常见错误回答：「用 ShouldBind 就能限制大小」——不能，它不读 body，得自己先套 MaxBytesReader。追问：限 multipart 大小用哪个？——MaxMultipartMemory 只管内存部分，硬上限还是要 MaxBytesReader。"
+    },
+    {
+      "title": "怎么拿到客户端的真实 IP？",
+      "description": "有代理就没有「真实」IP 这回事，要先决定信任谁。",
+      "answer": [
+        "c.ClientIP() 是 Gin 给的现成方法：默认信任代理，会依次看 X-Forwarded-For、X-Real-IP 这两个头",
+        "c.RemoteIP() 只看 TCP 对端地址（Request.RemoteAddr 去掉端口），不做任何信任判断，是最保守的取值",
+        "Gin 默认信任所有代理（可信列表是 0.0.0.0/0 和 ::/0），意味着客户端自己伪造 X-Forwarded-For 就能骗过 ClientIP",
+        "上线要用 SetTrustedProxies([]string{\"10.0.0.0/8\"}) 把可信代理收紧到自己的网关，不信任任何代理就传空切片",
+        "X-Forwarded-For 是逗号分隔的代理链，Gin 从右往左看，跳过可信代理，第一个不可信的地址就是客户端 IP",
+        "跑在云平台后面时可以用 SetTrustedPlatform(gin.PlatformGoogleAppEngine) 之类的开关，或者直接用平台给的头"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\n\t// 默认配置：信任所有代理，X-Forwarded-For 说了算\n\tdefaultEngine := gin.New()\n\tdefaultEngine.GET(\"/ip\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\n\t\t\t\"client_ip\": c.ClientIP(),\n\t\t\t\"remote_ip\": c.RemoteIP(),\n\t\t})\n\t})\n\n\t// 只信任内网代理，别的请求一律看 TCP 对端地址\n\tstrictEngine := gin.New()\n\tif err := strictEngine.SetTrustedProxies([]string{\"10.0.0.0/8\"}); err != nil {\n\t\tpanic(err)\n\t}\n\tstrictEngine.GET(\"/ip\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\n\t\t\t\"client_ip\": c.ClientIP(),\n\t\t\t\"remote_ip\": c.RemoteIP(),\n\t\t})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/ip\", nil)\n\treq.Header.Set(\"X-Forwarded-For\", \"203.0.113.9\")\n\tw := httptest.NewRecorder()\n\tdefaultEngine.ServeHTTP(w, req)\n\tfmt.Println(\"默认 ->\", w.Code, w.Body.String())\n\n\treq2 := httptest.NewRequest(http.MethodGet, \"/ip\", nil)\n\treq2.Header.Set(\"X-Forwarded-For\", \"203.0.113.9\")\n\tw2 := httptest.NewRecorder()\n\tstrictEngine.ServeHTTP(w2, req2)\n\tfmt.Println(\"收紧 ->\", w2.Code, w2.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：为什么线上拿到的 IP 全是网关的？——默认信任所有代理时 X-Forwarded-For 说了算，不收紧的话网关后面的客户端 IP 根本看不到。常见错误回答：「ClientIP 返回的一定是真实 IP」——它返回的是「你信任的那一方说的 IP」，信任配置错了就是错的。追问：WebSocket 场景用哪个？——一样用 c.ClientIP()，但要记得它在握手时就已经定下来了。"
+    },
+    {
+      "title": "绑定之前先把请求体读掉了，会发生什么？",
+      "description": "HTTP 请求体是一次性的流，读过就没了，这是绑定时最隐蔽的一类 bug。",
+      "answer": [
+        "先把 c.Request.Body 读完（io.ReadAll 或 c.GetRawData()），再调 c.ShouldBindJSON 会拿到 EOF 错误，因为解码器已经读不到任何内容",
+        "要让原始报文和绑定同时用，用 c.ShouldBindBodyWith(&obj, binding.JSON)：它先把 body 读出来存进 Context，之后还能再取",
+        "也可以自己读一次存进 c.Set(\"raw\", b)，再用 binding.JSON.BindBody(b, &obj) 手动绑定",
+        "中间件里不要随意读 body；确实要读（比如记请求日志）就读完放回去：c.Request.Body = io.NopCloser(bytes.NewReader(b))",
+        "表单不一样：c.Request.ParseForm / ParseMultipartForm 会把解析结果缓存在请求上，所以表单重复读没问题，一次性的是 JSON 请求体"
+      ],
+      "notes": "常见追问：怎么一眼看出是这个问题？——错误是 EOF 或者 unexpected end of JSON input，而且只在加了日志中间件之后才出现。常见错误回答：「读 body 不影响绑定」——影响，body 是流。追问：ShouldBindBodyWith 和 ShouldBindWith 有什么区别？——前把 body 存进 Context 供复用，后者直接读请求体，只能绑一次。"
+    }
+  ]
+}
