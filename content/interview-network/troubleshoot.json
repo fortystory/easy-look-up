@@ -10,34 +10,31 @@
         "telnet host port 或 nc -vz host port：纯 TCP 建连测试，判断某个端口通不通；现代镜像里 telnet 常被裁掉，可以用 nc 或 bash 的 /dev/tcp 替代",
         "nslookup / dig / host：查 DNS 解析结果；dig 最完整，支持指定 A/AAAA/CNAME 等记录类型，+trace 从根域逐级追查、+short 只输出结果",
         "ss -lntp / netstat -lntp：看本机监听了哪些端口、分别属于哪个进程；ss 来自 iproute2，比 netstat 快且信息更全，netstat 所在的 net-tools 已停止维护",
-        "curl -v / curl -w：从应用层探活，-v 打印 DNS、TCP、TLS、HTTP 各阶段细节，-w 能分别打出 time_namelookup、time_connect、time_starttransfer 的耗时",
-        "curl --resolve 还能指定域名对应的 IP，绕过 DNS 直接验证服务本身；mtr、ss、dig、tcpdump 这一组组合基本能覆盖绝大多数网络问题"
+        "curl -v / curl -w：从应用层探活，-v 打印 DNS、TCP、TLS、HTTP 各阶段细节，-w 能分别打出 time_namelookup、time_connect、time_starttransfer 的耗时；配合 --resolve 指定 IP 还能绕过 DNS 直连服务本身"
       ],
       "notes": "常见追问：telnet 和 nc 有什么区别？——nc（netcat）功能更多，-z 只探端口不发数据，telnet 连上后会先发协议协商字节。常见追问：为什么现在不推荐 telnet？——明文协议、镜像里常被裁掉、容易和「HTTP 请求」混淆。常见追问：ping 通为什么还是访问不了？——ping 走 ICMP，访问走 TCP，端口、路由、防火墙策略是三套独立机制。常见错误回答：「ping 不通就是主机挂了」——大量云环境默认屏蔽 ICMP，机器活着只是不回 echo。"
     },
     {
       "title": "tcpdump 怎么抓包才能看清连接过程？",
       "answer": [
-        "先框范围再抓：tcpdump -i any -nn -s 0 'tcp port 8080'，-i any 抓所有网卡、-nn 不做主机名和服务名反查（否则慢且看不出真实 IP）、-s 0 保存完整包不截断",
+        "先框范围再抓：tcpdump -i any -nn -s 0 'tcp port 8080'，-i any 抓所有网卡、-nn 不做主机名和服务名反查（否则慢且看不出真实 IP）、-s 0 保存完整包不截断；抓包会占 CPU 和内存，高流量机器上要限制网卡、端口和时长",
         "只看握手用过滤器：'tcp port 8080 and (tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0)'，纯 ACK 和数据段会被滤掉，握手与断开一眼看清",
         "只看 SYN 重传：'tcp port 8080 and tcp[tcpflags] & tcp-syn != 0'，同一个 SYN 出现多次就是重传，说明对端一直没回 SYN-ACK",
         "存文件再分析：加 -w /tmp/cap.pcap，用 tcpdump -r 回放、用 Wireshark 打开，比在终端里实时刷屏容易读得多",
         "抓包里读方向和状态：只有客户端的 SYN、没有服务端的 SYN-ACK，说明包在到达服务端之前就被丢了（防火墙或链路）；有 SYN-ACK 但紧跟 RST，说明端口没有进程监听",
-        "抓包点会影响结果：网卡上的 TSO/GRO 合并会让包看起来异常大，必要时用 ethtool -k eth0 确认 offload 状态、用 ethtool -K eth0 tso off gro off 关掉再抓",
-        "抓包有成本：会占 CPU 和内存，高流量机器上要限制网卡、端口和时长，必要时用 -c 限制包数或用 --immediate-mode 及时落盘"
+        "抓包点会影响结果：网卡上的 TSO/GRO 合并会让包看起来异常大，必要时用 ethtool -k eth0 确认 offload 状态、用 ethtool -K eth0 tso off gro off 关掉再抓"
       ],
       "notes": "常见追问：为什么抓出来的包有 65KB？——网卡 offload 把多个段合并了，要在抓包点之前关掉 TSO/GRO。常见追问：-nn 到底解决什么？——不做 PTR 反查，避免 DNS 阻塞拖慢抓包，也能看清真实 IP。常见追问：抓包会不会影响线上？——会，尽量用窄过滤条件并控制时长。常见错误回答：「抓包能看出所有问题」——抓包只反映抓包那个点的视角，上游丢包要在链路两端对照着抓。"
     },
     {
       "title": "ping 通但访问不了服务，可能是什么原因？",
       "answer": [
-        "端口没在监听：服务没起来、起在别的端口，或者只监听了 127.0.0.1；用 ss -lntp 看清绑定地址是 0.0.0.0 还是 127.0.0.1",
+        "端口层面异常：服务没起来、起在别的端口，或者只监听了 127.0.0.1，用 ss -lntp 看清绑定地址是 0.0.0.0 还是 127.0.0.1；反过来进程在但业务线程卡死，端口会接受连接却不再回数据，那是应用层问题",
         "防火墙或安全组按端口丢包：ping 走 ICMP、访问走 TCP，两套策略互相独立，ICMP 放行不代表 TCP 端口放行",
         "DNS 解析到了另一台机器：多 IP、轮询 DNS 或 CDN，ping 的目标和实际建立连接的机器不是同一台",
         "协议或 TLS 不匹配：把 HTTPS 请求发到 80 端口、服务端只支持特定 TLS 版本或证书链不全，TCP 能建连但应用层失败",
         "MTU/PMTU 黑洞：小包能通、大包卡住，表现为 TCP 握手成功但请求或响应发不出去",
-        "容器端口没映射：docker run 缺 -p、K8s 的 Service 没暴露端口，宿主机本地能通而集群外不通",
-        "服务进程在但业务线程卡死：端口接受连接后不再响应数据，属于应用层问题，不是网络问题"
+        "容器端口没映射：docker run 缺 -p、K8s 的 Service 没暴露端口，宿主机本地能通而集群外不通"
       ],
       "notes": "常见追问：ping 不通但服务访问正常？——ICMP 被防火墙禁掉或主机禁用了 ICMP 响应。常见追问：怎么快速区分「端口没开」和「被防火墙挡」？——被 DROP 会一直等到超时，被 REJECT 会立刻返回 connection refused。常见追问：ping 用大包测还通吗？——ping -M do -s 1472 可以发现 MTU 黑洞。常见错误回答：「ping 通说明服务正常」——ping 只覆盖三层可达性，四层和应用层的问题一概照不出来。"
     },
@@ -87,7 +84,7 @@
         "三个系统参数别搞混：tcp_tw_reuse=1 让主动发起连接时复用 TIME_WAIT（Linux 4.12 起默认是 2，只对 loopback 生效）；tcp_max_tw_buckets 限制总数，超了内核直接回收；tcp_fin_timeout 管的是 FIN_WAIT2，调它对 TIME_WAIT 没用",
         "别和 CLOSE_WAIT 混了：CLOSE_WAIT 是对端已发 FIN 而本地没 close，说明应用代码漏了关闭；TIME_WAIT 只是正常关闭的尾巴，本身不代表故障"
       ],
-      "notes": "常见追问：TIME_WAIT 能不能直接砍掉？——它保护最后 ACK 的重传和旧报文的隔离，砍掉要付出重传和串包的代价。常见追问：服务端 TIME_WAIT 多怎么办？——先查是谁主动关的连接，尽量改成客户端主动关；再考虑 tcp_tw_reuse。常见追问：tcp_tw_recycle 呢？——它对 NAT 后的客户端会丢包，已在 Linux 4.12 移除，别再用。常见错误回答：「把 tcp_fin_timeout 调小就能减少 TIME_WAIT」——那个参数管 FIN_WAIT2。"
+      "notes": "常见追问：TIME_WAIT 能不能直接砍掉？——它保护最后 ACK 的重传和旧报文的隔离，砍掉要付出重传和串包的代价。常见追问：服务端 TIME_WAIT 多怎么办？——先查是谁主动关的连接，尽量改成客户端主动关；再考虑 tcp_tw_reuse。常见追问：tcp_tw_recycle 呢？——它对 NAT 后的客户端会丢包，已在 Linux 4.12 移除，别再用。常见错误回答：「把 tcp_fin_timeout 调小就能减少 TIME_WAIT」——那个参数管 FIN_WAIT2；也常见把 TIME_WAIT 和 CLOSE_WAIT 混为一谈，那是两类完全不同的问题。"
     },
     {
       "title": "怎么定位是服务端慢还是网络慢？",

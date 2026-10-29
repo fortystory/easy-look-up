@@ -1,0 +1,205 @@
+{
+  "id": "io-model",
+  "title": "Socket 与 IO 模型",
+  "entries": [
+    {
+      "title": "什么是 socket？socket 这个抽象解决了什么问题？",
+      "description": "这题考的是能不能把 socket 讲成内核对象而不是「IP:端口」。",
+      "answer": [
+        "socket 是操作系统提供的「通信端点」抽象，本质是内核里的一个数据结构（Linux 上是 struct socket），进程通过文件描述符（fd）引用它",
+        "它把 TCP/IP 协议栈的细节（三次握手、可靠传输、拥塞控制、分片重组）藏在下面，向上只暴露 bind/listen/accept/connect/send/recv 这几个动作",
+        "解决了「同一个端口上如何区分成千上万条连接」：靠四元组（协议、本地 IP+端口、远端 IP+端口）区分，一个监听 socket 上可以挂上万条已建立连接",
+        "统一了文件和网络两套 API：socket 的 fd 也能交给 select/epoll 监听，也能像文件一样被 dup/fcntl 管理，read/write 在 socket 上的语义和文件一致",
+        "提供了连接状态抽象（未连接、监听中、已连接、已关闭），这是普通文件 IO 没有的；寻址也统一成 struct sockaddr，用长度字段区分 IPv4/IPv6/Unix 域",
+        "顺带解决了进程间通信：Unix 域 socket（AF_UNIX）不经过协议栈，比命名管道更通用，还能用 SCM_RIGHTS 把已连接的 socket 传给别的进程"
+      ],
+      "notes": "常见追问：socket 和 fd 是什么关系？—— fd 是进程内指向内核对象的整数句柄，socket 只是内核对象的一种。常见追问：为什么一个端口能同时承载很多连接？—— 靠四元组区分，每条连接一个 fd。常见追问：怎么把 socket 传给子进程？—— 用 SCM_RIGHTS 传 Unix 域 socketpair，不要靠继承 fd（会有竞态）。常见错误回答：把 socket 说成「就是一个 IP:端口」或者「就是 struct sockaddr」。"
+    },
+    {
+      "title": "阻塞 IO、非阻塞 IO、IO 多路复用、异步 IO 有什么区别？",
+      "description": "这四个词经常被混着用，面试官要的是一句话说清各自的阻塞点在哪。",
+      "answer": [
+        "阻塞 IO：调 read 时数据没到，线程就挂起等；一个线程只能守一个连接，连接一多线程数先崩",
+        "非阻塞 IO：调 read 时数据没到立刻返回 EAGAIN，线程不阻塞；问题是空转轮询烧 CPU，而且应用得自己记住「哪个 fd 现在能读」",
+        "IO 多路复用：一次 select/poll/epoll 就能同时监听成千上万个 fd 的就绪状态，线程在没事件时阻塞在 epoll_wait 上；就绪之后仍然由应用自己调 read",
+        "异步 IO（Windows IOCP、Linux io_uring）：应用提交「读 512 字节」后立即返回，内核在数据就绪时把操作真正做完，再通知应用「完成，读到 N 字节」，应用不再发起那次 read",
+        "四者的本质差别是「谁去做数据搬运」：阻塞/非阻塞/多路复用都是应用发起 read 让内核搬，异步 IO 是内核搬完了再通知",
+        "工程上 Go、Node、Redis、Nginx 走的是「多路复用 + 用户态协程」这条路而不是真异步 IO，因为异步 IO 的编程模型（回调、await 状态机）复杂且跨平台支持不均"
+      ],
+      "notes": "常见追问：非阻塞 IO 一定在空转吗？—— 会，除非配多路复用。常见追问：io_uring 能解决 C10K 吗？—— 它优化的是 IO 提交/完成路径，连接数上限卡在内存和每连接状态上，不是它解决的问题。常见追问：Go 属于哪种？—— 形式上是多路复用（netpoller），因为就绪后 read 几乎不阻塞，体感接近异步 IO。常见错误回答：「异步 IO 一定性能最好」。"
+    },
+    {
+      "title": "经典的五种 IO 模型分别是什么？",
+      "description": "五种模型出自 Stevens 的《UNIX 网络编程》，答不全通常是没读过那本书。",
+      "answer": [
+        "五种模型是：阻塞式 IO、非阻塞式 IO、IO 多路复用、信号驱动式 IO（SIGIO）、异步 IO",
+        "阻塞式 IO：进程发起 read 后一直阻塞等待，一个线程对应一个连接，是最简单的模型",
+        "非阻塞式 IO：read 立刻返回，要靠反复轮询获取数据，效率取决于轮询频率",
+        "IO 多路复用：select/poll/epoll 一次监听多个 fd，内核在有 fd 就绪时统一通知，是现在最常用的模型",
+        "信号驱动式 IO：内核用 SIGIO 信号通知「fd 可用了」，应用收到信号后再去 read；实践中很少用，信号处理函数里做 IO 不安全",
+        "异步 IO：应用提交 IO 请求后立即返回，内核在数据就绪时执行 IO 并通知完成，Windows IOCP、Linux io_uring 是典型实现"
+      ],
+      "notes": "常见追问：这五种里哪个最快？—— 没有脱离场景的最快，Linux 上多路复用 + 多线程是主流，io_uring 是新趋势。常见追问：Go 属于哪一种？—— 严格说是 IO 多路复用。这个五分法是按「通知时机」分类，有人只说四种是把信号驱动式并进了多路复用。常见错误回答：把「阻塞/非阻塞」和这五种当成并列的两套分类——它们是不同维度：阻塞与非阻塞说的是「一次调用是否等」，五模型说的是「什么时候通知」。"
+    },
+    {
+      "title": "select、poll、epoll 有什么区别？",
+      "description": "这是 IO 模型面试里最常被追着问的一题，答不出三者的机制差异基本就挂了。",
+      "answer": [
+        "select：用 fd_set 位图表示关注的集合，数量上限是 FD_SETSIZE（Linux 上是 1024），每次调用都要把整个集合从用户态拷到内核态",
+        "select 只有读、写、异常三个集合，出错信息只能塞进异常集合；返回后还得遍历所有 fd 才知道谁就绪，而且传入的集合会被内核改写",
+        "poll：改用 pollfd 数组，每项自带 events 和 revents，没有 FD_SETSIZE 这个硬上限（受 ulimit -n 约束），能监听 POLLERR、POLLHUP、POLLNVAL 等更多事件",
+        "poll 的老问题仍在：每次调用仍要拷贝整个数组进内核，返回后仍要遍历全量才能筛出就绪的 fd",
+        "epoll 是三个系统调用：epoll_create1 建实例、epoll_ctl 增删改关注的事件、epoll_wait 取就绪事件；fd 注册一次长期有效，不用每次调用重新传；简单说就是 select/poll「每次问一次内核」，epoll「登记一次、只收通知」",
+        "epoll_wait 只返回真正就绪的 fd，事件也更细：EPOLLIN/EPOLLOUT/EPOLLRDHUP/EPOLLERR/EPOLLHUP，再加 EPOLLET（边缘触发）、EPOLLONESHOT、EPOLLEXCLUSIVE"
+      ],
+      "notes": "常见追问：poll 真的没有数量限制吗？—— 没有 FD_SETSIZE 那个上限，但仍受进程 fd 总数限制，而且每次调用要拷贝整个数组，fd 一多本身就慢。常见追问：epoll 一定比 select 快吗？—— fd 只有几十个时差距不大，甚至多出的 epoll_ctl 开销更大。常见错误回答：「epoll 没有限制」——它受内存和 fd 总数约束。"
+    },
+    {
+      "title": "epoll 为什么比 select 快？",
+      "description": "这题要答在机制上：拷贝次数、遍历成本、事件表达力三个维度。",
+      "answer": [
+        "少一次全量拷贝：select/poll 每次调用都要把整个 fd 集合从用户态拷进内核态，epoll 用 epoll_ctl 增量注册，集合常驻内核，不用反复搬",
+        "少一次全量扫描：select/poll 返回后必须遍历所有 fd 才知道谁就绪，复杂度 O(n)；epoll 内核维护就绪队列，epoll_wait 直接把就绪事件拷出来，接近 O(就绪数)",
+        "事件表达更精确：select 只能靠「读集合里有数据，再 read 返回 0」判断对端关闭；epoll 直接给 EPOLLRDHUP（对端半关闭）、EPOLLERR、EPOLLHUP，错误和正常可读不会混在一起",
+        "支持独占唤醒：EPOLLEXCLUSIVE（Linux 4.5+）让一个 fd 被多个 epoll 实例监听时只唤醒一个等待者，避免惊群",
+        "没有 FD_SETSIZE 限制：select 最多 1024 个 fd，epoll 只受内存和 fd 总数限制，这是支撑万级连接的前提",
+        "代价也要说清：epoll 用了三个系统调用且只在 Linux 可用，跨平台要另写一套（Windows 用 IOCP，BSD 用 kqueue）"
+      ],
+      "notes": "常见追问：epoll_wait 内部也要拷贝数据，为什么还快？—— 拷贝的就绪事件数远小于全部 fd，量级不同。常见追问：什么时候 select 反而更合适？—— fd 少、要跨平台、逻辑简单时，select/poll 代码更短。常见错误回答：把 epoll 说成「异步的」——epoll 本身是同步的就绪通知，那次 read 仍是应用发起的。"
+    },
+    {
+      "title": "什么是边缘触发（ET）和水平触发（LT）？该怎么选？",
+      "description": "这题考的是 ET 的代价意识，不是名词解释。",
+      "answer": [
+        "LT（水平触发）：只要 fd 还是「可读」状态，下次 epoll_wait 还会报它；不把数据读完就会被反复通知——它不会丢事件、读写可以分多次做，代价是数据没读完时反复唤醒，系统调用和 CPU 开销大",
+        "ET（边缘触发）：只在状态跃迁时通知一次（从不可读变成可读），之后除非状态再变，否则不再报",
+        "ET 的优点是通知次数少，一个事件里尽量把数据读干净，总系统调用次数下降，适合高并发长连接场景",
+        "ET 的硬性代价：必须配非阻塞 fd，并且要把 fd 读到 EAGAIN 才算处理完，否则剩下的数据可能长时间等不到通知",
+        "现成的例子：Nginx、Envoy、libevent 默认用 ET；Go runtime 注册 netpoll fd 时用的也是 EPOLLET（runtime/netpoll_epoll.go 里的 netpollopen）",
+        "选型建议：先用 LT 写对，确认瓶颈在唤醒次数和系统调用开销之后再上 ET，上 ET 就必须配套「读到 EAGAIN」的循环"
+      ],
+      "notes": "常见追问：ET 下只读了一半会怎样？—— 剩下的数据留在内核缓冲区，直到有新数据到达触发下一个边沿才继续处理，表现为请求卡住。常见追问：ET 一定比 LT 快吗？—— 取决于读写模式，连接少、数据量小时差别可忽略。常见错误回答：以为 ET 的通知会重复到达，可以慢慢读。"
+    },
+    {
+      "title": "为什么 ET 模式下必须把 socket 读到 EAGAIN？",
+      "description": "这是 ET 面试里最常被追的细节，答不出「状态没跃迁」这层就说不清。",
+      "answer": [
+        "ET 只在状态跃迁时通知一次：socket 从空变成有数据时触发一次可读事件，你读走一部分后它仍然是可读状态，没有新的跃迁，也就没有新通知",
+        "如果只读一部分就返回，剩下的数据会一直躺在内核缓冲区里，直到对端发来新数据才可能触发下一个边沿，表现就是「请求卡住、延迟突然变高」",
+        "正确姿势：把 fd 设成非阻塞，用循环 read/write 直到返回 EAGAIN；EAGAIN 表示「暂时没有更多数据了」，是循环的终止条件，不是错误",
+        "必须配非阻塞：阻塞 fd 上永远等不到 EAGAIN，循环要么一直阻塞要么根本退不出来",
+        "写方向同理：非阻塞写返回 EAGAIN 说明发送缓冲区满了，要等 EPOLLOUT 再继续写完，否则同样的数据会丢在用户态",
+        "Go 用 ET 却不丢数据，是因为 internal/poll 每次读之前都先真正调一次 read，只有拿到 EAGAIN 才把 goroutine 挂到 netpoller 上，缓冲区里已有的数据一定会被读到（源码注释里明确提到这点，见 go.dev/issue/15735）"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"syscall\"\n)\n\nfunc main() {\n\tfds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)\n\tif err != nil {\n\t\tfmt.Println(\"创建 socketpair 失败:\", err)\n\t\treturn\n\t}\n\tdefer syscall.Close(fds[0])\n\tdefer syscall.Close(fds[1])\n\n\t// 接收端设成非阻塞，否则 read 会一直阻塞\n\tif err := syscall.SetNonblock(fds[0], true); err != nil {\n\t\tfmt.Println(\"设置非阻塞失败:\", err)\n\t\treturn\n\t}\n\n\tif _, err := syscall.Write(fds[1], []byte(\"hello\")); err != nil {\n\t\tfmt.Println(\"写失败:\", err)\n\t\treturn\n\t}\n\n\t// ET 模式必须一直读到 EAGAIN 为止\n\tbuf := make([]byte, 4)\n\ttotal := 0\n\tfor {\n\t\tn, err := syscall.Read(fds[0], buf)\n\t\tif err == syscall.EAGAIN {\n\t\t\tbreak\n\t\t}\n\t\tif err != nil {\n\t\t\tfmt.Println(\"读失败:\", err)\n\t\t\treturn\n\t\t}\n\t\ttotal += n\n\t}\n\tfmt.Println(\"累计读到\", total, \"字节\")\n}\n",
+      "lang": "go",
+      "notes": "常见追问：EAGAIN 和 EWOULDBLOCK 有什么区别？—— 在 Linux 上是同一个错误码；POSIX 语义上 EAGAIN 是「暂时没数据」，EWOULDBLOCK 是「会阻塞」，日常按 EAGAIN 处理。常见追问：LT 模式必须读到 EAGAIN 吗？—— 不强制，但读到 EAGAIN 能少唤醒几次。常见错误回答：以为 ET 在「读了一半」之后还会再通知一次。"
+    },
+    {
+      "title": "什么是惊群效应？成因是什么？怎么解决？",
+      "description": "这题要能区分「多进程共享 listen fd」和「多线程 epoll」两种成因，别只背结论。",
+      "answer": [
+        "惊群（thundering herd）：多个线程或进程阻塞在同一个 fd 上，一个事件到来时内核把它们全部唤醒，但只有一个能真正拿到连接或数据，其余全部空转，代价是 CPU 被无效唤醒吃掉、上下文切换暴增、延迟抖动变大",
+        "经典成因一：多个进程 fork 出同一个 listen fd 同时 accept，一个新连接把所有进程都唤醒，内核只交给其中一个，其余白醒一轮",
+        "经典成因二：多线程在同一个 epoll 实例上等同一个 fd 的事件时全部被唤醒；现代内核的唤醒机制已大幅缓解这种「纯 epoll_wait 惊群」，但一个 fd 被多个 epoll 实例监听时仍会出现",
+        "解法一：SO_REUSEPORT（Linux 3.9+）——每个进程各自 bind 同一个端口并 listen，内核按四元组哈希把连接直接分发到某个进程的队列，根本上没有共享队列，惊群自然消失",
+        "解法二：EPOLLEXCLUSIVE（Linux 4.5+）——注册 fd 时带上它，一个事件只唤醒一个等待者；用 EPOLLONESHOT 也能达到类似效果",
+        "解法三：架构上别共享 fd——单线程 acceptor 加队列把连接分给工作线程，或像 Go 那样一个 netpoller 管所有连接"
+      ],
+      "notes": "常见追问：Go 里有惊群吗？—— goroutine 层面也有类似现象：一个连接把一批等在 channel 上的 goroutine 全唤醒，那是另一类问题，见并发排查分组。常见追问：SO_REUSEPORT 等于负载均衡吗？—— 它是内核按哈希分发，不是轮询，连接分布不均时仍会倾斜。常见错误回答：「加 SO_REUSEADDR 就解决了」——SO_REUSEADDR 只解决端口被 TIME_WAIT 占用，不能消除惊群。"
+    },
+    {
+      "title": "Go 的 netpoller 是怎么实现 IO 多路复用的？",
+      "description": "这题要能讲到 runtime 内部：epoll 注册、pollDesc、唤醒路径。",
+      "answer": [
+        "代码位置：runtime 里的 netpoll.go（通用逻辑）和 netpoll_epoll.go（Linux 实现），internal/poll 是它对外的封装",
+        "底层就是 epoll：runtime 用 epoll_create1 建一个进程级的全局 epoll 实例（所有 P 共享它），每个网络 fd 创建时用 epoll_ctl 注册，事件类型是 EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET",
+        "每个 fd 对应一个 pollDesc，里面有两个二进制信号量（rg 和 wg），分别给等读和等写的 goroutine 用；goroutine 阻塞时把自己挂上去并让出 P，而不是占着 OS 线程",
+        "唤醒路径：M 在调度器里找不到活干时会调一次非阻塞的 netpoll（内部是 epoll_wait），拿到就绪 fd 后 netpollready 把对应的 goroutine 从信号量上摘下来塞进 runq 重新调度；必要时用 netpollBreak 往一个 eventfd 写一个数，让阻塞在 epoll_wait 上的 M 立刻返回",
+        "跨平台：Linux 用 epoll，BSD/macOS 用 kqueue，Windows 用 IOCP，各有 netpoll_*.go 实现，对外 API 一致",
+        "落到用户态：net.Conn 的 Read/Write 最终走 internal/poll，读之前先 prepareRead，真正 read 拿到 EAGAIN 才 waitRead 挂起，这就是「Go 暴露阻塞 API、底层跑非阻塞加多路复用」的由来"
+      ],
+      "notes": "常见追问：epoll_wait 是谁在调？—— 是 M 在调度器的 findRunnable 里调，不是专门的 IO 线程。常见追问：为什么 runtime 选 ET？—— 配合「先读一次再挂起」的策略能减少无效唤醒，又不会丢已缓冲的数据。常见追问：怎么排查 netpoll 相关问题？—— 看 pprof 的 goroutine 栈里 internal/poll.(*FD).Read 那一帧。常见错误回答：以为 Go 自己实现了一套 epoll——它就是直接调 epoll。"
+    },
+    {
+      "title": "为什么 Go 里每个连接一个 goroutine 还这么快？",
+      "description": "这题要把 goroutine 成本、调度模型、netpoller 三件事串起来回答。",
+      "answer": [
+        "goroutine 初始栈只有 2KB（runtime 里的 stackMin，按需增长），而 OS 线程栈默认 8MB：一万个连接是 20MB 栈 vs 80GB 栈的差别",
+        "一个连接一个 goroutine 不等于一个 OS 线程：M（OS 线程）数量由 GOMAXPROCS 和实际阻塞情况决定，十万 goroutine 跑在几十个 M 上",
+        "网络 IO 的「阻塞」发生在 netpoller 上，是挂起 goroutine、让出 P，不占着 M；真正的阻塞 syscall 会把 M 交给别的 P 继续跑（sysmon 兜底新建 M）",
+        "调度切换成本低：Go 1.14 之后有异步抢占，不会因为一个 goroutine 死循环就饿死其它 goroutine",
+        "省掉了事件驱动的心智负担：不用自己写状态机、拆半包、处理连接状态迁移，业务代码是线性的",
+        "前提是别在 goroutine 里干 CPU 密集的活——那会让 P 被占住，该把重活丢给单独的工作池或独立进程"
+      ],
+      "notes": "常见追问：每连接一 goroutine 会不会内存爆？—— 2KB 起始栈乘一万连接约 20MB，加上 runtime 开销通常可接受，真正的杀手是 goroutine 泄露。常见追问：什么时候 goroutine 方案反而不如事件循环？—— goroutine 数量极多且切换频繁，或每个 goroutine 的栈都涨到很大时。常见错误回答：「因为 Go 有绿色线程所以快」——关键是非阻塞 IO 加 netpoller 让阻塞不占线程。"
+    },
+    {
+      "title": "Go 里怎么用非阻塞 IO？O_NONBLOCK 到底怎么设？",
+      "description": "这题考动手能力：知道标准库已经是 O_NONBLOCK，也知道底层怎么改。",
+      "answer": [
+        "标准库 net 内部本来就是 O_NONBLOCK：internal/poll 建 socket 时用 fcntl(F_SETFL) 加上 O_NONBLOCK（internal/poll/sys_cloexec.go），对外却暴露阻塞风格的 Read/Write",
+        "自己操作 fd 时用 syscall.SetNonblock(fd, true)（Unix 平台可用），它内部就是 fcntl(F_GETFL) 取出当前标志、或上 O_NONBLOCK 后 fcntl(F_SETFL) 写回；第三方库 golang.org/x/sys/unix 的 unix.SetNonblock 语义相同，是更推荐的写法",
+        "设成非阻塞后，read/write 在数据不够时立刻返回 EAGAIN/EWOULDBLOCK，业务循环要靠 EAGAIN 判断「暂时没数据」而不是当成错误",
+        "在 Go 里拿底层 fd 用 net.TCPConn.SyscallConn()，在 raw.Control 回调里拿到 fd 再改标志；fd 会随连接关闭失效，不能缓存到回调外长期使用",
+        "注意 accept 出来的新 fd 默认是阻塞的，不会继承监听 fd 的 O_NONBLOCK（Linux 上要么用 accept4 带 SOCK_NONBLOCK，要么自己再设一次；Go 内部就是这么做的）",
+        "另外别把已经设成非阻塞的 fd 再塞回标准库的阻塞语义 API 里混用，否则会出现「刚读到一半就返回 EAGAIN」的诡异行为"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net\"\n\t\"syscall\"\n)\n\nfunc main() {\n\tln, err := net.Listen(\"tcp\", \"127.0.0.1:0\")\n\tif err != nil {\n\t\tfmt.Println(\"监听失败:\", err)\n\t\treturn\n\t}\n\tdefer ln.Close()\n\n\tgo func() {\n\t\tc, err := ln.Accept()\n\t\tif err != nil {\n\t\t\treturn\n\t\t}\n\t\tdefer c.Close()\n\t\tc.Write([]byte(\"hello\"))\n\t}()\n\n\tconn, err := net.Dial(\"tcp\", ln.Addr().String())\n\tif err != nil {\n\t\tfmt.Println(\"连接失败:\", err)\n\t\treturn\n\t}\n\tdefer conn.Close()\n\n\t// 通过 SyscallConn 拿到底层 fd，再把它设成非阻塞\n\traw, err := conn.(*net.TCPConn).SyscallConn()\n\tif err != nil {\n\t\tfmt.Println(\"获取底层 fd 失败:\", err)\n\t\treturn\n\t}\n\tvar setErr error\n\tif err := raw.Control(func(fd uintptr) {\n\t\tsetErr = syscall.SetNonblock(int(fd), true)\n\t}); err != nil || setErr != nil {\n\t\tfmt.Println(\"设置非阻塞失败:\", err, setErr)\n\t\treturn\n\t}\n\tfmt.Println(\"已把连接的 fd 设成 O_NONBLOCK\")\n}\n",
+      "lang": "go",
+      "notes": "常见追问：O_NONBLOCK 是文件级还是 socket 级标志？—— 是文件描述符标志（O_*），同一 fd 上 dup 出来的描述符共享它；设置要用 F_SETFL，F_SETFD 管的是 FD_CLOEXEC，别用错。常见追问：为什么标准库不把 EAGAIN 暴露给用户？—— 它把 EAGAIN 转成了挂起等待，对用户更友好。常见错误回答：以为设置 O_NONBLOCK 会让 net.Conn 的 Read 立刻返回错误——标准库内部有 netpoller 兜着。"
+    },
+    {
+      "title": "什么是零拷贝？sendfile、splice、mmap 各自解决什么问题？",
+      "description": "这题要看得出你知不知道「省的是哪一次拷贝、哪一次系统调用」。",
+      "answer": [
+        "零拷贝的目标是让数据从内核页缓存直接走到网卡或目标缓冲区，不经过用户态，省掉 2 次拷贝和 2 次系统调用（传统 read + write 一共 4 次上下文切换）",
+        "sendfile(out_fd, in_fd, offset, count)：在内核态把 in_fd（普通文件）的页直接交给 out_fd（socket）的发送缓冲区，用户态零参与；Linux 3.1 之后 in_fd 也可以是 socket",
+        "splice：在两个 pipe 之间搬运数据，也能 socket→pipe、pipe→socket，常用于零拷贝代理（Nginx 的 proxy_pass 就用过 splice 方案）；代价是要额外建管道",
+        "mmap：把文件映射进虚拟内存，用户态直接读写映射区，省掉 read/write 系统调用和一次缓冲区拷贝；但数据仍要在页缓存和用户态之间走，严格说不算完全零拷贝，还有缺页开销",
+        "其他方案：MSG_ZEROCOPY（Linux 4.1+ 的 TCP 场景）、O_DIRECT 绕过页缓存、io_uring 的固定缓冲区",
+        "Go 里的用法：io.Copy(dst, src) 在 dst 是 *net.TCPConn、src 是 *os.File 且平台是 Linux 时，底层会走 internal/poll 的 sendfile（net/sendfile.go 调 poll.SendFile），不用自己写"
+      ],
+      "notes": "常见追问：零拷贝是不是一次内存拷贝都没有了？—— sendfile 内部仍有内核页的处理，只是没有用户态参与的拷贝。常见追问：Go 怎么用 splice？—— 标准库没直接暴露，一般用 x/sys/unix 自己封装。常见追问：TLS 场景还能用 sendfile 吗？—— 数据要加密，通常得先在用户态解密，零拷贝链路会断。常见错误回答：把 mmap 说成「完全没有拷贝」。"
+    },
+    {
+      "title": "什么是 Reactor 模式和 Proactor 模式？",
+      "description": "这题考的是两种模式的心智模型差异，别背名词。",
+      "answer": [
+        "Reactor（反应器）：「通知就绪 + 应用自己读写」。内核说这个 fd 可以读了，应用收到事件后自己调 read——epoll、kqueue、select 那一套都是 Reactor",
+        "Proactor（异步 IO）：「提交操作 + 通知完成」。应用提交「读 N 字节」后立即返回，内核在数据就绪时把操作真正做完，再通知应用「完成，读到 N 字节」——Windows IOCP、Linux io_uring 是典型",
+        "关键差别是谁发起那次数据搬运：Reactor 里应用发起 read，Proactor 里内核发起并完成",
+        "Reactor 的复杂度落在应用侧：每个连接要维护状态机、拆半包、区分「可读但对端已关闭」",
+        "Proactor 把复杂度挪进内核和运行时，完成事件直接给出结果，但异步 API 的调试、错误传播、跨平台一致性都更难做",
+        "现实例子：Netty 的事件循环是 Reactor 风格；Windows IOCP、Linux io_uring 是 Proactor；Node.js 的 libuv 用 epoll，是 Reactor；Go 严格说也是 Reactor，只是就绪后 read 几乎不阻塞，体感接近 Proactor"
+      ],
+      "notes": "常见追问：Go 到底算 Reactor 还是 Proactor？—— 形式上是 Reactor，语义上接近 Proactor。常见追问：为什么 Linux 的 AIO 不算真异步？—— POSIX AIO 多数实现在用户态模拟，libaio 只对 O_DIRECT 有效，真正能用的是 io_uring。常见追问：单线程 Reactor 会不会成为瓶颈？—— 会，所以生产实现基本都是多 Reactor 加负载均衡（Netty 的 boss/worker 模型）。常见错误回答：把 Reactor 和 Proactor 说成两种「IO 模型」而说不清谁发起搬运。"
+    },
+    {
+      "title": "socket 的发送缓冲区和接收缓冲区是什么？为什么会「写阻塞」？",
+      "description": "这题考对 TCP 流控的理解，答不清写阻塞的成因就说明没真调过。",
+      "answer": [
+        "每个 TCP socket 在内核里有两个缓冲区：接收缓冲区放对端发来的数据，发送缓冲区放还没发出去的数据，大小可用 setsockopt 的 SO_RCVBUF/SO_SNDBUF 调整",
+        "应用 write 的数据先拷进发送缓冲区，再由内核 TCP 协议栈按 MSS 切分、加上 TCP/IP 头交给网卡；所以 write 返回成功只代表进了内核缓冲区，不代表对端收到",
+        "发送缓冲区满了，非阻塞 socket 的 write 返回 EAGAIN，阻塞 socket 则挂起——这就是「写阻塞」的来源",
+        "接收缓冲区满了，对端的发送窗口会收缩到 0，对端 write 也会跟着阻塞，这是 TCP 流控，表现为「上传速度上不去」",
+        "缓冲区也不是越大越好：太大占内存，还会让发送端以为网络通畅而塞满队列，排队延迟（bufferbloat）变高；太小则频繁触发窗口更新",
+        "常用调优手段：调 SO_SNDBUF/SO_RCVBUF、用 TCP_NODELAY 关掉 Nagle 算法、用 TCP_CORK 攒够一批再一起发"
+      ],
+      "notes": "常见追问：write 返回成功说明对方收到了吗？—— 没有，只说明进了本机发送缓冲区。常见追问：大文件上传为什么越来越慢？—— 通常是接收窗口被限住或落盘慢，不是链路带宽问题。常见追问：send 缓冲区大小和带宽时延积什么关系？—— 理论上要 ≥ BDP（带宽 × RTT）才不会成为瓶颈。常见错误回答：把内核发送缓冲区当成应用自己的写缓冲。"
+    },
+    {
+      "title": "非阻塞 connect 返回 EINPROGRESS 是怎么回事？连接成功怎么判断？",
+      "description": "这题考的是异步连接的正确收尾方式，只会说「等可写事件」是不够的。",
+      "answer": [
+        "非阻塞 socket 上 connect 通常立刻返回 EINPROGRESS，意思是「连接请求已发出，正在进行中」，它是进行态而不是失败",
+        "之后等「可写事件」（EPOLLOUT）说明 TCP 握手完成，但可写不代表成功——连接失败时 socket 同样会变成可写",
+        "判定结果的正确做法是 getsockopt(fd, SOL_SOCKET, SO_ERROR) 读错误码：0 表示连接成功，非 0 才是失败原因，比如 ECONNREFUSED",
+        "还要配超时：用 select/epoll 的超时参数，或者设置 SO_SNDTIMEO，否则 SYN 丢包时连接会一直挂着",
+        "阻塞 socket 上 connect 成功返回 0、失败返回 -1 并置 errno；非阻塞下失败原因只能通过 SO_ERROR 取",
+        "大量并发连接时标准做法就是非阻塞 connect 加 epoll；Go 用的是另一种路径：内部把 socket 设成非阻塞，靠 netpoller 等连接完成，对外仍是阻塞风格（internal/poll 的 dial 就是先等可写再查 SO_ERROR）"
+      ],
+      "notes": "常见追问：EINPROGRESS 和 EALREADY 有什么区别？—— EINPROGRESS 是首次连接还在进行，EALREADY 是同一个 fd 上重复发起 connect。常见追问：为什么可写不代表连接成功？—— 出错状态下 socket 同样报告可写，必须查 SO_ERROR。常见追问：连接超时该关 fd 还是留着？—— 关掉，不然会泄露；Go 的 net.Dialer 靠 context 的 deadline 自动收尾。常见错误回答：看到 EPOLLOUT 就当连接成功。"
+    }
+  ]
+}

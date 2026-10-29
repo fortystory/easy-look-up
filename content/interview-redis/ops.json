@@ -1,0 +1,209 @@
+{
+  "id": "ops",
+  "title": "Redis 性能与运维",
+  "entries": [
+    {
+      "title": "Redis 为什么快？可以从哪几个角度解释？",
+      "description": "性能类问题的开场白，答案要覆盖内存、IO 模型、单线程和批量四条主线。",
+      "answer": [
+        "数据全在内存：读写是内存操作，纳秒到微秒级；磁盘只用于 RDB/AOF 持久化，不在请求路径上",
+        "IO 多路复用：epoll、kqueue 让一个线程同时盯住成千上万个连接，只处理真正可读可写的连接，省掉一连接一线程的线程切换开销",
+        "命令执行是单线程的：数据结构不需要加锁，也没有上下文切换，串行执行本身就等于互斥",
+        "数据结构是为操作定制的：SDS、listpack、intset、quicklist、跳表这些紧凑结构减少了内存分配和指针追逐",
+        "Pipeline 批量：把 N 次请求往返压成 1 次，RTT 被摊薄，这是应用侧能拿到手的一块大收益",
+        "快的代价：单条慢命令会阻塞整个实例，命令执行期间其它请求全部排队"
+      ],
+      "notes": "常见追问：这几种因素哪个最重要？——看场景，纯读场景瓶颈在网络往返，Pipeline 收益最大；写多的场景瓶颈在持久化和内存带宽；「怎么量化」——用 redis-benchmark 压，用 redis-cli --latency 看延迟分布。跨组提示：数据结构的底层实现见「Redis 数据结构与底层实现」分组，单线程模型见下一题。"
+    },
+    {
+      "title": "Redis 真的是单线程的吗？6.0 之后有什么变化？",
+      "description": "从运维视角回答单线程问题，重点是它对线上故障面的影响。",
+      "answer": [
+        "命令执行始终是单线程，Redis 6.0 到现在没有变过，7.x 也没有把命令执行并行化",
+        "6.0 起可以用 io-threads N 把 socket 读写和协议解析交给 IO 线程并行做，主线程只负责执行命令和回写结果；默认 io-threads 1，即不开启",
+        "官方建议线程数不超过 CPU 核数，一般从 2 到 4 起步；网络 IO 占 CPU 比例很低时开多线程反而更慢",
+        "另外还有后台线程负责异步释放内存（lazyfree）、异步 fsync、关闭连接，它们不参与命令执行",
+        "运维含义一：一个慢命令会卡住整个实例，KEYS *、对大集合的 SMEMBERS、对大 hash 的 HGETALL 都是秒级卡顿的典型来源",
+        "运维含义二：BGSAVE、BGREWRITEAOF 会 fork 子进程，fork 期间主线程要复制页表，大内存实例上会抖几十到几百毫秒"
+      ],
+      "notes": "常见追问：命令执行为什么不并行？——数据结构没有并发保护，并行化要加细粒度锁，通常比串行更慢；「fork 为什么会卡」——复制页表是内核动作，页表越大越慢，透明大页（THP）会放大这个问题；「怎么确认当前开了几个 IO 线程」——CONFIG GET io-threads。跨组提示：IO 多路复用与紧凑数据结构的原理见「Redis 数据结构与底层实现」分组。"
+    },
+    {
+      "title": "慢查询日志（SLOWLOG）怎么用？",
+      "description": "线上排查慢命令的第一站，但它的统计口径和几个陷阱必须说清楚。",
+      "answer": [
+        "开启方式是 slowlog-log-slower-than <微秒>，默认 10000（即 10 毫秒），设成 0 关闭，设成负数记录所有命令",
+        "容量由 slowlog-max-len 控制，默认 128 条，超出后覆盖最老的条目；慢日志只在内存里，不落盘，重启即丢",
+        "查看用 SLOWLOG GET [count]（默认返回 10 条，-1 表示全部）、SLOWLOG LEN 看条数、SLOWLOG RESET 清空",
+        "统计口径是命令在服务端真正执行的时间，不含网络收发和排队，所以客户端看到的慢请求，服务端慢日志里可能根本没有",
+        "返回顺序按时间倒序（最近的在前），不是按耗时从大到小排，想直接看最慢的得自己排序",
+        "每条记录包含 id、时间戳、耗时（微秒）、命令参数、客户端 IP 和端口、客户端名（CLIENT SETNAME 设的）"
+      ],
+      "notes": "常见追问：阈值设多少合适？——先设小值采一轮基线，再按业务 SLO 定，10 毫秒对多数业务已经算慢；「SLOWLOG GET 会清空日志吗」——不会，只有 SLOWLOG RESET 会清空，所以排查时不用急着 RESET；「日志里没有但客户端很慢」——多半是网络或连接池排队，不是 Redis 慢；「怎么持续收集」——定时拉 SLOWLOG GET -1 存档，或用 redis_exporter 把慢日志暴露成指标。"
+    },
+    {
+      "title": "怎么定位慢命令？除了 SLOWLOG 还能看什么？",
+      "description": "慢日志只覆盖执行耗时，还要配合延迟事件和命令统计才能定位到具体命令。",
+      "answer": [
+        "LATENCY DOCTOR 输出最近发生的延迟异常事件（命令执行、fork、持久化、淘汰、过期等），带最近一次事件时间、当前延迟和最大延迟；前提是 latency-monitor-threshold 设了非 0 值（毫秒，默认 0 表示关闭）",
+        "LATENCY HISTORY <event> 看单个事件的历史曲线，LATENCY LATEST 列出所有超过阈值的事件，LATENCY RESET 清空",
+        "INFO commandstats 给出每条命令的调用次数、总耗时 usec、平均耗时 usec_per_call、被拒绝和失败次数，找「调用多且平均耗时长」的命令最有效",
+        "Redis 7 的 INFO latencystats 和 LATENCY HISTOGRAM 给出每条命令的延迟直方图，比平均值更能暴露长尾",
+        "redis-cli --latency、--latency-history 从客户端侧主动压测，测的是端到端延迟，能把服务端因素排除掉",
+        "客户端侧还要看自己的连接池等待时间：连接池不够时请求在客户端排队，服务端日志里什么都看不到"
+      ],
+      "code": "func parseInfoSection(section string) map[string]string {\n\tfields := make(map[string]string)\n\tfor _, line := range strings.Split(section, \"\\n\") {\n\t\tline = strings.TrimSpace(line)\n\t\tif line == \"\" || strings.HasPrefix(line, \"#\") {\n\t\t\tcontinue\n\t\t}\n\t\tif k, v, ok := strings.Cut(line, \":\"); ok {\n\t\t\tfields[k] = v\n\t\t}\n\t}\n\treturn fields\n}",
+      "lang": "go",
+      "notes": "常见追问：LATENCY DOCTOR 怎么开？——latency-monitor-threshold 设成 100 之类的毫秒值，它只记录超过阈值的操作，采集本身有一点点开销；「命令统计会重置吗」——CONFIG RESETSTAT 会清零，统计是进程级的，重启也清零；「为什么平均耗时不够用」——平均值掩盖长尾，线上事故往往由 P99 引起，要看分位数；「大 key 怎么找」——redis-cli --bigkeys、--memkeys，或用 SCAN 分批统计。"
+    },
+    {
+      "title": "Pipeline 是什么？能提升多少？为什么不是万能的？",
+      "description": "应用侧最常用的一招，但要讲清楚收益来自哪里、边界又在哪里。",
+      "answer": [
+        "Pipeline 是把多条命令攒成一批一次性发给服务端，服务端按顺序执行完再把结果一起返回；命令仍是串行执行，不是并行",
+        "收益来源只有一个：减少网络往返。N 条命令的耗时从 N×(RTT+执行时间) 降到约 RTT+N×执行时间",
+        "量级取决于 RTT：同机回环是几十微秒，同机房通常 0.1 到 0.5 毫秒，几百条命令的批量往往能快几倍到几十倍；跨地域 RTT 上百毫秒时收益更夸张",
+        "批不能无限大：一次发太多会撑大服务端输入缓冲和客户端输出缓冲，还会拉长其它命令的等待，一般按「几千条命令或几十 KB」切批",
+        "不适用于需要中间结果的逻辑：比如 SETNX 抢锁、扣库存前先查余量，这类必须拿到上一条结果才能决定下一条",
+        "Pipeline 不保证原子性：批次里的命令之间可能被别的客户端插入执行；要原子性用 MULTI/EXEC 或 Lua 脚本"
+      ],
+      "code": "cmds := make([]string, 0, 128)\nfor i := 0; i < 128; i++ {\n\tcmds = append(cmds, fmt.Sprintf(\"GET key:%d\", i))\n}\nfmt.Println(len(cmds)) // 攒成一批发出去，服务端按顺序执行",
+      "lang": "go",
+      "notes": "常见追问：Pipeline 和事务的区别？——Pipeline 只打包，不保证原子也不隔离；MULTI/EXEC 保证批次不被插入但没有回滚；「Pipeline 还是 Lua」——只要原子性选 Lua，只要批量吞吐选 Pipeline，Lua 脚本执行期间会阻塞整个实例；「客户端支持吗」——go-redis 用 Pipeline()，redis-py 用 pipeline()，都有官方实现。"
+    },
+    {
+      "title": "Redis 的事务（MULTI/EXEC）是什么？为什么很多场景不推荐用？",
+      "description": "事务听起来很强，但它解决的是「批量执行」，不是「一致性」。",
+      "answer": [
+        "MULTI 之后进入事务模式，后续命令只入队不执行（返回 QUEUED），EXEC 时按入队顺序一次性执行并返回结果数组，DISCARD 丢弃队列",
+        "它不是 ACID 事务：没有回滚，某条命令运行出错只影响这一条，已经执行过的命令不会撤销，整个批次也不会因为一条失败而回退",
+        "隔离要靠 WATCH 提供乐观锁：EXEC 之前如果被监视的 key 被别人改过，EXEC 返回 nil，客户端必须自己重试",
+        "不推荐的第一层原因：语义模糊，客户端在 MULTI 和 EXEC 之间崩溃时，命令已经进了服务端队列却没执行，这段命令永远不生效",
+        "第二层原因：要基于前面结果做判断就必须 WATCH 加重试，代码复杂度比直接写 Lua 高得多",
+        "官方建议：要原子性用 Lua 脚本（服务端一次执行、天然原子、能拿结果并重试），只要批量吞吐用 Pipeline"
+      ],
+      "notes": "常见追问：MULTI/EXEC 能保证哪些命令不被插队？——EXEC 内的命令不会与其它客户端的命令交错，但不回滚，也不提供跨批次的隔离；「队列里的命令出错会怎样」——入队期的语法错误会让 EXEC 整体报错返回；「为什么 Redis 做了事务却少人用」——需求被 Pipeline 和 Lua 两条路覆盖得更便宜。"
+    },
+    {
+      "title": "Lua 脚本为什么是原子的？它一般用来做什么？",
+      "description": "脚本是把多步逻辑交给服务端一次执行，原子性来自命令执行本身的单线程。",
+      "answer": [
+        "Redis 执行脚本期间不执行任何其它命令，整个脚本是一个不可分割的执行单元，脚本读到的数据不会被别人改掉",
+        "典型用途是「读-判断-写」三步合成一步：比较并删除锁、扣库存并回滚、限流计数、滑动窗口统计",
+        "KEYS 数组放 key、ARGV 数组放参数：脚本里不能把 key 硬编码，Cluster 下所有 key 必须落在同一个槽",
+        "用 EVALSHA 加 SCRIPT LOAD 发送脚本摘要，服务端没有缓存时返回 NOSCRIPT，客户端回退成 EVAL 重新加载",
+        "脚本执行期间整个实例被阻塞，所以脚本必须短：里面不能有长循环、不能处理大 key、不能调用阻塞命令",
+        "Redis 7 之前脚本按整段脚本复制，含非确定性命令（TIME、随机数）会报「Write commands not allowed after non deterministic commands」，Redis 7 改成按副作用复制后这个限制才放松"
+      ],
+      "code": "const decrScript = `\nlocal stock = tonumber(redis.call(\"GET\", KEYS[1]))\nif not stock or stock <= 0 then\n\treturn -1\nend\nreturn redis.call(\"DECR\", KEYS[1])\n`\nfmt.Println(decrScript) // 用 EVALSHA 把这段脚本交给 Redis 原子执行",
+      "lang": "go",
+      "notes": "常见追问：Lua 脚本能提升性能吗？——主要收益是原子性和少几次往返，不是执行更快；「脚本多了会不会撑爆内存」——脚本缓存在服务端，客户端缓存 SHA，建议集中管理脚本；「Cluster 下怎么用」——用 hash tag 让相关 key 同槽，比如 {user:123}:name；「怎么调试」——SCRIPT DEBUG 或 redis-cli --eval。跨组提示：释放锁的 Lua 见「Redis 分布式锁与一致性」分组。"
+    },
+    {
+      "title": "内存淘汰策略有哪几种？怎么选？",
+      "description": "内存到顶时 Redis 怎么决定删谁，这是缓存类实例最关键的配置。",
+      "answer": [
+        "共 8 种，分两大类：noeviction（默认，不淘汰，写入直接返回 OOM 错误）、allkeys-lru、allkeys-lfu、allkeys-random、volatile-lru、volatile-lfu、volatile-random、volatile-ttl",
+        "allkeys-* 从所有 key 里淘汰；volatile-* 只从设置了过期时间的 key 里淘汰，一个 TTL 都没有时这些策略就退化成 noeviction",
+        "volatile-ttl 淘汰剩余 TTL 最短的，volatile-random 随机挑一个带 TTL 的淘汰，后两者基本不用，因为不可预测",
+        "选择原则：纯缓存用 allkeys-lru 或 allkeys-lfu；Redis 当数据库用（不能丢数据）就用 noeviction，让写入失败由业务处理",
+        "淘汰算法是近似的：每次淘汰时随机采样 maxmemory-samples 个 key（默认 5 个）挑最差的删，不是精确的全局 LRU",
+        "触发时机是写入时内存已经超过 maxmemory，删除动作发生在命令执行路径上，key 特别多时淘汰本身会带来延迟抖动"
+      ],
+      "notes": "常见追问：为什么默认是 noeviction？——防止 Redis 悄悄丢数据；「allkeys-lru 和 allkeys-lfu 怎么选」——访问分布稳定、热点集中用 LFU，分布均匀用 LRU；「为什么没有精确 LRU」——精确 LRU 要在每次访问时维护链表，额外开销大，Redis 用采样近似；「内存满了业务怎么办」——缓存场景降级，数据库场景必须扩容。"
+    },
+    {
+      "title": "LRU 和 LFU 有什么区别？",
+      "description": "两种淘汰算法的差别，根源在「按时间」还是「按频次」判断冷热。",
+      "answer": [
+        "LRU 淘汰最近最少使用的 key，看的是访问时间；LFU 淘汰访问频率最低的 key，看的是访问次数",
+        "LRU 对突发流量很敏感：一次全表扫描会把缓存里的热门数据全挤出去，命中率断崖式下降",
+        "LFU 更抗污染：高频 key 的计数降不下来，扫描带来的低频访问不会立刻把它们挤掉，命中率更稳",
+        "LFU 的代价是冷启动：新 key 计数从 0 开始，还没被访问够次数就可能被淘汰，Redis 用「计数相同时按 LRU」来缓解",
+        "Redis 的 LFU 计数是 8 位对数计数器（lfu-log-factor 默认 10），并且每 lfu-decay-time 分钟（默认 1 分钟）没被访问就把计数减半，不是清零",
+        "Redis 4.0 才引入 LFU，更早的版本只有 LRU；在配置里就是 allkeys-lru 和 allkeys-lfu 两个值"
+      ],
+      "notes": "常见追问：为什么 LFU 要做衰减？——热点 key 热度过去后应该能被淘汰，计数减半让它慢慢降下来；「lfu-decay-time 调大调小的效果」——调大更抗热点固化，调小更容易淘汰老 key；「为什么线上默认还是 LRU」——LRU 行为更可预测，LFU 要在数据分布稳定时才显优势。"
+    },
+    {
+      "title": "过期的 key 是怎么被删掉的？惰性删除和定期删除各是什么？",
+      "description": "内存回收的两条腿，决定了过期 key 什么时候真正从内存里消失。",
+      "answer": [
+        "惰性删除：访问 key 时才判断是否过期，过期就顺手删掉并当成不存在（GET 返回 nil）；没人访问的过期 key 一直占着内存",
+        "主动过期：Redis 按固定节奏（hz=10，约每 100 毫秒一次慢速循环）抽样带 TTL 的 key，删掉其中已过期的",
+        "抽样不是全量扫描：每轮只抽少量 key，如果过期比例超过容忍阈值（默认 10%）就继续下一轮，整个循环最多占用 25% 的 CPU 时间",
+        "力度可以调：active-expire-effort 从 1 到 10（默认 1），调大意味着更积极的回收，代价是更多 CPU 和可能更高的延迟",
+        "过期判断看服务端时钟，主从两边的时钟偏差会导致两边对同一个 key 的过期时刻判断不一致",
+        "过期 key 在物理删除前仍然占内存、SCAN 还能扫到；TTL 返回 -2 表示不存在或已过期，-1 表示存在但没有过期时间"
+      ],
+      "notes": "常见追问：为什么两套机制都要有？——只有惰性删除，热点以外的过期 key 永远不释放内存；只有主动删除，会误删还在 TTL 内的 key；「过期和淘汰什么关系」——淘汰是内存不够时主动删，删除是 TTL 到点后回收，两条路径都会触发内存释放；「删大 key 用 DEL 还是 UNLINK」——UNLINK 把真正的释放交给后台线程，避免阻塞主线程。跨组提示：TTL 语义与主从时钟偏差见「Redis 分布式锁与一致性」分组。"
+    },
+    {
+      "title": "内存碎片率（mem_fragmentation_ratio）怎么看？",
+      "description": "进程实际占的内存比 Redis 自己用掉的多多少，是内存类问题的第一现场。",
+      "answer": [
+        "定义是 mem_fragmentation_ratio = used_memory_rss / used_memory，表示进程实际占用的物理内存与 Redis 认为自己在用的内存之比",
+        "Redis 4.0 之后 used_memory 已经包含分配器开销，所以这个比值大于 1 通常意味着 jemalloc 手里有拿不出来的空闲页",
+        "经验值：大于 1.5 需要关注；小于 1 也不一定是好事，往往说明内存被换出到 swap 了，进程 RSS 反而变小",
+        "看绝对值比看比值更重要：used_memory 很小的时候比值天然偏大，这时要结合 used_memory_rss 一起判断",
+        "常见成因：频繁 fork 的写时复制让 RSS 临时虚高、THP 透明大页让 jemalloc 无法归还内存、之前删过大量 key 但碎片没被整理",
+        "处理手段：开 activedefrag yes 让 jemalloc 主动整理（Redis 4.0 以上且编译时支持），重启能立刻释放但代价大，同时排查 THP 和 fork 频率"
+      ],
+      "notes": "常见追问：碎片率 3.0 要不要紧？——先看 used_memory 有多大，才几十 MB 就不用管；「为什么删了 key 内存没降」——碎片不会自动归还给操作系统，DEL 只是还给 jemalloc；「和 swap 什么关系」——swap 里有 Redis 页面时，访问会触发缺页，延迟飙升，vmstat 的 si/so 能看出来。"
+    },
+    {
+      "title": "Redis Cluster 的槽位机制是什么？MOVED 和 ASK 有什么区别？",
+      "description": "分片怎么把 key 铺到多个节点，以及客户端遇到重定向该怎么办。",
+      "answer": [
+        "Redis 把 key 空间分成 16384 个 hash 槽，用 CRC16(key) mod 16384 映射，每个主节点负责一部分槽",
+        "想让多个 key 落在同一个槽就用 hash tag：user:{123}:name 和 user:{123}:profile 里的 {123} 参与计算，所以同槽",
+        "MOVED 表示这个槽永久归别的节点管了，客户端要刷新自己的槽位映射，之后直接去新节点",
+        "ASK 表示槽正在迁移中，是临时重定向：客户端要连 ASK 指的节点，并先发 ASKING 再发命令，迁移完成后它会变成 MOVED",
+        "客户端处理方式：收到重定向就按目标地址重发一次，同时刷新拓扑缓存；生产上要用支持 Cluster 的客户端（go-redis ClusterClient、redis-py 的 RedisCluster）自动处理",
+        "跨槽的多 key 命令、跨槽的事务和 Lua 脚本会直接报 CROSSSLOT 错误，这是 Cluster 最常见的坑"
+      ],
+      "notes": "常见追问：为什么是 16384 个槽？——槽数量固定在配置文件里，拓扑变更时用位图广播每个槽归谁，增删节点只改槽归属不用搬全部 key；「ASK 期间命令失败了怎么办」——先按 ASK 重试一次，仍失败再等拓扑刷新；「为什么客户端刷新拓扑很重要」——只在 MOVED 时刷新的话，槽迁移期间会一直重定向打不中。"
+    },
+    {
+      "title": "客户端连接池怎么设？Redis 的连接数有什么限制？",
+      "description": "连接数既受服务端限制，也受客户端池大小影响，配置不当就是事故源。",
+      "answer": [
+        "服务端的硬限制是 maxclients，默认 10000；超过后新连接直接被拒，客户端收到「max number of clients reached」错误",
+        "这个上限还受 ulimit -n 约束，两者取小；Redis 启动时会检查并打印警告，把 maxclients 设得比文件句柄上限还高没有意义",
+        "连接不是越多越好：每个连接在服务端都有开销（客户端结构体、输入输出缓冲），连接多了既吃内存，也让内核的 accept 队列更容易溢出",
+        "连接池大小按 Little's Law 估：需要的连接数约等于 QPS 乘以平均响应时间。1 万 QPS、平均 1 毫秒响应，10 条连接就够了",
+        "客户端侧还要设最大空闲连接和最大连接数，避免突发把连接撑爆，也避免连接频繁重建（go-redis 的 PoolSize、MaxIdleConns、MinIdleConns）",
+        "故障后最怕重连风暴：所有客户端同时重连会瞬间打满 accept 队列，要错开重连时间并调大 tcp-backlog（默认 511）"
+      ],
+      "notes": "常见追问：连接数超限了怎么办？——先确认是不是连接泄漏（客户端没复用、没设超时），再考虑调大 maxclients 和 ulimit；「超时怎么设」——服务端 timeout 0 表示不超时，建议客户端自己设读超时，避免慢命令把连接池占死；「阻塞命令要不要单独连接」——要，BLPOP 这类连接会长期占用，必须和普通命令池分开，否则整个池会被占满。"
+    },
+    {
+      "title": "怎么监控 Redis？INFO 里该看哪些字段？",
+      "description": "监控不是看板，是要在出事之前就看到趋势变化的几个字段。",
+      "answer": [
+        "内存：used_memory、used_memory_rss、used_memory_peak、mem_fragmentation_ratio、maxmemory、maxmemory_policy、mem_evicted_keys、used_memory_dataset",
+        "命中与流量：keyspace_hits、keyspace_misses，命中率 = hits / (hits + misses)；命中率骤降往往先于故障出现",
+        "客户端与拒绝：connected_clients、blocked_clients、rejected_connections、client_recent_max_input_buffer、client_recent_max_output_buffer",
+        "命令与延迟：instantaneous_ops_per_sec、total_commands_processed、total_net_input_bytes、total_net_output_bytes、latest_fork_usec、instantaneous_input_kbps",
+        "持久化与复制：rdb_last_bgsave_status、rdb_last_bgsave_time_sec、aof_last_write_status、aof_last_bgrewrite_status、role、master_repl_offset、master_link_status",
+        "工具链：redis_exporter 加 Prometheus 加 Grafana 做指标采集与告警，redis-cli --stat 看实时快照，RedisInsight 做可视化和慢日志分析"
+      ],
+      "code": "info := \"keyspace_hits:1000\\r\\nkeyspace_misses:20\\r\\n\"\nhits, misses := 0, 0\nfor _, line := range strings.Split(info, \"\\r\\n\") {\n\tk, v, ok := strings.Cut(strings.TrimSpace(line), \":\")\n\tif !ok {\n\t\tcontinue\n\t}\n\tn, _ := strconv.Atoi(v)\n\tswitch k {\n\tcase \"keyspace_hits\":\n\t\thits = n\n\tcase \"keyspace_misses\":\n\t\tmisses = n\n\t}\n}\nrate := float64(hits) / float64(hits+misses)\nfmt.Printf(\"hit rate: %.1f%%\\n\", rate*100)",
+      "lang": "go",
+      "notes": "常见追问：只盯几个指标够吗？——至少要有内存使用率、命中率、连接数、ops、延迟、复制延迟、持久化失败这几条告警线；「INFO 里的数据准吗」——大部分是累计值，要看变化率，instantaneous_ops_per_sec 才是当前值；「延迟怎么采集」——服务端用 LATENCY DOCTOR，客户端侧用 APM 采集 P99、P999 才靠谱。"
+    },
+    {
+      "title": "Redis 突然变慢，怎么排查？",
+      "description": "线上事故的固定排查顺序，从最容易确认的原因一路排下去。",
+      "answer": [
+        "先分清是 Redis 慢还是调用方慢：对比 INFO 里的 instantaneous_ops_per_sec 和客户端侧延迟，ops 没涨但延迟涨，多半是 Redis 内部原因",
+        "查慢命令：SLOWLOG GET -1 拿全量，再用 redis-cli --bigkeys、--memkeys 找大 key；KEYS *、大集合的 SMEMBERS、LRANGE 0 -1 是典型的秒级卡顿源",
+        "查阻塞源：BGSAVE、BGREWRITEAOF 触发的 fork 会卡住主线程，INFO 里的 latest_fork_usec 能看到最近一次耗时；AOF 用 appendfsync always 会给每次写加一次 fsync",
+        "查系统层：vmstat 1 看 si/so（swap 会让 Redis 变成磁盘访问）、看 CPU 是否被同机其它进程抢走、容器里看 CPU steal 和是否触发限流",
+        "查过期和淘汰压力：expired_keys、evicted_keys 突增说明大量 key 同时到期或内存打满，淘汰动作在命令路径上会拖慢响应",
+        "应急手段：先把 SLOWLOG 和 INFO 存成现场证据，再用 UNLINK 替掉大 key 的 DEL、用 ACL 或 rename-command 禁掉危险命令、必要时临时调高 maxmemory 接受淘汰"
+      ],
+      "notes": "常见追问：最快的止血手段是什么？——先限流并禁用 KEYS 这类危险命令，再看是不是 fork 或 swap；「怎么复现」——压测时同时盯 SLOWLOG 和系统指标；「怎么防止再犯」——拆分大 key、把危险命令换成 SCAN、常开慢日志和延迟监控；「和慢日志对不上怎么办」——慢日志只记服务端执行时间，命令执行前的排队不算进去，这时要看连接池和客户端事件循环。"
+    }
+  ]
+}

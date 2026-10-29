@@ -1,0 +1,201 @@
+{
+  "id": "browser",
+  "title": "浏览器与页面渲染",
+  "entries": [
+    {
+      "title": "从输入 URL 到页面显示，浏览器都做了什么？",
+      "description": "这题考的是对渲染流水线整体结构的认知，要能按阶段把时间花在哪里说清楚。",
+      "answer": [
+        "阶段一「导航」：浏览器解析 URL 拿到协议、主机、端口、路径，查缓存决定走哪条路径，同时为这个页面选定渲染进程",
+        "阶段二「建连」：DNS 解析域名（浏览器 DNS 缓存 → 系统缓存 → hosts → DNS 服务器），然后 TCP 三次握手，走 HTTPS 还要加一次 TLS 握手，这一段都在收到任何字节之前",
+        "阶段三「取数据」：发 HTTP 请求、收响应头和响应体；响应头一到，浏览器的预扫描器就开始并行扫描 HTML 里的 CSS 和 JS 并发起下载，不必等整个 body 读完",
+        "阶段四「解析」：HTML 解析器边收边构造 DOM，CSS 下载完解析成 CSSOM，DOM 加 CSSOM 合成渲染树",
+        "阶段五「渲染」：样式计算 → 布局（算几何）→ 绘制（出绘制指令）→ 合成（GPU 把各图层贴到屏幕上），这一步也叫关键渲染路径",
+        "页面是渐进渲染的：第一个字节到达就能开始画第一帧，不必等所有资源就绪；最终完整呈现要等阻塞的 CSS、阻塞的脚本和关键资源都到位"
+      ],
+      "notes": "常见追问：DNS 层面能优化什么？——预解析（rel=dns-prefetch）、预连接（rel=preconnect）、复用 keep-alive 连接、给静态资源用 CDN 换更近的解析点。常见追问：首字节很快但首屏很慢，问题在哪？——TTFB 只算到响应头，后面还有 DOM 构建、样式、布局、绘制和脚本阻塞。常见错误回答：「页面显示就是 HTML 下载完」——下载只是流水线的一步，真正的呈现发生在渲染流水线的最后三步。"
+    },
+    {
+      "title": "浏览器的进程模型是怎样的？各进程负责什么？",
+      "description": "重点是多进程的原因——隔离与安全，以及进程划分带来的代价。",
+      "answer": [
+        "现代浏览器（Chrome 为代表）用多进程架构：浏览器进程、渲染进程、GPU 进程、网络进程，外加工具进程，目的是崩溃隔离，一个页面崩了不会带走整个浏览器",
+        "浏览器进程：管理标签页、地址栏、书签、前进后退，并决定每个站点实例（site instance）交给哪个渲染进程",
+        "渲染进程：每个站点实例一个，负责 HTML/CSS/JS——DOM、CSSOM、布局、绘制都跑在这里；它被关在操作系统沙箱里，不能直接访问文件系统",
+        "GPU 进程：负责光栅化、图层合成和 WebGL；它是从浏览器进程里拆出来的独立进程，拆分的目的是 GPU 崩溃时能单独重启而不是带走整个浏览器",
+        "网络进程：负责 DNS、TCP/TLS、HTTP 收发；独立出来是为了让慢请求不阻塞 UI，也便于统一做请求拦截和限流",
+        "站点隔离（Site Isolation）：跨站 iframe 强制分配到不同渲染进程，渲染进程之间不能直接访问对方的 DOM，地址栏上的锁图标就是在提示这一点"
+      ],
+      "notes": "常见追问：为什么不用多线程单进程？——一个页面的死循环或崩溃会拖垮整个浏览器，而且没法做安全隔离。常见追问：多进程的代价？——内存占用明显更高，跨进程通信要走 IPC 并序列化数据，进程数也受系统限制。常见追问：同一站点的多个标签会合并吗？——同源站点会尽量合并进同一进程，但单个站点可用的进程数有上限（大约 4 个），超过就拆开。常见错误回答：「渲染进程可以随便读本地文件」——正因为沙箱的存在，渲染进程连文件系统都碰不到。"
+    },
+    {
+      "title": "什么是重排（reflow）和重绘（repaint）？两者有什么区别？",
+      "description": "要把渲染流水线的后三步分清：布局、绘制、合成，三者触发条件不同。",
+      "answer": [
+        "三层概念必须分清：重排（reflow/layout）重算元素几何，重绘（repaint）重画像素，合成（composite）只是把已有的图层重新贴到一起",
+        "重排：元素尺寸或位置发生变化，要重新计算布局，且可能连带影响父级和兄弟元素；触发原因是改了 width、height、margin、padding、font、内容这类布局相关属性",
+        "重绘：几何没变，只是颜色、背景、边框样式、阴影这些变了，只需要重画像素，不必重新布局",
+        "触发顺序固定：样式变化后可能重排 → 重绘 → 合成；现代浏览器会把一轮里的重排和重绘合并，统一提交到帧里",
+        "一次重排的破坏力很大：改 body 的 font-size 会让所有元素的文本重新排版，整页重排加全量重绘",
+        "读写交错会造成强制同步布局（layout thrashing）：先写样式再立刻读 offsetHeight 或 getBoundingClientRect，浏览器为了给出准确值必须当场重排"
+      ],
+      "notes": "常见追问：怎么确认发生了重排？——DevTools 的 Performance 面板里看 Layout / Recalculate Style 记录，或用 PerformanceObserver 监听 layout-shift。常见追问：哪些读取会触发强制布局？——offsetTop/Width/Height、scrollTop、getComputedStyle、getBoundingClientRect。常见错误回答：「重绘一定比重排便宜」——重绘只是不重算布局，一个铺满视口的大面积重绘同样可能把帧拖垮。"
+    },
+    {
+      "title": "怎么减少重排和重绘？",
+      "description": "回答要落到具体手法上：读写分离、换属性、批量操作、给子树加边界。",
+      "answer": [
+        "读写分离：先把所有要写的样式批量写完，再统一读几何值，避免每次写完立刻读，把重排逼成同步",
+        "换属性：动画和位移尽量用 transform 和 opacity，这两个属性通常只走合成，不触发重排和重绘",
+        "整类替换：改一次 class 让 CSS 规则生效，优于逐条改 style 属性；同一批属性一次性设置也好过分散设置",
+        "批量操作 DOM：用 DocumentFragment 在内存里组装好再一次性插入，或者用 innerHTML 整体替换，避免反复小改动",
+        "给子树加边界：用 contain: content 或 contain: layout 限制样式与布局的影响范围，用 content-visibility: auto 让离屏内容跳过渲染",
+        "事件用委托：把监听挂在稳定的父节点上，而不是给每个子节点绑；也避免在渲染过程中读取几何属性"
+      ],
+      "notes": "常见追问：will-change 能提速吗？——它是提前告诉浏览器「这块要动」，好让浏览器提前准备好合成层；但滥用会创建过多图层、吃掉显存，反而更慢。常见追问：transform 一定不会重排吗？——它不参与布局计算，但会创建层叠上下文，改变层叠顺序。常见错误回答：「加 will-change 就一定更快」——它是预告不是加速开关，用在静态元素上纯亏。"
+    },
+    {
+      "title": "什么是合成层？什么情况下元素会被提升到合成层？",
+      "description": "这题要能说出提升条件，也要知道提升是有代价的，不是越多越好。",
+      "answer": [
+        "合成层是浏览器单独为它分配一张纹理、独立绘制，再由 GPU 拼贴到屏幕上的那一层；层与层之间互不影响，改一层不必重画其它层",
+        "浏览器自动提升的常见情况：3D 变换（perspective、translateZ）、transform 不为 none、opacity 小于 1、position 为 fixed 或 sticky、video 和 canvas 元素、filter 与 backdrop-filter、mask、clip-path",
+        "可以手动提升：用 will-change: transform、will-change: opacity 提前告诉浏览器这块会动，让它提前建层",
+        "提升不是免费的：每个层都占一份显存，层数越多，GPU 每帧要贴的图就越多，滚动和合成都会变慢",
+        "浏览器会做「层合并」把相邻的同 z-index 图层压回去以省显存，但显式声明的层往往躲不过这份优化",
+        "还有 top layer：showModal() 打开的 dialog、popover、进入全屏的元素直接进入 top layer，天然盖在所有页面内容之上"
+      ],
+      "notes": "常见追问：怎么检查一个页面有多少合成层？——DevTools 里开 Layers 面板，或 Rendering 面板勾 Paint flashing、Layer borders、Frame rendering stats。常见追问：图层爆炸是什么？——为了做几十个小动画把成千上万个元素提层，显存和合成开销一起爆炸，页面反而更卡。常见错误回答：「合成层越多性能越好」——层的意义是隔离重绘，不是数量竞赛。"
+    },
+    {
+      "title": "为什么 CSS 会阻塞渲染？JS 又为什么会阻塞 DOM 解析？",
+      "description": "两个阻塞的原因不同：CSS 阻塞的是「画」，JS 阻塞的是「解析」，方向不一样。",
+      "answer": [
+        "CSS 阻塞渲染：没有 CSSOM 就做不了样式计算，算不出元素几何，浏览器宁可不画也不愿先画一版再回来重画（就是 FOUC），所以 CSS 是 render-blocking",
+        "CSS 不阻塞 DOM 解析：解析器可以一边解析 HTML 一边等 CSS；但如果 script 紧跟在 stylesheet 后面，脚本执行要等 CSSOM，导致 DOM 解析整体被拖住",
+        "JS 阻塞 DOM 解析：script 是 parser-blocking，解析器必须停下来执行脚本，因为它可能修改 DOM（appendChild、innerHTML、document.write），不停下来就无法保证 DOM 树一致",
+        "外链 JS 还多一段等待：解析器卡在脚本标签上，直到脚本下载完成并执行完才继续往下解析",
+        "绕开办法：script 加 async 或 defer 让它不阻塞解析；link 用 media=\"print\"（或 preload 之后在 onload 里换成 rel=\"stylesheet\"）让它不阻塞渲染",
+        "影响的是首屏而不是全部：非关键脚本延后加载、关键 CSS 内联或 preload，页面才能尽快画出第一帧"
+      ],
+      "notes": "常见追问：CSS 会阻塞 JS 执行吗？——会，脚本执行前必须先有 CSSOM，所以 CSS 慢会连带把脚本一起拖住。常见追问：async 和 defer 谁更不阻塞？——两者都不阻塞 DOM 解析，区别在执行时机。常见错误回答：「CSS 阻塞 DOM 解析」——阻塞解析的是脚本，CSS 只阻塞渲染。"
+    },
+    {
+      "title": "defer 和 async 有什么区别？分别用在什么场景？",
+      "description": "区别只有一处：执行时机。剩下的都是这个区别带来的推论。",
+      "answer": [
+        "两个属性都保证 JS 的下载不阻塞 HTML 解析，区别在于「什么时候执行」",
+        "defer：脚本按文档里的先后顺序执行，全部在 HTML 解析完成之后、DOMContentLoaded 事件触发之前执行完",
+        "async：脚本下载完就立刻执行，彼此之间不保证顺序，也可能早于 defer 脚本执行，甚至插到别的 async 脚本前面",
+        "选型：顺序敏感、依赖 DOM 结构或依赖其它脚本结果的代码用 defer；完全独立、越早跑越好的第三方脚本（埋点、广告）用 async",
+        "type=\"module\" 的脚本默认就是 defer 行为，而且下载是并行的、执行按顺序",
+        "两者都会拖住 DOMContentLoaded：async 脚本如果下载很慢，这个事件会一直等它"
+      ],
+      "notes": "常见追问：defer 脚本一定在 DOMContentLoaded 前执行完吗？——是的，DOMContentLoaded 会等所有 defer 脚本执行完再触发。常见追问：加 defer 后能用 document.write 吗？——不能，defer 执行时文档已经解析完了，document.write 会把页面清空。常见错误回答：「async 更安全因为不影响顺序」——恰恰相反，async 打乱顺序才更容易踩到依赖问题。"
+    },
+    {
+      "title": "什么是虚拟 DOM？React 靠什么保证渲染不卡？",
+      "description": "别把「虚拟 DOM」当成性能保证本身，要说清 React 真正的两道防线：diff 省 DOM 操作，并发渲染不占死主线程。",
+      "answer": [
+        "虚拟 DOM 是用普通 JS 对象描述 UI 的数据结构；React 更新时先构造新树，再和旧树做 diff（协调），算出最小的真实 DOM 改动，避免整棵 DOM 被重建",
+        "diff 靠「同层比较 + 同类型才复用」两条规则，key 则用来标识同级节点的身份；key 稳定才能让列表插入删除只动必要的节点，拿数组下标当 key 会导致大面积重渲染",
+        "React 18 之后底层换成 Fiber：把渲染工作拆成可中断、可恢复、可重做的最小单元，一次只推进一点点",
+        "调度靠时间切片：调度器用 MessageChannel（属于宏任务）把主线程还回去，保证用户输入随时能插进来；并发特性（createRoot、startTransition）让低优先级更新可以被高优先级更新打断",
+        "更新会被批处理：多次 setState 合并成一次渲染；React 18 起自动批处理，连 Promise 回调和定时器里的更新也会被合并",
+        "虚拟 DOM 不等于「一定不卡」：它省下的是 DOM 操作次数，真正的卡顿往往来自没做 memo 的子组件反复重渲染、同步的大计算、超大 DOM 树，这些要靠 React.memo、useMemo、拆分组件和虚拟列表解决"
+      ],
+      "notes": "常见追问：虚拟 DOM 比直接改 DOM 快吗？——不一定，直接改 DOM 次数少时更快，虚拟 DOM 的价值在于「声明式写法 + 可预测的更新 + 批处理与并发调度」。常见追问：Fiber 解决了什么？——把渲染从「一次跑到底」变成「可分片、可打断」，这是并发渲染的前提。常见错误回答：「React 用虚拟 DOM 所以不卡」——卡顿多半出在重渲染次数和计算量上，跟有没有虚拟 DOM关系不大。"
+    },
+    {
+      "title": "事件循环里宏任务和微任务的执行顺序是什么？",
+      "description": "要能给出确定的顺序，并把「清空微任务队列」这个关键步骤讲出来。",
+      "answer": [
+        "JS 是单线程执行，任务分两个队列：宏任务队列（setTimeout、setInterval、I/O 回调、UI 事件、MessageChannel）和微任务队列（Promise.then、queueMicrotask、MutationObserver）",
+        "一轮循环的顺序：取一个宏任务执行 → 执行期间产生的微任务入队 → 当前宏任务结束后把整个微任务队列清空 → 浏览器才有机会渲染一帧 → 再取下一个宏任务",
+        "关键点是「清空式」：微任务队列会一直被清到空，一个微任务里再产生微任务，同一轮里会接着跑完",
+        "await 相当于把后续代码放进微任务队列，所以 await 之后的代码一定早于 setTimeout(fn, 0) 执行",
+        "MutationObserver 属于微任务，它回调里再改 DOM，改完会在同一轮微任务阶段再触发一次回调，直到不再变化为止",
+        "宏任务里新产生的 Promise.then 排在「本轮微任务清空之后」执行，也就是下一个宏任务之前——它不会插队到当前宏任务中间"
+      ],
+      "notes": "常见追问：微任务为什么不能饿死渲染？——规范要求每轮宏任务之后清空微任务，但实践中仍要避免在微任务里做无限递归的 Promise 链。常见追问：requestAnimationFrame 属于哪个队列？——它不是宏任务也不是微任务，是渲染阶段前的独立回调时机。常见错误回答：「setTimeout 和 Promise.then 按加入顺序执行」——队列不同，Promise.then 永远先。"
+    },
+    {
+      "title": "requestAnimationFrame 和 setTimeout 有什么区别？",
+      "description": "核心差别是「跟不跟刷新节奏对齐」，由此派生出一堆使用上的差异。",
+      "answer": [
+        "setTimeout(fn, 0) 只保证尽快执行，不与浏览器的刷新对齐；定时器有最小延迟（Chrome 嵌套 5 层以上最少 4ms）",
+        "requestAnimationFrame 在浏览器绘制下一帧之前回调，节奏与 vsync 对齐，60Hz 屏幕大约每 16.7ms 一次",
+        "rAF 的回调参数是 DOMHighResTimeStamp，和 performance.now() 同一时间基准，可以拿来算每帧的间隔",
+        "同一帧内注册多次 rAF 只回调一次；每次回调里要继续动画，就再注册一次，形成循环",
+        "页面切到后台时 rAF 会被暂停或降频（Chrome 降到大约 1Hz 一次），而 setTimeout 被节流到 1Hz 但仍在跑",
+        "做动画应该用 rAF：回调里改 transform 和 opacity 只触发合成，能跟着刷新走，不容易掉帧；用 cancelAnimationFrame(id) 取消"
+      ],
+      "notes": "常见追问：能用 setTimeout 模拟 60fps 吗？——不能，间隔不精确，和真实帧不同步，会出现抖动和丢帧。常见追问：rAF 在后台标签页里不执行会怎样？——动画停住，回前台时补跑，需要自己判断时间差做状态校正。常见错误回答：「rAF 的间隔固定 16.7ms」——它是跟显示器刷新走，120Hz 屏幕上是约 8.3ms。"
+    },
+    {
+      "title": "浏览器的存储有哪几种？Cookie、localStorage、sessionStorage、IndexedDB 有什么区别？",
+      "description": "比较这几个存储要从几个维度同时看：容量、生命周期、同步还是异步、是否随请求发送。",
+      "answer": [
+        "Cookie：容量最小（约 4KB 一个，每个域几十条上限），随每次 HTTP 请求自动发给服务端；HttpOnly 的 Cookie JS 读不到",
+        "localStorage：约 5MB，按源隔离、永久保存（除非手动清理），同步 API，值只能是字符串",
+        "sessionStorage：约 5MB，作用域是标签页——刷新保留，关掉标签页就清空；同源新开的标签页拿到的是独立的一份",
+        "IndexedDB：容量大得多，异步 API，能存结构化对象和 Blob，支持事务和索引，适合离线数据和体积大的资源",
+        "对比维度可以这样记：只有 Cookie 随请求发送；只有 Cookie 有服务端可见的过期语义；只有 IndexedDB 能存非字符串；三种 Web Storage 是同步的",
+        "三种 Web Storage 按「源」隔离，在第三方页面里还受存储分区限制，跨站 iframe 读不到父页面的存储"
+      ],
+      "notes": "常见追问：localStorage 存 JSON 有什么坑？——值只能是字符串，存对象要 JSON.stringify，取出来要 try/catch 反序列化，循环引用会直接抛错。常见追问：IndexedDB 为什么是异步的？——它是磁盘数据库，同步访问会卡住主线程；代价是所有操作都要写回调或 Promise。常见追问：Cookie 满了会怎样？——新的同名 Cookie 覆盖旧的，旧的直接消失，这常常表现为「登录态莫名失效」。常见错误回答：「sessionStorage 同一站点的标签页之间共享」——共享的是 localStorage，sessionStorage 是每个标签页独立的。"
+    },
+    {
+      "title": "Cookie 的各个属性分别控制什么行为？",
+      "description": "属性名不难，难的是说清每个属性管的是「发给谁、发给哪些路径、谁能读、能不能跨站、活多久」。",
+      "answer": [
+        "Domain：决定发给哪些主机。不写就是 host-only，只有设置它的那个主机收得到；写 example.com 则连子域 a.example.com 也会带上，但不能写到无关的顶级域",
+        "Path：决定发给哪些路径，默认取设置时页面的目录；只有请求路径匹配才带。路径设错是「登录成功但 Cookie 没生效」的常见原因",
+        "HttpOnly：禁止 document.cookie 读取，挡住 XSS 偷 Cookie；但它仍然会随请求发给服务端",
+        "Secure：只允许通过 HTTPS 发送；明文 HTTP 页面设置的 Secure Cookie 会被浏览器直接拒绝，http://localhost 被视为安全上下文",
+        "SameSite：控制跨站请求带不带 Cookie——Strict 完全不带，Lax 只在顶级导航的 GET 上带（现代浏览器默认 Lax），None 必须同时配 Secure",
+        "Max-Age 与 Expires：决定存活时间，Max-Age 优先级更高，单位是秒；Max-Age 为 0 或负数表示立即删除，不写就是会话 Cookie，浏览器关闭即失效"
+      ],
+      "notes": "常见追问：同名的多个 Cookie 谁生效？——Path 更长的优先，Path 相同则创建时间早的优先。常见追问：跨子域怎么共享登录态？——给父域设 Domain，比如 Domain=example.com，但要注意子域可以覆盖父域的同名 Cookie。常见错误回答：「HttpOnly 让 Cookie 更安全，所以要全部加上」——它只防 JS 读，不防中间人，发到 HTTPS 之外的场景仍有风险，还要配合 Secure。"
+    },
+    {
+      "title": "浏览器缓存和 HTTP 缓存是什么关系？浏览器有哪几层缓存？",
+      "description": "关键是要把「浏览器缓存」拆成多层，指出 HTTP 缓存只是其中一层。",
+      "answer": [
+        "HTTP 缓存是浏览器缓存体系的一层：由 Cache-Control、Expires、ETag/Last-Modified 控制，属于磁盘缓存里按 HTTP 语义管理的部分",
+        "内存缓存（memory cache）在更上面：页面生命周期内命中，不发请求也不读磁盘，JS、CSS、图片都可能在里面",
+        "磁盘缓存里除了 HTTP 缓存的内容，也存强缓存命中的产物；命中强缓存直接用不发请求，命中弱缓存要发条件请求，命中时服务端回 304",
+        "Service Worker 缓存是脚本自己控制的另一层，可以自定义匹配策略、支持离线；bfcache 则是整个页面的快照，恢复时几乎不发请求",
+        "preload 和 prefetch 有专门的预取缓存，取用时机和普通缓存不同：prefetch 的资源优先级低，常被浏览器丢掉",
+        "强制刷新（Ctrl+F5）会绕过 HTTP 缓存并发 Cache-Control: no-cache，普通刷新（Ctrl+R）仍会做缓存校验；fetch 和 XHR 默认也走 HTTP 缓存，除非显式 no-store"
+      ],
+      "notes": "常见追问：304 是一次完整响应吗？——不是，304 只带响应头、不带响应体，浏览器用本地缓存的实体填充。常见追问：为什么改了代码但页面没变？——强缓存还在，要么改文件名加内容哈希，要么强制刷新。常见错误回答：「浏览器缓存就是 HTTP 缓存」——还有内存缓存、Service Worker 缓存、bfcache，命中路径完全不同。"
+    },
+    {
+      "title": "页面加载性能指标有哪些？TTFB、FCP、LCP、CLS、INP 分别衡量什么？",
+      "description": "这题要能分清「数据什么时候到」「什么时候画出来」「稳不稳」「反应多快」四类问题。",
+      "answer": [
+        "TTFB：从发起导航到收到第一个响应字节的时间，衡量服务端处理和网络往返，往上还包括 DNS、TCP、TLS",
+        "FCP：首次内容绘制时间，页面第一次画出文字或图片等内容的时刻，代表「白屏结束」",
+        "LCP：最大内容元素的渲染时间，衡量主要内容多久可见；2024 年起它取代 FCP 成为 Core Web Vitals 指标之一",
+        "CLS：累积布局偏移，统计加载过程中可见元素突然移动的累计分数，衡量页面稳不稳",
+        "INP：交互到下一次绘制的延迟，取整次会话交互的高分位值，衡量「点了之后多久有反应」，取代了旧的 FID",
+        "Core Web Vitals 三项是 LCP、INP、CLS，良好阈值约为 LCP ≤ 2.5s、INP ≤ 200ms、CLS ≤ 0.1，按真实用户数据的第 75 百分位统计；TTFB 是诊断指标，不属于三项之一"
+      ],
+      "notes": "常见追问：这些指标怎么采？——用 PerformanceObserver 监听 paint、largest-contentful-paint、layout-shift、event（或直接用 web-vitals 库）；TTFB 取 PerformanceNavigationTiming 的 responseStart 减 startTime。常见追问：CLS 高怎么定位？——看 layout-shift 属性的 sources 找出是哪个元素移动，通常是图片没占位、字体替换或动态插入内容。常见错误回答：「LCP 就是首屏时间」——LCP 只取最大内容元素那一次，首屏还要看 FCP 和 TTFB。"
+    },
+    {
+      "title": "同源策略是什么？跨域请求为什么读不到响应？CORS 怎么工作？",
+      "description": "重点是把「限制读取」和「允许发送」分开讲，以及 CORS 是服务端授权而不是浏览器放行。",
+      "answer": [
+        "同源要求「协议 + 主机 + 端口」三者全同，任意一项不同就是跨源；同源策略规定不同源之间默认互相隔离",
+        "同源策略限制的是「读取」，不是「发送」：跨源图片、脚本、样式、iframe、表单都能正常加载和提交，只是 JS 拿不到内容",
+        "具体表现：读不到跨源 XHR/fetch 的响应体；访问不到跨源 iframe 的 DOM；拿不到别的源的 localStorage；canvas 被跨源图片污染后 getImageData 和 toBlob 直接抛安全错误",
+        "CORS 是服务端授权跨源读取的机制：响应里加 Access-Control-Allow-Origin（具体来源或 *）放行，浏览器看到它才把响应交给 JS",
+        "简单请求（GET/HEAD/POST 加常见 Content-Type、不带自定义头）直接发并读响应；非简单请求先发 OPTIONS 预检，服务端要回 Allow-Methods 和 Allow-Headers 才放行",
+        "带凭证（Cookie、Authorization）时前端要设 withCredentials: true，服务端必须回具体来源的 Allow-Origin 并带 Allow-Credentials: true，此时不能用 *"
+      ],
+      "notes": "常见追问：CORS 请求算不算「跨域请求」？——是，但「跨域」和「跨源」不完全等价，同源不同端口也算跨源。常见追问：为什么 form 提交不需要 CORS？——表单提交是导航行为，浏览器只负责发出去，本来就不允许读回响应。常见追问：postMessage 是什么？——它是绕过同源限制的显式通道，需要双方配合并校验 origin。常见错误回答：「CORS 是浏览器放行的开关」——它其实是服务端的授权声明，浏览器只是执行方；服务端不配，浏览器直接拦下响应。"
+    }
+  ]
+}
