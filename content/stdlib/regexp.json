@@ -1,0 +1,90 @@
+{
+  "id": "regexp",
+  "title": "正则 regexp",
+  "entries": [
+    {
+      "title": "regexp.Compile：处理可能写错的正则",
+      "description": "模式来自配置或用户输入、有写错的风险时，用 Compile 拿 error，而不是 MustCompile。",
+      "code": "re, err := regexp.Compile(`^\\d{3}-\\d{4}$`)\nif err != nil {\n\tfmt.Println(\"正则写错了:\", err)\n\treturn\n}\nfmt.Println(re.MatchString(\"123-4567\"))",
+      "lang": "go",
+      "notes": "编译失败时 re 是 nil，后面直接调方法会 panic；模式里拼用户输入前先用 regexp.QuoteMeta 转义。"
+    },
+    {
+      "title": "regexp.MustCompile 与 MatchString",
+      "description": "模式写死在代码里、确定不会错时用 MustCompile，省掉 error 判断，配 MatchString 做格式校验。",
+      "code": "re := regexp.MustCompile(`^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$`)\nfmt.Println(re.MatchString(\"bob@example.com\"))\nfmt.Println(re.MatchString(\"not-an-email\"))",
+      "lang": "go",
+      "notes": "MustCompile 编译失败会直接 panic，只能用在模式确定的地方；运行时才知道的模式要用 Compile。"
+    },
+    {
+      "title": "FindString 与 FindStringSubmatch：提取匹配",
+      "description": "要从一段文本里抠出匹配的部分（日期、订单号）时，用 FindString 或 FindStringSubmatch。",
+      "code": "re := regexp.MustCompile(`(\\d{4})-(\\d{2})-(\\d{2})`)\nfmt.Println(re.FindString(\"日期 2026-10-29\"))\nfmt.Println(re.FindStringSubmatch(\"日期 2026-10-29\"))",
+      "lang": "go",
+      "notes": "没匹配到时 FindString 返回空串、FindStringSubmatch 返回 nil；下标 0 是整个匹配，捕获组从 1 开始。"
+    },
+    {
+      "title": "FindAllString：找出全部匹配",
+      "description": "一段文本里可能有多处匹配、要全部拿出来时，用 FindAllString。",
+      "code": "re := regexp.MustCompile(`\\d+`)\nfmt.Println(re.FindAllString(\"订单 1024，金额 99，数量 2\", -1))\nfmt.Println(len(re.FindAllString(\"没有数字\", -1)))",
+      "lang": "go",
+      "notes": "第二个参数 n 是最多返回几个，-1 才是全部；没匹配返回 nil，len 是 0。"
+    },
+    {
+      "title": "ReplaceAllString：替换与 $ 分组",
+      "description": "批量改写文本（打码、调换分组、替换占位符）时用 ReplaceAllString，捕获组用 $1 或 ${name} 引用。",
+      "code": "re := regexp.MustCompile(`(?P<word>\\w+)@(?P<domain>\\w+)\\.com`)\nfmt.Println(re.ReplaceAllString(\"联系 bob@example.com\", \"${domain}:${word}\"))\nfmt.Println(re.ReplaceAllString(\"bob@example.com\", \"$$100\"))",
+      "lang": "go",
+      "notes": "替换串里的 $ 有特殊含义，$1x 会被当成名为 \"1x\" 的组，要写 ${1}x；字面量 $ 写 $$。"
+    },
+    {
+      "title": "命名捕获组与 SubexpIndex",
+      "description": "捕获组多了以后按名字取值比数下标稳，用 (?P<name>...) 加 SubexpIndex。",
+      "code": "re := regexp.MustCompile(`(?P<year>\\d{4})-(?P<month>\\d{2})`)\nm := re.FindStringSubmatch(\"2026-10\")\nfmt.Println(m[re.SubexpIndex(\"year\")], m[re.SubexpIndex(\"month\")])",
+      "lang": "go",
+      "notes": "SubexpIndex 找不到名字返回 -1，拿 -1 去索引会 panic；用之前先判断返回值。"
+    },
+    {
+      "title": "Split：按正则切分字符串",
+      "description": "按逗号、分号、空白等混合分隔符切分字符串时，用正则的 Split 比 strings.Split 灵活。",
+      "code": "re := regexp.MustCompile(`[,;\\s]+`)\nfmt.Println(re.Split(\"a, b; c  d\", -1))\nfmt.Println(re.Split(\",a,b,\", -1))",
+      "lang": "go",
+      "notes": "首尾有分隔符时会切出空串，Split 不会帮你过滤；n=-1 才是全部切分。"
+    },
+    {
+      "title": "贪婪匹配与最小匹配 .*?",
+      "description": "只想匹配到最近的一个结束标记（比如一对标签）时，用 .*? 做最小匹配。",
+      "code": "greedy := regexp.MustCompile(`<b>.*</b>`)\nlazy := regexp.MustCompile(`<b>.*?</b>`)\nfmt.Println(greedy.FindString(\"<b>粗</b> 和 <b>斜</b>\"))\nfmt.Println(lazy.FindString(\"<b>粗</b> 和 <b>斜</b>\"))",
+      "lang": "go",
+      "notes": ".*? 只是尽量少匹配，起点仍然是最左；要拿全所有标签得用 FindAllString 循环。"
+    },
+    {
+      "title": "(?s)：让点号匹配换行",
+      "description": "要跨行提取一段内容时，给模式加 (?s)，否则点号遇到换行就停。",
+      "code": "re := regexp.MustCompile(`(?s)START(.*?)END`)\nm := re.FindStringSubmatch(\"START 第一行\\n第二行 END\")\nfmt.Println(len(m), m[1])",
+      "lang": "go",
+      "notes": "默认 . 不匹配换行；(?m) 是让 ^ 和 $ 按行匹配，和 (?s) 不是一回事，别搞混。"
+    },
+    {
+      "title": "预编译正则，避免循环里重复 Compile",
+      "description": "同一个正则在循环或请求处理里反复使用时，编译一次存起来，别每次都 Compile。",
+      "code": "var dateRe = regexp.MustCompile(`\\d{4}-\\d{2}-\\d{2}`)\nfor _, s := range []string{\"2026-10-29\", \"不是日期\"} {\n\tfmt.Println(dateRe.MatchString(s))\n}",
+      "lang": "go",
+      "notes": "Compile/MustCompile 有解析成本，热路径别每次调用都编译；*regexp.Regexp 是并发安全的，可以全局复用。"
+    },
+    {
+      "title": "RE2 不支持回溯引用",
+      "description": "需要回溯引用、前后环视这类 PCRE 特性时，要知道 Go 的 regexp 不支持，得换第三方库。",
+      "code": "_, err := regexp.Compile(`(a)\\1`)\nfmt.Println(err)",
+      "lang": "go",
+      "notes": "RE2 不支持 \\1 回溯引用和 (?=...) 前后环视，Compile 会报 invalid escape sequence 或 unsupported Perl syntax。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把预编译、匹配、命名捕获组、全部匹配、替换、切分、贪婪与最小匹配、跨行匹配串起来。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"regexp\"\n)\n\nvar (\n\tdateRe  = regexp.MustCompile(`(?P<year>\\d{4})-(?P<month>\\d{2})-(?P<day>\\d{2})`)\n\ttagRe   = regexp.MustCompile(`<b>(.*?)</b>`)\n\tspaceRe = regexp.MustCompile(`\\s+`)\n)\n\nfunc main() {\n\ttext := \"下单日期 2026-10-29，联系 bob@example.com\"\n\n\t// 1. 判断与提取：命名捕获组\n\tif dateRe.MatchString(text) {\n\t\tm := dateRe.FindStringSubmatch(text)\n\t\tfmt.Println(\"年:\", m[dateRe.SubexpIndex(\"year\")])\n\t\tfmt.Println(\"月:\", m[dateRe.SubexpIndex(\"month\")])\n\t\tfmt.Println(\"日:\", m[dateRe.SubexpIndex(\"day\")])\n\t}\n\n\t// 2. 找出所有数字\n\tnumRe := regexp.MustCompile(`\\d+`)\n\tfmt.Println(\"所有数字:\", numRe.FindAllString(text, -1))\n\n\t// 3. 替换：交换用户名和域名\n\tmailRe := regexp.MustCompile(`(?P<user>\\w+)@(?P<domain>\\w+\\.com)`)\n\tfmt.Println(\"改写邮箱:\", mailRe.ReplaceAllString(text, \"${domain}/${user}\"))\n\n\t// 4. 按空白切分（首尾会切出空串）\n\tfmt.Println(\"按空白切分:\", spaceRe.Split(\" a  b \\t c \", -1))\n\n\t// 5. 贪婪与最小匹配\n\tfmt.Println(\"贪婪:\", regexp.MustCompile(`<b>.*</b>`).FindString(\"<b>一</b> 和 <b>二</b>\"))\n\tfmt.Println(\"最小:\", tagRe.FindString(\"<b>一</b> 和 <b>二</b>\"))\n\n\t// 6. 跨行匹配\n\tblockRe := regexp.MustCompile(`(?s)BEGIN(.*?)END`)\n\tfmt.Println(\"跨行内容:\", blockRe.FindStringSubmatch(\"BEGIN 第一行\\n第二行 END\")[1])\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "id": "testing",
+  "title": "测试",
+  "entries": [
+    {
+      "title": "表驱动测试：用例写成切片",
+      "description": "一组输入输出只有参数不同时，把用例写成切片再循环跑 t.Run，加一个场景只加一行。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n)\n\nfunc add(a, b int) int { return a + b }\n\nfunc TestAdd(t *testing.T) {\n\t// 一个 case 一行，加用例就是加一行\n\tcases := []struct {\n\t\tname string\n\t\ta    int\n\t\tb    int\n\t\twant int\n\t}{\n\t\t{\"正数\", 1, 2, 3},\n\t\t{\"负数\", -1, 1, 0},\n\t}\n\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := add(tc.a, tc.b); got != tc.want {\n\t\t\t\tt.Errorf(\"add(%d, %d) = %d, want %d\", tc.a, tc.b, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}\n\nfunc main() {\n\tfmt.Println(\"放进 _test.go 后由 go test 执行 TestAdd\")\n}",
+      "lang": "go",
+      "notes": "Go 1.22 之前子测试必须写 tc := tc，否则闭包共享循环变量；t.Run 名字重复时 Go 会自动加 #01 后缀，别拿名字当唯一标识。"
+    },
+    {
+      "title": "httptest.NewRecorder 加 ServeHTTP：不监听端口",
+      "description": "测 HTTP handler 时不需要真的启动服务，用 Recorder 接响应、直接调 engine.ServeHTTP 就行，又快又能断言状态码和 body。",
+      "code": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc TestPing(t *testing.T) {\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\n\t// 不监听端口：Recorder 接响应，engine 直接处理请求\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/ping\", nil))\n\n\tif w.Code != http.StatusOK {\n\t\tt.Fatalf(\"状态码 = %d, want 200\", w.Code)\n\t}\n\tif w.Body.String() != \"pong\" {\n\t\tt.Fatalf(\"body = %q, want pong\", w.Body.String())\n\t}\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "NewRecorder 的 Code 初值就是 200，handler 忘了写响应也断言得过，要同时检查 w.Body.Len()；ServeHTTP 不会跑 r.Run 里的 ListenAndServe，端口相关的逻辑测不到。"
+    },
+    {
+      "title": "httptest.NewRequest：构造带参数和 body 的请求",
+      "description": "需要模拟带路径参数、查询参数、请求头或 JSON body 的请求时，用 NewRequest 一次构造好再交给 engine。",
+      "code": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc TestNewRequest(t *testing.T) {\n\tr := gin.New()\n\tr.POST(\"/users/:id\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\"id\": c.Param(\"id\"), \"q\": c.Query(\"q\")})\n\t})\n\n\t// 第三个参数是 body，传 nil 表示没有请求体\n\treq := httptest.NewRequest(http.MethodPost, \"/users/42?q=hi\", strings.NewReader(`{\"name\":\"tom\"}`))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\n\tt.Log(w.Code, w.Body.String())\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "target 必须是绝对路径或完整 URL，只写 users/42 会 panic；它不经过真实网络，RemoteAddr 固定是 192.0.2.1:1234，测 IP 相关逻辑时要手动改。"
+    },
+    {
+      "title": "断言 JSON 响应：先反序列化再比较",
+      "description": "handler 返回 JSON 时，别拿字符串直接比，反序列化成 map 或结构体再逐字段断言，字段顺序和空白才不会影响测试。",
+      "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc TestJSONBody(t *testing.T) {\n\tr := gin.New()\n\tr.GET(\"/me\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\"name\": \"tom\", \"age\": 18})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/me\", nil))\n\n\t// 不要直接比字符串：缩进、字段顺序都可能变\n\tvar got map[string]any\n\tif err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {\n\t\tt.Fatalf(\"解析响应失败: %v\", err)\n\t}\n\tif got[\"name\"] != \"tom\" {\n\t\tt.Errorf(\"name = %v, want tom\", got[\"name\"])\n\t}\n\t// JSON 数字解出来是 float64，和 int 直接比永远不相等\n\tif got[\"age\"] != float64(18) {\n\t\tt.Errorf(\"age = %v, want 18\", got[\"age\"])\n\t}\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "数字统一解成 float64，got[\"age\"] == 18 永远为假；要保留整数类型就定义结构体反序列化，或给 Decoder 开 UseNumber。"
+    },
+    {
+      "title": "测试中间件：用真实中间件跑请求",
+      "description": "中间件有拦截和放行两条路径，测试时直接 r.Use 上真实的中间件，分别构造带凭证和不带凭证的请求。",
+      "code": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc auth(c *gin.Context) {\n\tif c.GetHeader(\"Authorization\") != \"Bearer ok\" {\n\t\tc.AbortWithStatus(http.StatusUnauthorized)\n\t\treturn\n\t}\n\tc.Next()\n}\n\nfunc TestAuthMiddleware(t *testing.T) {\n\tr := gin.New()\n\tr.Use(auth)\n\tr.GET(\"/private\", func(c *gin.Context) { c.String(http.StatusOK, \"secret\") })\n\n\tcases := []struct {\n\t\ttoken string\n\t\twant  int\n\t}{\n\t\t{\"\", http.StatusUnauthorized},\n\t\t{\"Bearer ok\", http.StatusOK},\n\t}\n\tfor _, tc := range cases {\n\t\treq := httptest.NewRequest(http.MethodGet, \"/private\", nil)\n\t\tif tc.token != \"\" {\n\t\t\treq.Header.Set(\"Authorization\", tc.token)\n\t\t}\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tif w.Code != tc.want {\n\t\t\tt.Errorf(\"token %q: 状态码 = %d, want %d\", tc.token, w.Code, tc.want)\n\t\t}\n\t}\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "中间件没生效多半是 r.Use 写在了注册路由之后，或者请求路径没落进路由组；只测放行不测拦截，等于没测鉴权。"
+    },
+    {
+      "title": "测试路由注册 panic",
+      "description": "路由冲突在注册期就 panic，不在请求期。用 defer recover 把注册语句包起来，断言 panic 确实发生了。",
+      "code": "package main\n\nimport (\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc TestRouteConflict(t *testing.T) {\n\tgin.SetMode(gin.TestMode)\n\tr := gin.New()\n\tr.GET(\"/users/:id\", func(c *gin.Context) {})\n\n\t// 同一位置不能出现两个不同名字的通配符，注册时直接 panic\n\tdefer func() {\n\t\tif recover() == nil {\n\t\t\tt.Fatal(\"期望注册冲突时 panic，但没有\")\n\t\t}\n\t}()\n\tr.GET(\"/users/:name\", func(c *gin.Context) {})\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "冲突 panic 发生在注册语句执行时，recover 必须包住那段注册代码；/users/:id 和 /users/new 在 gin v1.12 可以共存，静态段优先，别把它们当成冲突。"
+    },
+    {
+      "title": "gin.CreateTestContext：只测 handler",
+      "description": "只想测一个 handler 函数、不想为它注册路由时，用 CreateTestContext 直接造一个 Context，手动塞 Request 和参数。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 不建路由，只造一个 Context 直接调 handler\n\tc, _ := gin.CreateTestContext(httptest.NewRecorder())\n\tc.Request = httptest.NewRequest(\"GET\", \"/?name=tom\", nil)\n\tc.Set(\"uid\", 42)\n\n\tuid, _ := c.Get(\"uid\")\n\t// Query 读的是 c.Request，所以 Request 必须自己赋值\n\tfmt.Println(\"uid:\", uid, \"name:\", c.Query(\"name\"))\n\tfmt.Println(\"状态码:\", c.Writer.Status())\n}",
+      "lang": "go",
+      "notes": "CreateTestContext 不做路由匹配，c.Param 永远是空的；c.Request 不赋值就调用 c.Query 会 nil 指针 panic。"
+    },
+    {
+      "title": "基准测试：用 httptest 压 handler",
+      "description": "需要比较两个 handler 或中间件的开销时，写 Benchmark 函数，在 b.N 次循环里用 Recorder 跑 ServeHTTP。",
+      "code": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc BenchmarkPing(b *testing.B) {\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\treq := httptest.NewRequest(http.MethodGet, \"/ping\", nil)\n\n\tb.ReportAllocs()\n\tb.ResetTimer()\n\tfor i := 0; i < b.N; i++ {\n\t\t// Recorder 每次新建，否则 header 和 body 会跨轮累积\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t}\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "b.N 由 go test 决定，别自己写固定次数；把建 Router 和 NewRequest 的开销放在 b.ResetTimer 之前，否则测到的是初始化时间。"
+    },
+    {
+      "title": "go test -race：抓并发读写",
+      "description": "handler 里有共享变量、或多个 goroutine 读写同一份数据时，加 -race 跑测试，把隐藏的数据竞争暴露出来。",
+      "code": "package main\n\nimport (\n\t\"sync\"\n\t\"testing\"\n)\n\nfunc TestConcurrent(t *testing.T) {\n\tvar counter int\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 2; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tcounter++ // 两个 goroutine 同时写，go test -race 会报 data race\n\t\t}()\n\t}\n\twg.Wait()\n\tif counter != 2 {\n\t\tt.Errorf(\"counter = %d, want 2\", counter)\n\t}\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "不加 -race 这个测试可能照样 PASS，race detector 只报实际执行到的竞争；它会让程序慢 5–10 倍，只在测试和 CI 开，别带进生产。"
+    },
+    {
+      "title": "测 POST 绑定：合法与非法请求体",
+      "description": "接口用 ShouldBindJSON 收参数时，用表驱动分别构造合法和缺字段的 body，把 201 和 400 两条分支都覆盖。",
+      "code": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype createReq struct {\n\tName string `json:\"name\" binding:\"required\"`\n}\n\nfunc TestCreateUser(t *testing.T) {\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u createReq\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusCreated, u)\n\t})\n\n\tcases := []struct {\n\t\tname string\n\t\tbody string\n\t\twant int\n\t}{\n\t\t{\"合法\", `{\"name\":\"tom\"}`, http.StatusCreated},\n\t\t{\"缺字段\", `{}`, http.StatusBadRequest},\n\t}\n\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(tc.body))\n\t\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t\t\tw := httptest.NewRecorder()\n\t\t\tr.ServeHTTP(w, req)\n\t\t\tif w.Code != tc.want {\n\t\t\t\tt.Errorf(\"状态码 = %d, want %d, body = %s\", w.Code, tc.want, w.Body.String())\n\t\t\t}\n\t\t})\n\t}\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "不设 Content-Type，ShouldBind 会按表单解析，JSON body 里的字段绑不上，required 直接失败；测校验失败时别只断言 400，顺手断言响应里带 error 字段。"
+    },
+    {
+      "title": "自定义断言：用 t.Helper 标记辅助函数",
+      "description": "多个测试都要断言状态码时，抽一个辅助函数出来，记得调用 t.Helper，失败行号才会落在调用处。",
+      "code": "package main\n\nimport (\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// t.Helper 让失败行号落在调用方，而不是这个函数里\nfunc assertStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {\n\tt.Helper()\n\tif w.Code != want {\n\t\tt.Fatalf(\"状态码 = %d, want %d\", w.Code, want)\n\t}\n}\n\nfunc TestHealth(t *testing.T) {\n\tr := gin.New()\n\tr.GET(\"/health\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/health\", nil))\n\tassertStatus(t, w, http.StatusOK)\n}\n\nfunc main() {}",
+      "lang": "go",
+      "notes": "忘了 t.Helper 时 t.Fatalf 报的是辅助函数那一行，排查时容易误以为是断言实现有问题；辅助函数里调用 t.Fatalf 会终止整个测试，只想记一笔就用 t.Errorf。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组串起来：构建 engine、用 httptest 构造请求并直接交给 ServeHTTP，打印状态码和响应体，不监听任何端口。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.TestMode)\n\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\"message\": \"pong\"})\n\t})\n\n\t// 关键一步：不监听端口，把请求直接交给 engine，响应写进 Recorder\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/ping\", nil)\n\tr.ServeHTTP(w, req)\n\n\tfmt.Println(\"状态码:\", w.Code)\n\tfmt.Println(\"响应体:\", w.Body.String())\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

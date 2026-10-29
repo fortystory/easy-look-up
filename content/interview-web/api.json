@@ -47,7 +47,7 @@
       "answer": [
         "2xx 成功：200 有内容；201 已创建（带 Location）；202 已受理（异步任务，返回任务地址）；204 成功但无内容；206 部分内容（Range 请求）",
         "3xx 重定向：301 永久移动、302 临时移动、304 Not Modified 用于协商缓存；接口内部一般直接返回资源，而不是靠一串 302 跳来跳去",
-        "4xx 客户端错误：400 请求格式或参数错、401 未认证（凭据缺失或无效）、403 已认证但无权限、404 资源不存在、405 方法不允许（必须带 Allow 头）、409 状态冲突、410 确定已删除、412 If-Match 前置条件不匹配、413 请求体过大、415 媒体类型不支持、429 触发限流",
+        "4xx 客户端错误：400 参数不合法、401 未认证（应带 WWW-Authenticate）、403 已认证无权限、404 不存在、405 方法不允许（应带 Allow 头）、409 冲突、412 前置条件不匹配、413 体过大、415 类型不支持、429 限流",
         "422 Unprocessable Content：语法没错但业务规则不满足（定义在 RFC 4918，常被 Web 服务拿来做参数校验失败）；HTTP 状态码没有统一规定业务错误码，团队要自己定并写进文档",
         "5xx 服务端错误：500 未预期的异常、501 方法未实现、502 上游返回了非法响应、503 服务不可用（过载或维护，可带 Retry-After）、504 网关等待上游超时；5xx 是可以重试的信号，4xx 重试一般没用",
         "原则：状态码表达协议语义，业务错误码写进 body；不要用 200 装错误，否则网关的重试、熔断和监控告警全都失效"
@@ -58,7 +58,7 @@
       "title": "统一的错误响应格式怎么设计？",
       "description": "错误格式统一之后，前端只写一套解析逻辑，网关和监控也才认得出失败。",
       "answer": [
-        "推荐用 RFC 9457 的 Problem Details（早期版本是 RFC 7807），Content-Type 是 application/problem+json，字段有 type（错误类型的 URI）、title（简短摘要）、status（HTTP 状态码）、detail（针对本次请求的说明）、instance（出错的资源 URI）",
+        "推荐 RFC 9457 的 Problem Details（早期是 RFC 7807），Content-Type 用 application/problem+json，字段有 type、title、status、detail、instance",
         "在 Problem Details 之外加自己的稳定业务错误码（字符串枚举，比如 INVALID_ARGUMENT、ORDER_NOT_FOUND），前端按码分支，不要去解析中文文案",
         "字段级校验错误单独放 details 数组，每项给 field、message 和原因码，这样前端能把红字标到具体输入框上",
         "带上 request_id 或 trace_id，响应头和 body 里各放一份，用户截图报错就能直接定位到日志",
@@ -131,7 +131,7 @@
       "answer": [
         "层次上可以在 CDN/边缘、API 网关、应用层中间件、下游服务各做一层：网关做租户级总配额，应用层做按用户或接口的细粒度限制",
         "限流维度要选对：按 IP 防刷，按用户或 API key 做配额，按接口保护重接口；键里要带上路径，避免一个接口把配额吃光",
-        "算法上常用令牌桶（允许突发）、漏桶（平滑输出）、固定窗口计数（简单但窗口边界有突发），取舍和实现细节见并发治理那组",
+        "算法上常用令牌桶（允许突发）、漏桶（平滑输出）、固定窗口计数（简单但窗口边界有突发），按是否允许突发、要不要平滑输出来选",
         "超限的标准答案是 429 Too Many Requests，并带 Retry-After 头（秒数或 HTTP 日期），告诉客户端多久后重试",
         "再带上 X-RateLimit-Limit、X-RateLimit-Remaining、X-RateLimit-Reset 三个头，客户端能自己判断该不该发请求，而不是撞到 429 才知道",
         "要区分 429 和 503：429 是「你这个请求超了配额」，503 是「我整体过载了或在维护」，后者通常也带 Retry-After；未认证是 401，有认证但配额用完才是 429"
@@ -204,6 +204,19 @@
         "经验法则：对外用 REST（配 OpenAPI），内部服务间用 gRPC，给多个前端做聚合的 BFF 层用 GraphQL；三者可以在网关层并存，迁移期 REST 和 GraphQL 共存很常见"
       ],
       "notes": "常见追问：GraphQL 能完全替代 REST 吗？——内部可以，对外几乎不行，CDN 缓存和开放生态是硬伤。追问：什么时候必须用 gRPC？——内部高频调用、流式传输、跨语言且要强类型契约。常见错误回答：「GraphQL 性能更好所以更先进」——它的性能问题恰恰集中在 N+1 和缓存这两块。"
+    },
+    {
+      "title": "WebSocket 和 SSE 有什么区别？各自适合什么场景？",
+      "description": "两者都能做服务端推送，但协议方向、重连和基础设施成本完全不同。",
+      "answer": [
+        "WebSocket 通过 HTTP Upgrade 建立全双工长连接，双方都能随时发消息；SSE 是普通 HTTP 响应，Content-Type 为 text/event-stream，只有服务端到客户端的单向流",
+        "SSE 的 EventSource 自带断线重连，服务端可以用 retry: 指定间隔、id: 配合 Last-Event-ID 续传；WebSocket 没有内置重连，要自己写指数退避和重连后的状态同步",
+        "心跳：WebSocket 用协议层 ping/pong 或应用层心跳；SSE 定期发一行注释（如 : ping）防止中间代理按空闲超时断流",
+        "SSE 只能传 UTF-8 文本，事件格式固定为 data:/event:/id:；WebSocket 支持文本和二进制帧，适合传音视频、protobuf 等",
+        "HTTP/1.1 下浏览器对同域 SSE 连接数限制约 6 条，HTTP/2 多路复用后默认可到 100 条流；WebSocket 通常每条连接独立占一个 TCP",
+        "选型：聊天、协同编辑、游戏等双向低延迟场景用 WebSocket；通知、进度、日志、大模型流式输出等单向推送用 SSE，直接复用 HTTP 鉴权、压缩和网关"
+      ],
+      "notes": "常见追问：SSE 怎么鉴权？——它就是普通 HTTP 请求，可以带 Cookie；跨域时 EventSource 要配 withCredentials。常见追问：SSE 为什么会被代理缓冲？——代理默认攒够缓冲才转发，要关掉缓冲（Nginx 加 proxy_buffering off 或 X-Accel-Buffering: no）。常见错误回答：「SSE 是双向的」——SSE 只能服务端推客户端，客户端要发消息得另开接口。"
     }
   ]
 }

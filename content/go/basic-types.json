@@ -53,7 +53,7 @@
     },
     {
       "title": "短声明 :=",
-      "description": ":= 一步完成声明和赋值，只能用在函数内。左边必须全是新变量，右边可以混着已有变量。",
+      "description": ":= 一步完成声明和赋值，只能用在函数内。左边至少有一个新变量，其余可以是同作用域里已有的变量。",
       "code": "name := \"张三\"\nage := 18\nx, y := 1, 2\nfmt.Println(name, age, x, y)",
       "lang": "go",
       "notes": "左边至少要有一个新变量，否则编译报错「no new variables on left side of :=」。"
@@ -84,7 +84,7 @@
       "description": "Go 要求局部变量必须被使用，否则编译不过。这是有意设计的，防止遗留用不到的变量。",
       "code": "x := 1\n// x 从未被使用 —— 编译报错：\n// declared and not used: x",
       "lang": "go",
-      "notes": "确实想丢弃一个值，用 _ 显式接收：_ = someFunc()，这样不会报错。",
+      "notes": "编译报错：declared and not used: x。确实想丢弃一个值，用 _ 显式接收：_ = someFunc()，这样不会报错。",
       "expect_error": true
     },
     {
@@ -100,6 +100,20 @@
       "code": "var ch rune = '中'\nvar b byte = 'A'\nvar s = \"中文\"\nfmt.Println(ch, b, len(s))",
       "lang": "go",
       "notes": "'A' 可以当 byte 用，但 '中' 不行——它超出了 uint8 的范围。"
+    },
+    {
+      "title": "iota 枚举",
+      "description": "需要一组有顺序的常量（状态码、星期、日志级别）时用 iota：它在 const 块里从 0 开始，每个常量声明占一行就加一。",
+      "code": "const (\n\t// 每个 const 块重新从 0 开始，逐行加一\n\tStatusPending = iota\n\tStatusPaid\n\tStatusShipped\n)\nfmt.Println(StatusPending, StatusPaid, StatusShipped)",
+      "lang": "go",
+      "notes": "iota 只在一个 const 块内有效，换一个 const 块又从 0 开始。已经用 iota 生成的值一旦被持久化或对外暴露，就别在中间插行或删行——后面所有值会整体偏移。要跳过某个值用 _ 占位。"
+    },
+    {
+      "title": "类型定义 vs 类型别名",
+      "description": "想要一个全新的类型、能挂方法、又不和底层类型混用，用 type X int；只是给现有类型起个短名字、完全等价，用 type X = int。",
+      "code": "// 类型定义：全新类型，不能和 int 直接混用\ntype UserID int\n\n// 类型别名：完全是 int 的另一个名字\ntype Age = int\n\nvar id UserID = 1\nvar age Age = 2\nfmt.Println(id, age)",
+      "lang": "go",
+      "notes": "类型定义不继承底层类型的方法，两者之间要显式转换（int(id)），但可以给它加方法；类型别名不能加方法，方法属于原类型。给 UserID 传 int 变量会编译报错，这是类型定义的价值。"
     },
     {
       "title": "组合示例：把这一组用起来",

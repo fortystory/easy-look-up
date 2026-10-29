@@ -23,8 +23,7 @@
         "版本事实：MySQL 5.5.5 起 InnoDB 成为默认引擎（5.5.3 曾短暂改成默认但很快回退），也可以用 --default-storage-engine=InnoDB 显式指定",
         "能力补齐：InnoDB 陆续拿到了事务、行锁、外键、崩溃恢复、MVCC 这些「数据库标配」，同时性能追上并超过 MyISAM",
         "生态推动：绝大多数互联网业务都需要事务和行锁，InnoDB 变成了事实上的唯一选择；MySQL 5.7 起默认引擎已经完全定型",
-        "今天的口径：MySQL 8.0 里 InnoDB 是唯一推荐引擎，MyISAM 只作为遗留格式保留在发行版中",
-        "答题要点：说「5.5 之后默认 InnoDB」时必须补一句「因为它才有事务和行锁」，只背版本号会显得没理解"
+        "今天的口径：MySQL 8.0 里 InnoDB 是唯一推荐引擎，MyISAM 只作为遗留格式保留在发行版中"
       ],
       "notes": "常见追问：老库怎么把 MyISAM 表转成 InnoDB？——ALTER TABLE 表名 ENGINE=InnoDB;，会锁表并重建索引，操作前必须备份。常见追问：转换后有什么风险？——表变大、外键和数据类型需要重新校验、没有主键的表会生成隐藏 row_id。常见错误回答：说「因为 InnoDB 性能更好」——默认切换的直接原因是事务和行锁这些能力缺失，性能只是同时被补齐。"
     },
@@ -73,7 +72,7 @@
       "answer": [
         "statement（SBR）：记录原始 SQL，从库重放 SQL。优点是日志小；缺点是 NOW()、RAND()、UUID()、LAST_INSERT_ID() 这类非确定性函数在从库重放结果可能不同",
         "row（RBR）：记录每一行的变更前后镜像。优点是从库重放的结果与主库严格一致，MySQL 8.0 默认就是 row",
-        "mixed（MBR）：MySQL 5.7.7 引入，能安全用 statement 的语句就用 statement，其余自动退化成 row；5.7.7 到 8.0 之间它是默认值",
+        "mixed（MBR）：MySQL 5.1.5 起就有，能安全用 statement 的语句就用 statement，其余自动退化成 row；5.7.7 起默认值从 statement 改成 row",
         "DDL 语句无论哪种格式都以 statement 方式记录",
         "row 的代价是日志量大：只 UPDATE 一个字段也会写入整行的前后镜像，可以用 binlog_row_image=MINIMAL 只记变更列和主键（8.0 默认是 FULL）",
         "生产建议：统一固定为 row，不要在不同实例上混用 statement 和 mixed，否则排障和一致性排查会非常痛苦"
@@ -127,7 +126,7 @@
         "缓存的单元是页不是行，页的唯一标识是「表空间 id + 页号」，所以同一个页被不同表使用也能对应上",
         "页淘汰用改良的 LRU：链表分成新子链（占 3/8）和旧子链（占 5/8），新读入的页先进旧子链，避免一次全表扫描把热点页全冲掉",
         "脏页是内存里被改过但还没写回磁盘的页；InnoDB 不会直接淘汰脏页，只能先刷盘再释放，所以脏页积压会把写请求一起拖住",
-        "刷盘由后台 page cleaner 线程做（MySQL 8.0.20 起 innodb_page_cleaners，默认 4 个），速率受 innodb_io_capacity 限制（8.0.20 起默认 2000）；用户线程提交时也会顺带刷一部分",
+        "刷盘由后台 page cleaner 线程做（innodb_page_cleaners 默认 4 个），速率受 innodb_io_capacity 限制（默认 200，上限 innodb_io_capacity_max 默认 2000）；用户线程提交时也会顺带刷一部分",
         "非唯一二级索引的修改在页不在内存时先放进 change buffer，等这个页被读进来时再合并，避免随机写"
       ],
       "notes": "常见追问：Buffer Pool 满了会怎样？——按 LRU 淘汰干净页腾地方，没有干净页可淘汰时写事务就会被阻塞。常见追问：怎么观察命中率？——SHOW ENGINE INNODB STATUS 里的 buffer pool hit rate，或 performance_schema 的 innodb_buffer_pool_stats_*。常见错误回答：说「Buffer Pool 缓存的是行」——InnoDB 的 I/O 单位是页，默认 16KB。"
@@ -169,7 +168,7 @@
         "redo 记录带 CRC32 校验和，用来判断哪些日志完整可用；每个 redo block 的格式随版本变化，靠校验判断可解析性",
         "MySQL 8.0.30 起 redo log 放在 #innodb_redo 目录下，由 32 个等大文件组成，总容量由 innodb_redo_log_capacity 控制（默认 100MB）"
       ],
-      "notes": "常见追问：为什么 redo 一定要先于数据落盘？——只有先记账，才能在数据页没写完时也有办法还原，这就是持久性的全部来源。常见追问：恢复慢怎么排查？——看 redo 总量、innodb_redo_log_capacity 和脏页刷盘能力，8.0 里还要看 innodb_read_io_concurrency（默认 4）。常见错误回答：说「崩溃恢复就是把数据文件回滚到备份点」——恢复靠 redo 重放加 undo 回滚，跟备份无关。"
+      "notes": "常见追问：为什么 redo 一定要先于数据落盘？——只有先记账，才能在数据页没写完时也有办法还原，这就是持久性的全部来源。常见追问：恢复慢怎么排查？——看 redo 总量、innodb_redo_log_capacity、脏页刷盘能力和磁盘读吞吐。常见错误回答：说「崩溃恢复就是把数据文件回滚到备份点」——恢复靠 redo 重放加 undo 回滚，跟备份无关。"
     },
     {
       "title": "什么是 checkpoint？",
@@ -177,12 +176,12 @@
       "answer": [
         "checkpoint 是一个位置标记，记录「到这个 LSN 为止的修改已经完整写进数据文件了」，这个 LSN 就是 checkpoint_lsn",
         "它有两个作用：划出 redo log 中可以安全覆盖复用的部分；决定崩溃恢复需要重放多少日志——从 checkpoint_lsn 开始重放",
-        "运行期间做的是 fuzzy checkpoint（增量检查点）：脏页比例超过阈值就挑一批最老的脏页刷盘，阈值由 innodb_max_dirty_pages_pct 和 innodb_max_dirty_pages 控制",
-        "版本细节：innodb_max_dirty_pages_pct 在 MySQL 5.7 默认 75，8.0 起提高到 90；innodb_max_dirty_pages 默认 0 表示不限制页数",
+        "运行期间做的是 fuzzy checkpoint（增量检查点）：脏页比例超过阈值就挑一批最老的脏页刷盘，阈值由 innodb_max_dirty_pages_pct 和低水位 innodb_max_dirty_pages_pct_lwm 控制",
+        "版本细节：innodb_max_dirty_pages_pct 在 MySQL 5.7 默认 75，8.0 起提高到 90；innodb_max_dirty_pages_pct_lwm 是触发刷脏的低水位",
         "关闭时（innodb_fast_shutdown=0）做的是 sharp checkpoint：把所有脏页全部刷干净，代价是关机慢，好处是崩溃时需要恢复的内容少",
         "checkpoint 是脏页刷盘的结果而不是定时动作：某个页落盘后对应的 redo 才允许被覆盖，checkpoint_lsn 才能往前挪"
       ],
-      "notes": "常见追问：checkpoint 多久做一次？——没有固定周期，由脏页比例和 IO 能力触发；innodb_io_capacity（8.0.20 起默认 2000）就是给刷脏用的 IOPS 配额。常见追问：checkpoint 和 redo 写满什么关系？——redo 写满时写指针追上 checkpoint_lsn，只能等 checkpoint 推进，写事务被阻塞。常见错误回答：把 checkpoint 说成「定时任务」——它是刷脏页的结果。"
+      "notes": "常见追问：checkpoint 多久做一次？——没有固定周期，由脏页比例和 IO 能力触发；innodb_io_capacity（默认 200，innodb_io_capacity_max 默认 2000）就是给刷脏用的 IOPS 配额。常见追问：checkpoint 和 redo 写满什么关系？——redo 写满时写指针追上 checkpoint_lsn，只能等 checkpoint 推进，写事务被阻塞。常见错误回答：把 checkpoint 说成「定时任务」——它是刷脏页的结果。"
     },
     {
       "title": "MySQL 8.0 之后 redo log 的容量和文件管理有什么变化？",
@@ -191,8 +190,8 @@
         "8.0.30 之前 redo log 由 innodb_log_file_size（单文件大小，默认 48MB）和 innodb_log_files_in_group（文件个数，默认 2）共同决定",
         "8.0.30 起这两个参数被废弃，改用 innodb_redo_log_capacity 统一控制 redo 总容量，默认 100MB；文件被拆成 32 个等大文件放在 #innodb_redo 目录",
         "好处是可以在线调整：按四分之一逐步扩容，扩完再逐个缩回，避免一次改动过大导致崩溃恢复时间变长",
-        "刷脏能力方面 8.0.20 起 innodb_io_capacity 默认从 100 提到 2000，innodb_page_cleaners 默认 4 个后台刷脏线程",
-        "崩溃恢复速度还受 innodb_read_io_concurrency 控制（8.0.20 起默认 4），它决定恢复时并发读 IO 的线程数",
+        "刷脏能力方面 innodb_io_capacity 默认 200（innodb_io_capacity_max 默认 2000），innodb_page_cleaners 默认 4 个后台刷脏线程",
+        "崩溃恢复时间主要取决于 checkpoint 之后积压的 redo 量和磁盘读吞吐，所以 redo 不是越大越好",
         "容量怎么估：按「峰值写入速率 × 可接受的刷脏延迟」倒推，而不是拍脑袋给一个 1GB"
       ],
       "notes": "常见追问：innodb_log_file_size 现在还能改吗？——8.0.30 起只是废弃、仍可读取，真正生效的是 innodb_redo_log_capacity。常见追问：redo 越大越好吗？——不是，崩溃恢复要重放的 redo 变多，恢复变慢。常见错误回答：说「8.0.30 之后不能改 redo 大小了」——恰恰是 8.0.30 让它更好改了。"

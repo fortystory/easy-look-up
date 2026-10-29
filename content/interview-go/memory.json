@@ -4,6 +4,7 @@
   "entries": [
     {
       "title": "Go 的内存是怎么分配的？堆和栈是怎么划分的？",
+      "description": "堆栈怎么划分、分配器怎么工作，是内存类问题的地基。",
       "answer": [
         "栈是每个 goroutine 私有的连续栈空间，函数返回就自动回收，不需要 GC 参与",
         "堆是全局共享的，运行时把它按大小切成 span 管理，堆上对象只能靠 GC 回收",
@@ -16,6 +17,7 @@
     },
     {
       "title": "什么情况下变量会逃逸到堆？",
+      "description": "什么情况下变量被迫上堆，直接影响分配次数和 GC 开销。",
       "answer": [
         "局部变量的地址被返回出去（return &x），函数返回后栈上的地址就失效了，只能放堆上",
         "局部变量被闭包捕获，而这个闭包（函数值）逃出了当前函数",
@@ -28,6 +30,7 @@
     },
     {
       "title": "怎么知道一个变量到底有没有逃逸？",
+      "description": "用编译器输出确认逃逸，而不是靠读代码猜。",
       "answer": [
         "go build -gcflags=-m 会打印逃逸分析结论：moved to heap: x 表示 x 被搬到堆上，does not escape 表示留在栈上",
         "再加一层 -m（即 -gcflags='-m -m'）会输出更细的推理过程，比如 parameter x leaks to heap",
@@ -40,6 +43,7 @@
     },
     {
       "title": "三色标记法里的黑、白、灰分别是什么？",
+      "description": "GC 标记过程的核心抽象，面试常追问写屏障为什么存在。",
       "answer": [
         "白色：还没被标记、也没被扫描，可能是垃圾，也可能只是 GC 还没扫到它",
         "灰色：已确认存活，但它引用的对象还没扫完，灰色对象就是 GC 的待办队列",
@@ -52,6 +56,7 @@
     },
     {
       "title": "写屏障是干什么的？",
+      "description": "并发标记正确性的关键机制，考的是它对性能的影响。",
       "answer": [
         "作用：并发标记期间保证不漏标——新产生的引用，它指向的对象必须能被 GC 看见",
         "触发时机：给堆上的指针字段赋值时走单次写屏障，批量写入用 bulkBarrier 一次处理一批",
@@ -64,6 +69,7 @@
     },
     {
       "title": "STW 是什么？Go 1.8 之后 GC 做了什么改进？",
+      "description": "停顿的成因和 Go 1.8 之后的改进，是 GC 版本差异题。",
       "answer": [
         "STW（Stop The World）指暂停所有 goroutine，让 GC 独占运行，表现为请求延迟尖刺",
         "Go 1.5 起 GC 改成并发标记：标记与业务 goroutine 并行跑，STW 只剩开始和结束两小段",
@@ -76,6 +82,7 @@
     },
     {
       "title": "GC 什么时候触发？",
+      "description": "GC 什么时候启动，以及 GOGC、GOMEMLIMIT 如何影响它。",
       "answer": [
         "触发条件是堆大小达到「堆目标（heap goal）」：上一轮 GC 结束时存活堆大小 × (1 + GOGC/100)",
         "GOGC=100 时，上一轮存活 100MB，这轮堆涨到约 200MB 就触发下一轮 GC",
@@ -88,6 +95,7 @@
     },
     {
       "title": "GOGC 设成 100 是什么意思？",
+      "description": "GOGC 的百分比语义，常和内存、CPU 的权衡一起问。",
       "answer": [
         "GOGC 表示「堆相比上一轮存活量增长百分之多少时触发 GC」，默认值就是 100",
         "GOGC=100：堆翻倍就触发——上一轮存活 100MB，下一轮在约 200MB 触发",
@@ -100,6 +108,7 @@
     },
     {
       "title": "怎么强制触发一次 GC？代价是什么？",
+      "description": "debug.FreeOSMemory 和 runtime.GC 的差别与代价。",
       "answer": [
         "runtime.GC() 会阻塞调用方直到这次 GC 结束，期间整个程序基本停住",
         "代价是一次完整 GC 周期：STW + 并发标记 + 清扫，CPU 占用高、延迟出现尖刺",
@@ -112,6 +121,7 @@
     },
     {
       "title": "Go 里常见的内存泄漏有哪些？",
+      "description": "Go 也会泄漏：goroutine、缓存、切片引用都是常见来源。",
       "answer": [
         "goroutine 泄露：goroutine 卡在 channel 收发、锁、IO 上永不退出，它引用的对象就一直可达",
         "切片持有大数组：big := make([]byte, 1<<20) 后只取 big[:10]，底层 1MB 数组仍被切片引用着",
@@ -124,18 +134,20 @@
     },
     {
       "title": "sync.Pool 里的对象和 GC 是什么关系？为什么放进去也会被回收？",
+      "description": "Pool 的生命周期由 GC 决定，这道题考它为什么不能当缓存。",
       "answer": [
         "作用：复用临时对象，减少堆分配和 GC 压力，典型场景是复用 bytes.Buffer、编解码用的临时切片",
         "实现：Go 1.13 之后是 per-P 的私有槽加共享队列，基本无锁竞争",
-        "Get 取不到对象时会调用 New 新建一个，所以 New 必须给",
+        "Get 取不到时会调用 New；New 可以为 nil，此时 Get 直接返回 nil，调用方必须判空",
         "和 GC 的关系：每次 GC 开始时 poolCleanup 把当前缓存移到 victim 缓存，旧的 victim 缓存直接丢弃",
         "所以放进池里的对象最多活两个 GC 周期就会被回收——它是「临时复用池」，不是「永久缓存」",
         "池里的对象不要带业务状态、不要放连接或带锁的对象；取出来用完先 Reset 再放回"
       ],
-      "notes": "常见追问：为什么池里的对象会被回收？——GC 不认识 sync.Pool 的引用关系，它只是 runtime 里的一个缓存结构，不会延长对象生命周期。常见错误回答：「放进 sync.Pool 的对象永远不会被回收」，那反而成了真正的泄漏。这题问的是它和 GC 的生命周期关系，怎么用它见《Go 并发原语》和《性能分析与优化》两组。"
+      "notes": "常见追问：为什么池里的对象会被回收？——GC 不认识 sync.Pool 的引用关系，它只是 runtime 里的一个缓存结构，不会延长对象生命周期。常见错误回答：「放进 sync.Pool 的对象永远不会被回收」，那反而成了真正的泄漏。这题只问它和 GC 的生命周期关系，复用 Buffer、临时切片的写法属于应用层面。"
     },
     {
       "title": "GOMEMLIMIT 是什么？怎么用？",
+      "description": "Go 1.19 引入的软内存上限，考它和 GOGC 的分工。",
       "answer": [
         "Go 1.19 引入的软内存上限，默认值是 math.MaxInt64（等于不限制），用环境变量 GOMEMLIMIT 设置",
         "单位是字节，支持 B、KiB、MiB、GiB、TiB 后缀，例如 GOMEMLIMIT=512MiB",
@@ -148,6 +160,7 @@
     },
     {
       "title": "怎么用 runtime.MemStats 看内存？",
+      "description": "用运行时指标判断内存问题的位置和趋势。",
       "answer": [
         "runtime.ReadMemStats(&m) 拿一份快照，它内部会短暂停世界，别放在高频路径里调",
         "HeapAlloc 是堆上已分配、还没释放的字节数，判断「Go 堆里到底有多少」就看它",
@@ -160,6 +173,7 @@
     },
     {
       "title": "怎么用 pprof 的 heap profile 定位内存问题？",
+      "description": "定位内存问题的主要手段，重点考 inuse 和 alloc 的区别。",
       "answer": [
         "服务里引入 net/http/pprof 后，heap profile 在 /debug/pprof/heap，用 go tool pprof <url> 打开",
         "默认的 heap profile 是 inuse_space：当前还活着的对象占了多少空间",
@@ -172,6 +186,7 @@
     },
     {
       "title": "什么时候该上 pprof，什么时候靠猜？",
+      "description": "什么时候该上工具、什么时候先看指标，考的是排查方法论。",
       "answer": [
         "猜只在两种情况下靠谱：内存增长能明确对应到某段代码，或者只差几十 MB 的一次性固定开销",
         "第一步先分清是不是 Go 堆：RSS 涨可能来自 goroutine 栈、cgo 或第三方库（GC 管不着）、mmap、OS 页缓存",
@@ -181,6 +196,21 @@
         "pprof 也有盲区：看不出「谁还持有它」（那是引用链问题），也管不到 cgo 分配的内存"
       ],
       "notes": "常见追问：线上能采 pprof 吗？——能，heap profile 采样开销很小，但 /debug/pprof 端点绝对不能暴露到公网。常见错误回答：「内存问题先加日志」，日志看不出分配位置，也看不出累计分配量。"
+    },
+    {
+      "title": "struct 的内存对齐怎么算？字段顺序为什么会改变占用大小？",
+      "description": "同一个 struct 换个字段顺序能差出几字节到几十字节，估算大小要按对齐规则算，而不是把字段长度相加。",
+      "answer": [
+        "每个字段的偏移必须是它自身对齐值的倍数，struct 整体大小再向上取整到最大字段对齐值；bool 对齐 1，int32 对齐 4，int64/指针/float64 在 64 位平台上对齐 8",
+        "按 bool、int64、bool 排：bool 占 1 字节，int64 必须落在 8 的倍数上，中间补 7 字节，末尾再补到 8 的倍数，unsafe.Sizeof 结果是 24",
+        "改成 bool、bool、int64 就只要 16 字节：两个 bool 挨着占 2 字节，补 6 字节后接 int64，省下 8 字节、约 33%",
+        "Go 不会自动重排字段（和部分语言不同），顺序完全由声明决定；用 unsafe.Sizeof/Offsetof/Alignof 或 fieldalignment 分析器核对",
+        "估算方法：按对齐值从大到小声明、把同尺寸字段放一起，基本就是最小占用；只有大数组、高频分配或跨进程协议才值得为它调整顺序",
+        "struct{} 的 size 是 0，但作为最后一个字段时会被补齐（struct{int64; struct{}} 实测 16 字节），拿它当尾部哨兵要留意"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"unsafe\"\n)\n\ntype Bad struct {\n\tA bool\n\tB int64\n\tC bool\n}\n\ntype Good struct {\n\tA bool\n\tC bool\n\tB int64\n}\n\nfunc main() {\n\t// 同样的三个字段，顺序不同：24 字节 vs 16 字节\n\tfmt.Println(\"bool,int64,bool =\", unsafe.Sizeof(Bad{}))\n\tfmt.Println(\"bool,bool,int64 =\", unsafe.Sizeof(Good{}))\n\tfmt.Println(\"最大对齐 =\", unsafe.Alignof(Good{}))\n}",
+      "lang": "go",
+      "notes": "常见追问：怎么找出浪费 padding 的 struct？——go vet 的 fieldalignment 分析器会直接给出重排建议。追问：对齐值由什么决定？——32 位平台上 int64 的对齐是 4，所以同一份 struct 在两个架构上 size 不同。常见错误回答：struct 大小就是字段大小相加——padding 和对齐会让它变大，bool+int64+bool 是 24 不是 10；「Go 会自动重排字段省内存」——不会，顺序就是你写的顺序。"
     }
   ]
 }

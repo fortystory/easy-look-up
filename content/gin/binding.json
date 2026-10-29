@@ -3,18 +3,11 @@
   "title": "请求绑定与校验",
   "entries": [
     {
-      "title": "ShouldBind：按 Content-Type 选绑定器",
-      "description": "ShouldBind 按请求的 Content-Type 自动挑绑定器：application/json 走 JSON 绑定，其它情况走表单绑定（query 参数加表单 body）。拿不准该用哪个绑定器时用它。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `form:\"name\" json:\"name\"`\n\tAge  int    `form:\"age\" json:\"age\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\t// Content-Type 是 JSON 就用 JSON 绑定，否则用表单绑定\n\t\tif err := c.ShouldBind(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\t// 表单提交：Content-Type 是 x-www-form-urlencoded\n\tformReq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(\"name=tom&age=18\"))\n\tformReq.Header.Set(\"Content-Type\", \"application/x-www-form-urlencoded\")\n\tformW := httptest.NewRecorder()\n\tr.ServeHTTP(formW, formReq)\n\tfmt.Println(\"form:\", formW.Code, formW.Body.String())\n\n\t// JSON 提交：同一段代码照样能绑\n\tjsonReq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(`{\"name\":\"tom\",\"age\":18}`))\n\tjsonReq.Header.Set(\"Content-Type\", \"application/json\")\n\tjsonW := httptest.NewRecorder()\n\tr.ServeHTTP(jsonW, jsonReq)\n\tfmt.Println(\"json:\", jsonW.Code, jsonW.Body.String())\n}",
+      "title": "按 Content-Type 选绑定器",
+      "description": "一个接口既收表单又收 JSON 时用 c.ShouldBind，它按请求的 Content-Type 自动挑绑定器；接口只收 JSON 就用 ShouldBindJSON，不看 Content-Type 直接按 JSON 解析。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `form:\"name\" json:\"name\" binding:\"required\"`\n\tAge  int    `form:\"age\" json:\"age\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\t// 按 Content-Type 自动挑绑定器\n\tr.POST(\"/any\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBind(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\t// 只收 JSON 时直接指定绑定器，不看 Content-Type\n\tr.POST(\"/json\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\tpost := func(path, body, contentType string) {\n\t\treq := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))\n\t\treq.Header.Set(\"Content-Type\", contentType)\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Println(path, w.Code, w.Body.String())\n\t}\n\tpost(\"/any\", \"name=tom&age=18\", \"application/x-www-form-urlencoded\")\n\tpost(\"/any\", `{\"name\":\"张三\",\"age\":20}`, \"application/json\")\n\tpost(\"/json\", `{\"name\":\"李四\"}`, \"text/plain\")\n}",
       "lang": "go",
-      "notes": "GET 请求一律走表单绑定。ShouldBind 自己不写响应，绑定失败时把错误交给你，状态码得你自己定。"
-    },
-    {
-      "title": "ShouldBindJSON：只认 JSON",
-      "description": "ShouldBindJSON 强制把请求体当 JSON 解析，不管 Content-Type 是什么。接口只收 JSON 时用它，不用先判断请求类型。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n\tAge  int    `json:\"age\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\t// body 不是合法 JSON 就直接报错\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(`{\"name\":\"tom\",\"age\":18}`))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
-      "lang": "go",
-      "notes": "body 不是合法 JSON 时拿到的是 json.SyntaxError 这类解析错误，不是校验错误，两类错误要分开处理。"
+      "notes": "ShouldBind 对 GET 请求一律走表单绑定；Content-Type 不是 application/json 时也落到表单绑定，text/plain 的请求体不会被当 JSON 解析。ShouldBindJSON、ShouldBindQuery、ShouldBindUri 都是显式指定绑定器，不看请求头。"
     },
     {
       "title": "ShouldBindQuery：只取 URL 查询参数",
@@ -31,11 +24,11 @@
       "notes": "query 参数和 body 里的值它一概不管。路径参数没写 uri tag 时按字段名匹配，:id 绑不到字段 ID。"
     },
     {
-      "title": "BindJSON 与 ShouldBindJSON 的区别",
-      "description": "两个都返回 error，但 Bind 系列失败时自己写 400 并中断处理器链，Should 系列只把错误交给你，响应怎么写由你决定。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/bind\", func(c *gin.Context) {\n\t\tvar u User\n\t\t// BindJSON 失败时已经写了 400，错误记在 c.Errors 里\n\t\tif err := c.BindJSON(&u); err != nil {\n\t\t\tfmt.Println(\"bind 的错误：\", c.Errors.Last().Err)\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\tr.POST(\"/should\", func(c *gin.Context) {\n\t\tvar u User\n\t\t// ShouldBindJSON 失败只返回错误，响应自己写\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\tbody := `{\"name\":\"\"}`\n\tfor _, path := range []string{\"/bind\", \"/should\"} {\n\t\treq := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))\n\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Println(path, w.Code, w.Body.String())\n\t}\n}",
+      "title": "Bind 与 ShouldBind 的区别与错误处理",
+      "description": "Bind 系列失败时 gin 自己写 400 并中止后续处理器，Should 系列只把 error 返回给你。想自定义错误响应体就用 Should 系列，两者失败后的收尾方式完全不同。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\t// BindJSON 失败时自己写 400 并中止，错误记在 c.Errors\n\tr.POST(\"/bind\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.BindJSON(&u); err != nil {\n\t\t\tfmt.Println(\"bind 错误:\", c.Errors.Last().Err)\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\t// ShouldBindJSON 失败只返回 error，响应自己写\n\tr.POST(\"/should\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, u)\n\t})\n\n\tbody := `{\"name\": \"\"}`\n\tfor _, path := range []string{\"/bind\", \"/should\"} {\n\t\treq := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))\n\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%s: %d %q\\n\", path, w.Code, w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "BindJSON 失败后响应体是空的，错误要去 c.Errors 里找；它中断的只是后面的处理器，当前处理器还得自己 return，否则会写第二次响应。"
+      "notes": "Bind 失败时响应体是空的，原始错误记在 c.Errors 里（c.Errors.Last().Err）；再自己写一次响应，内容会被追加到 400 的响应体后面，状态码改不了，换成别的状态码只会打一条 Headers were already written 的警告。Bind 中止的只是后面的处理器，当前函数仍要自己 return。"
     },
     {
       "title": "结构体 tag：form、json、uri、binding",
@@ -87,11 +80,18 @@
       "notes": "表单切片收集的是所有同名参数，?ids=1&ids=2 得到两个元素；只给一次时是单元素切片，不是 nil。"
     },
     {
-      "title": "绑定失败返回 400",
-      "description": "绑定失败统一按 400 返回，把错误信息放进响应体，校验失败时顺便告诉调用方是哪个字段没过。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\" binding:\"required\"`\n\tAge  int    `json:\"age\" binding:\"gte=18\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\t// 绑定失败和校验失败都走这一条路\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusCreated, gin.H{\"name\": u.Name})\n\t})\n\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(`{\"name\":\"tom\",\"age\":10}`))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "title": "binding:\"dive\" 校验切片元素",
+      "description": "字段是切片、数组或 map 时，外层规则默认只看长度，元素内部的 tag 不生效；要逐个校验元素就在 tag 里写 dive。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype Item struct {\n\tName  string `json:\"name\" binding:\"required\"`\n\tCount int    `json:\"count\" binding:\"gte=0\"`\n}\n\ntype Order struct {\n\tItems []Item `json:\"items\" binding:\"required,dive\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/orders\", func(c *gin.Context) {\n\t\tvar o Order\n\t\tif err := c.ShouldBindJSON(&o); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, o)\n\t})\n\n\t// 第二个元素 name 为空、count 为负，dive 会逐个校验出来\n\tbody := `{\"items\":[{\"name\":\"a\",\"count\":1},{\"name\":\"\",\"count\":-1}]}`\n\treq := httptest.NewRequest(http.MethodPost, \"/orders\", strings.NewReader(body))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code)\n\tfmt.Println(w.Body.String())\n}",
       "lang": "go",
-      "notes": "用 Should 系列时 400 是你自己写的；用 Bind 系列 gin 已经写了 400，再写一次会触发 headers were already written。"
+      "notes": "dive 要写在其它规则后面（binding:\"required,dive\"），它之后的规则从「校验这个字段」变成「校验每个元素」；元素是结构体时再按元素自己的 tag 校验。没有 dive 时 []Item 里字段全空也能通过。"
+    },
+    {
+      "title": "ShouldBindBodyWith：body 只能读一次",
+      "description": "同一个请求里要把 body 绑定两次，或者中间件读完 body 后 handler 还要再绑时用它；它把原始 body 缓存进 c.Keys，后面的绑定还能拿到数据。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n\t\"github.com/gin-gonic/gin/binding\"\n)\n\ntype User struct {\n\tName string `json:\"name\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\t// 第一次读 body，同时把原始字节缓存进 c.Keys\n\t\tif err := c.ShouldBindBodyWith(&u, binding.JSON); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\t// 第二次再绑同一个 body 还能成功\n\t\tvar again User\n\t\tif err := c.ShouldBindBodyWith(&again, binding.JSON); err != nil {\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, gin.H{\"first\": u.Name, \"second\": again.Name})\n\t})\n\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", strings.NewReader(`{\"name\":\"张三\"}`))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "ShouldBindBodyWith 会把整份 body 缓存进 c.Keys（gin.BodyBytesKey），大请求体别用，白占内存。缓存只对它自己生效：先调 ShouldBindJSON 把 body 读空，再调它也绑不到；反过来先缓存再调 ShouldBindJSON 同样是 EOF。"
     },
     {
       "title": "组合示例：把绑定与校验串起来",

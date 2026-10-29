@@ -4,6 +4,7 @@
   "entries": [
     {
       "title": "常用网络排查工具有哪些？分别用来查什么？",
+      "description": "按链路分层选工具，从链路层到应用层各有一组常用命令。",
       "answer": [
         "ping：发 ICMP echo 请求，验证三层可达性并测往返时延；ping 通只说明主机会回包，不代表任何端口是开放的",
         "traceroute / tracepath / mtr：靠递减 TTL 逐跳探测，定位在哪一跳开始不通、延迟在哪跳跳变；mtr 持续统计丢包率，排查链路质量更实用",
@@ -16,6 +17,7 @@
     },
     {
       "title": "tcpdump 怎么抓包才能看清连接过程？",
+      "description": "抓包要选对网卡和过滤表达式，重点看握手、重传和 RST。",
       "answer": [
         "先框范围再抓：tcpdump -i any -nn -s 0 'tcp port 8080'，-i any 抓所有网卡、-nn 不做主机名和服务名反查（否则慢且看不出真实 IP）、-s 0 保存完整包不截断；抓包会占 CPU 和内存，高流量机器上要限制网卡、端口和时长",
         "只看握手用过滤器：'tcp port 8080 and (tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0)'，纯 ACK 和数据段会被滤掉，握手与断开一眼看清",
@@ -28,6 +30,7 @@
     },
     {
       "title": "ping 通但访问不了服务，可能是什么原因？",
+      "description": "ping 通只证明网络层可达，端口、防火墙和应用进程要逐层排除。",
       "answer": [
         "端口层面异常：服务没起来、起在别的端口，或者只监听了 127.0.0.1，用 ss -lntp 看清绑定地址是 0.0.0.0 还是 127.0.0.1；反过来进程在但业务线程卡死，端口会接受连接却不再回数据，那是应用层问题",
         "防火墙或安全组按端口丢包：ping 走 ICMP、访问走 TCP，两套策略互相独立，ICMP 放行不代表 TCP 端口放行",
@@ -40,6 +43,7 @@
     },
     {
       "title": "怎么确认是 DNS 问题还是服务问题？",
+      "description": "用 dig 对比解析结果、再直连 IP，快速切分 DNS 和服务问题。",
       "answer": [
         "先读报错原文：Could not resolve host、temporary failure in name resolution 是 DNS 侧；Connection refused、Connection reset 是连接侧",
         "拿到解析结果对比：dig +short example.com 看最终 IP，dig example.com A +trace 看解析链在哪一级断掉",
@@ -52,6 +56,7 @@
     },
     {
       "title": "connection refused 和 connection reset 有什么区别？",
+      "description": "refused 是端口没人监听，reset 是连接被对端或中间设备重置。",
       "answer": [
         "refused 表示报文到达了主机、但目标端口没有进程监听，内核直接回一个 RST，所以客户端几乎瞬间就失败",
         "reset 表示连接已经建立（或正在建立）后被对端强行断开，常见于服务进程崩溃或重启、连接被服务端主动 RST 掉",
@@ -64,6 +69,7 @@
     },
     {
       "title": "服务端口通但服务无响应，怎么排查？",
+      "description": "端口能建连说明网络和监听正常，重点查应用线程、依赖和超时。",
       "answer": [
         "先分清是连不上还是连上没反应：curl -v --max-time 5 http://ip:port/，看它停在 DNS、TCP 连接、TLS 握手还是等待首字节",
         "端口通但握手发不出去：ss -lnt 看监听端口的 Recv-Q（当前已完成握手、等待 accept 的连接数）是否贴住 Send-Q（backlog 上限），贴满说明全连接队列溢出，新连接被内核悄悄丢掉",
@@ -76,20 +82,21 @@
     },
     {
       "title": "TIME_WAIT 状态太多怎么排查和处理？",
+      "description": "先量规模和来源，再判断是端口耗尽、连接复用不足还是关闭方向问题。",
       "answer": [
         "先量规模再看来源：ss -ant state time-wait | wc -l 统计总数，再按本地端口聚合 ss -ant state time-wait | awk '{print $3}' | sort | uniq -c | sort -rn | head 找出是哪段流量在刷",
         "定位是哪一方在攒：TIME_WAIT 落在主动关闭连接的一方，谁先发 FIN 谁背锅；客户端主动关就是客户端攒，服务端主动关就是服务端攒",
         "真正要防的是临时端口耗尽：net.ipv4.ip_local_port_range 默认 32768-60999，约 2.8 万个端口，耗尽时报 cannot assign requested address，这时客户端才是真正的受害者",
         "Go 侧最常见的根因是连接池配置：http.DefaultTransport 的 MaxIdleConnsPerHost 默认只有 2，高并发下连接反复创建关闭，要显式调大并配合长连接",
-        "三个系统参数别搞混：tcp_tw_reuse=1 让主动发起连接时复用 TIME_WAIT（Linux 4.12 起默认是 2，只对 loopback 生效）；tcp_max_tw_buckets 限制总数，超了内核直接回收；tcp_fin_timeout 管的是 FIN_WAIT2，调它对 TIME_WAIT 没用",
-        "别和 CLOSE_WAIT 混了：CLOSE_WAIT 是对端已发 FIN 而本地没 close，说明应用代码漏了关闭；TIME_WAIT 只是正常关闭的尾巴，本身不代表故障"
+        "三个参数别搞混：tcp_tw_reuse=1 允许主动建连时复用 TIME_WAIT、tcp_max_tw_buckets 限制总数、tcp_fin_timeout 管 FIN_WAIT2，对 TIME_WAIT 没用"
       ],
       "notes": "常见追问：TIME_WAIT 能不能直接砍掉？——它保护最后 ACK 的重传和旧报文的隔离，砍掉要付出重传和串包的代价。常见追问：服务端 TIME_WAIT 多怎么办？——先查是谁主动关的连接，尽量改成客户端主动关；再考虑 tcp_tw_reuse。常见追问：tcp_tw_recycle 呢？——它对 NAT 后的客户端会丢包，已在 Linux 4.12 移除，别再用。常见错误回答：「把 tcp_fin_timeout 调小就能减少 TIME_WAIT」——那个参数管 FIN_WAIT2；也常见把 TIME_WAIT 和 CLOSE_WAIT 混为一谈，那是两类完全不同的问题。"
     },
     {
       "title": "怎么定位是服务端慢还是网络慢？",
+      "description": "用 curl 分阶段计时，把 DNS、建连、首字节拆开对比服务端和网络。",
       "answer": [
-        "把延迟拆开量：curl -o /dev/null -s -w 'dns:%{time_namelookup} conn:%{time_connect} ttfb:%{time_starttransfer} total:%{time_total}\\n' http://ip:port/，ttfb 减 conn 是服务端处理时间，conn 减 dns 是建连往返",
+        "把延迟拆开量：curl 的 time_namelookup、time_connect、time_starttransfer、time_total 四个阶段；ttfb 减 conn 是服务端处理时间，conn 减 dns 是建连往返",
         "服务端自己也要量一遍：在 Go 服务里用中间件统计 handler 耗时，和客户端看到的对不上，差值就落在网络或排队上",
         "看丢包重传：ss -ti 看每条连接的 retrans 计数，netstat -s | grep -i retrans 看累计重传；重传多说明链路质量差，延迟会被放大一个 RTO",
         "定位是哪一段链路：mtr 或 traceroute 看延迟在哪一跳跳变，再在同网段的机器上 ping 对比，区分是中间设备还是最后一段",
@@ -100,6 +107,7 @@
     },
     {
       "title": "什么是半连接队列和全连接队列？满了会怎样？",
+      "description": "半连接队列和全连接队列溢出表现不同，看内核计数定位。",
       "answer": [
         "半连接队列（syn queue）存放已收到 SYN 但握手还没完成的连接，处于 SYN_RECV 状态，长度上限由 net.ipv4.tcp_max_syn_backlog 控制",
         "全连接队列（accept queue）存放握手已完成、等着应用调 accept() 取走的连接，长度上限是 listen() 的 backlog 参数，并且被 net.core.somaxconn 封顶",
@@ -112,6 +120,7 @@
     },
     {
       "title": "服务端 listen 的 backlog 到底控制什么？",
+      "description": "backlog 控制已完成连接队列上限，还受内核 somaxconn 约束。",
       "answer": [
         "backlog 是全连接队列的长度上限：握手已经完成、排队等着被 accept() 领走的连接最多能有多少个",
         "它会被内核的 somaxconn 封顶，实际生效值取 min(backlog, net.core.somaxconn)；只改代码里的 backlog 而不同步调 sysctl 是没用的",
@@ -124,6 +133,7 @@
     },
     {
       "title": "什么是 SYN Flood？怎么防护？",
+      "description": "SYN Flood 打的是半连接队列，靠 syncookies、限速和清洗防护。",
       "answer": [
         "攻击者用伪造的源 IP 大量发 SYN，服务端为每个 SYN 分配半连接状态，把半连接队列和内存占满，正经用户的 SYN 被丢弃，表现为服务不可用",
         "识别特征：SYN_RECV 状态的连接数暴涨却几乎没有一条进 ESTABLISHED，可用 ss -ant | grep SYN-RECV 计数，nstat -az TcpExt_ListenOverflows TcpExt_SyncookiesSent 看内核统计",
@@ -136,6 +146,7 @@
     },
     {
       "title": "为什么改完 iptables 规则不生效？",
+      "description": "规则不生效先查表链和顺序，再确认是否被 nftables 或云安全组接管。",
       "answer": [
         "规则按顺序匹配，第一条命中的就决定结果，同一条链上后面的规则不再被评估；新加的 DROP 前面如果有一条宽松的 ACCEPT，它永远不会被执行到",
         "用 iptables -L -n -v --line-numbers 看每条规则的 pkts 计数，计数为 0 说明从没被命中过，多半是被前面的规则抢先匹配",
@@ -148,6 +159,7 @@
     },
     {
       "title": "内网能通外网不通，怎么排查？",
+      "description": "内网通外网不通，按路由、NAT、DNS、代理逐层查出口链路。",
       "answer": [
         "按层推进：ip route get 8.8.8.8 看路由和出口网卡，再 ping 默认网关、再 ping 外网 IP，这两步能把「路由或网关问题」和「出网被拦问题」分开",
         "解析可能只在内网可用：外网域名依赖公司 DNS 的转发，转发器配错就解析失败；用 dig @8.8.8.8 对比，并确认 /etc/resolv.conf 里的 nameserver 可达",
@@ -160,15 +172,29 @@
     },
     {
       "title": "什么是 MTU 和 MSS？",
+      "description": "MTU 是链路帧上限，MSS 是 TCP 载荷上限，路径 MTU 不一致会丢大包。",
       "answer": [
         "MTU 是链路上单个 IP 包的最大字节数，以太网默认 1500；MTU 是逐跳的，PPPoE、隧道、VPN 都会让路径上的有效 MTU 变小",
         "MSS 是 TCP 段里能装的最大数据长度，在 SYN 的 MSS 选项里协商：IPv4 是 MTU 减 40（20 字节 IP 头加 20 字节 TCP 头），所以 MTU 1500 时 MSS 是 1460；IPv6 是 MTU 减 60，MSS 是 1440",
         "路径 MTU 发现靠 ICMP：路由器发不出更大的包时回 Fragmentation Needed（IPv6 是 Packet Too Big，而且 IPv6 路由器自己不 fragmentation），发送方据此调小后续报文",
         "最典型的故障是 PMTU 黑洞：防火墙把 ICMP 挡了，发送方永远不知道路径 MTU 变小，小包正常、大报文卡住，表现为 curl 小 URL 正常、下载大文件卡在中间",
         "排查手段：ip link show 看本机接口 MTU，ping -M do -s 1472 试探路径能承载的包长，tracepath 或 mtr --mtu 直接读路径上的 MTU",
-        "三种修法：把接口 MTU 改对（ip link set dev eth0 mtu 1400）、在网关做 MSS 钳制（iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu）、或开 TCP MTU 探测（net.ipv4.tcp_mtu_probing=1）"
+        "三种修法：改接口 MTU（ip link set dev eth0 mtu 1400）、网关做 MSS 钳制（iptables --clamp-mss-to-pmtu）、或开 TCP MTU 探测（tcp_mtu_probing=1）"
       ],
       "notes": "常见追问：MTU 和 MSS 到底差在哪？——MTU 是 IP 层的包上限，MSS 是 TCP 层扣掉头部后可装的数据上限。常见追问：怎么确认是 MTU 问题？——小请求正常大请求卡住，加上 ping -M do 试探和抓包看到重传就能确认。常见追问：为什么 IPv6 更容易出问题？——中间设备一挡 ICMPv6 Packet Too Big 就彻底不通。常见错误回答：「把本机 MTU 改小就行」——多数场景是路径 MTU 比本机小，必须靠钳制 MSS 或改全路径。"
+    },
+    {
+      "title": "容器网络不通时怎么排查？netns、veth、docker0 各看什么？",
+      "description": "容器网络问题要按 netns、veth、bridge、iptables 四层往下拆，别一上来就重启 Docker。",
+      "answer": [
+        "先定位 netns：docker inspect -f '{{.State.Pid}}' <容器> 拿 PID，再 nsenter -t <PID> -n ip addr 和 ip route，确认容器里的地址、默认路由和 veth 是否都在",
+        "回宿主机看配对端：ip link 找 vethXXX，bridge link show 或 ip -d link show docker0 确认 veth 挂在 docker0 上且状态 UP；docker0 本身默认是 172.17.0.1/16 且要 UP",
+        "同桥容器互通走二层，跨网或出宿主机要 net.ipv4.ip_forward=1，并由 iptables 的 DOCKER/FORWARD 链做转发和 NAT；自定义防火墙把 FORWARD 默认策略改成 DROP 是常见断点",
+        "宿主机访问容器 IP 失败：查 iptables -L FORWARD -n -v 和 iptables -L INPUT -n -v 的计数，确认 docker0 流量没被 DROP；如果走的是 -p 映射端口，再查 iptables -t nat -L DOCKER -n -v，最后看容器内服务是否只监听 127.0.0.1",
+        "容器访问宿主机：宿主机服务若只绑 127.0.0.1，容器从 docker0 进来连不上；改绑 0.0.0.0，或用 --add-host host.docker.internal:host-gateway（Docker 20.10+）",
+        "抓包要选对点：tcpdump -i docker0 看桥接流量，tcpdump -i vethXXX 看容器侧；K8s 环境把 docker0 换成 cni0 或 cali*，排查顺序不变：netns → veth → bridge → 路由/iptables"
+      ],
+      "notes": "常见追问：docker0 和自定义 bridge 有什么区别？——自定义 bridge 自带内嵌 DNS，容器名可直接解析；docker0 默认没有。常见追问：为什么容器里 ping 不通外网但 DNS 正常？——可能是 ip_forward 或 NAT 规则问题，也可能是 MTU 不匹配导致大包被丢。常见错误回答：「宿主机 ping 不通容器 IP 就是容器没启动」——容器活着但 veth 没挂上、docker0 down、FORWARD 被 DROP 都会这样。"
     }
   ]
 }

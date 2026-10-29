@@ -13,7 +13,7 @@
         "Pipeline 批量：把 N 次请求往返压成 1 次，RTT 被摊薄，这是应用侧能拿到手的一块大收益",
         "快的代价：单条慢命令会阻塞整个实例，命令执行期间其它请求全部排队"
       ],
-      "notes": "常见追问：这几种因素哪个最重要？——看场景，纯读场景瓶颈在网络往返，Pipeline 收益最大；写多的场景瓶颈在持久化和内存带宽；「怎么量化」——用 redis-benchmark 压，用 redis-cli --latency 看延迟分布。跨组提示：数据结构的底层实现见「Redis 数据结构与底层实现」分组，单线程模型见下一题。"
+      "notes": "常见追问：这几种因素哪个最重要？——看场景，纯读场景瓶颈在网络往返，Pipeline 收益最大；写多的场景瓶颈在持久化和内存带宽；「怎么量化」——用 redis-benchmark 压，用 redis-cli --latency 看延迟分布。常见错误回答：「Redis 快是因为多线程」——命令执行是单线程，快在内存、IO 多路复用和紧凑数据结构。"
     },
     {
       "title": "Redis 真的是单线程的吗？6.0 之后有什么变化？",
@@ -26,20 +26,20 @@
         "运维含义一：一个慢命令会卡住整个实例，KEYS *、对大集合的 SMEMBERS、对大 hash 的 HGETALL 都是秒级卡顿的典型来源",
         "运维含义二：BGSAVE、BGREWRITEAOF 会 fork 子进程，fork 期间主线程要复制页表，大内存实例上会抖几十到几百毫秒"
       ],
-      "notes": "常见追问：命令执行为什么不并行？——数据结构没有并发保护，并行化要加细粒度锁，通常比串行更慢；「fork 为什么会卡」——复制页表是内核动作，页表越大越慢，透明大页（THP）会放大这个问题；「怎么确认当前开了几个 IO 线程」——CONFIG GET io-threads。跨组提示：IO 多路复用与紧凑数据结构的原理见「Redis 数据结构与底层实现」分组。"
+      "notes": "常见追问：命令执行为什么不并行？——数据结构没有并发保护，并行化要加细粒度锁，通常比串行更慢；「fork 为什么会卡」——复制页表是内核动作，页表越大越慢，透明大页（THP）会放大这个问题；「怎么确认当前开了几个 IO 线程」——CONFIG GET io-threads。常见错误回答：「6.0 之后命令执行也并行了」——只有网络读写和协议解析用 IO 线程，命令执行仍在主线程串行。"
     },
     {
       "title": "慢查询日志（SLOWLOG）怎么用？",
       "description": "线上排查慢命令的第一站，但它的统计口径和几个陷阱必须说清楚。",
       "answer": [
-        "开启方式是 slowlog-log-slower-than <微秒>，默认 10000（即 10 毫秒），设成 0 关闭，设成负数记录所有命令",
+        "开启方式是 slowlog-log-slower-than <微秒>，默认 10000（即 10 毫秒），设成 0 记录所有命令，设成负数才是关闭",
         "容量由 slowlog-max-len 控制，默认 128 条，超出后覆盖最老的条目；慢日志只在内存里，不落盘，重启即丢",
         "查看用 SLOWLOG GET [count]（默认返回 10 条，-1 表示全部）、SLOWLOG LEN 看条数、SLOWLOG RESET 清空",
         "统计口径是命令在服务端真正执行的时间，不含网络收发和排队，所以客户端看到的慢请求，服务端慢日志里可能根本没有",
         "返回顺序按时间倒序（最近的在前），不是按耗时从大到小排，想直接看最慢的得自己排序",
         "每条记录包含 id、时间戳、耗时（微秒）、命令参数、客户端 IP 和端口、客户端名（CLIENT SETNAME 设的）"
       ],
-      "notes": "常见追问：阈值设多少合适？——先设小值采一轮基线，再按业务 SLO 定，10 毫秒对多数业务已经算慢；「SLOWLOG GET 会清空日志吗」——不会，只有 SLOWLOG RESET 会清空，所以排查时不用急着 RESET；「日志里没有但客户端很慢」——多半是网络或连接池排队，不是 Redis 慢；「怎么持续收集」——定时拉 SLOWLOG GET -1 存档，或用 redis_exporter 把慢日志暴露成指标。"
+      "notes": "常见追问：阈值设多少合适？——先设小值采一轮基线，再按业务 SLO 定，10 毫秒对多数业务已经算慢；「SLOWLOG GET 会清空日志吗」——不会，只有 SLOWLOG RESET 会清空，所以排查时不用急着 RESET；「日志里没有但客户端很慢」——多半是网络或连接池排队，不是 Redis 慢；「怎么持续收集」——定时拉 SLOWLOG GET -1 存档，或用 redis_exporter 把慢日志暴露成指标。常见错误回答：「slowlog-log-slower-than 设 0 是关闭、负数记录所有命令」——反了，0 记录所有命令，负数才是关闭。"
     },
     {
       "title": "怎么定位慢命令？除了 SLOWLOG 还能看什么？",
@@ -54,7 +54,7 @@
       ],
       "code": "func parseInfoSection(section string) map[string]string {\n\tfields := make(map[string]string)\n\tfor _, line := range strings.Split(section, \"\\n\") {\n\t\tline = strings.TrimSpace(line)\n\t\tif line == \"\" || strings.HasPrefix(line, \"#\") {\n\t\t\tcontinue\n\t\t}\n\t\tif k, v, ok := strings.Cut(line, \":\"); ok {\n\t\t\tfields[k] = v\n\t\t}\n\t}\n\treturn fields\n}",
       "lang": "go",
-      "notes": "常见追问：LATENCY DOCTOR 怎么开？——latency-monitor-threshold 设成 100 之类的毫秒值，它只记录超过阈值的操作，采集本身有一点点开销；「命令统计会重置吗」——CONFIG RESETSTAT 会清零，统计是进程级的，重启也清零；「为什么平均耗时不够用」——平均值掩盖长尾，线上事故往往由 P99 引起，要看分位数；「大 key 怎么找」——redis-cli --bigkeys、--memkeys，或用 SCAN 分批统计。"
+      "notes": "常见追问：LATENCY DOCTOR 怎么开？——latency-monitor-threshold 设成 100 之类的毫秒值，它只记录超过阈值的操作，采集本身有一点点开销；「命令统计会重置吗」——CONFIG RESETSTAT 会清零，统计是进程级的，重启也清零；「为什么平均耗时不够用」——平均值掩盖长尾，线上事故往往由 P99 引起，要看分位数；「大 key 怎么找」——redis-cli --bigkeys、--memkeys，或用 SCAN 分批统计。常见错误回答：「平均耗时高就说明有慢命令」——平均值掩盖长尾，要看 P99 和 SLOWLOG。"
     },
     {
       "title": "Pipeline 是什么？能提升多少？为什么不是万能的？",
@@ -69,7 +69,7 @@
       ],
       "code": "cmds := make([]string, 0, 128)\nfor i := 0; i < 128; i++ {\n\tcmds = append(cmds, fmt.Sprintf(\"GET key:%d\", i))\n}\nfmt.Println(len(cmds)) // 攒成一批发出去，服务端按顺序执行",
       "lang": "go",
-      "notes": "常见追问：Pipeline 和事务的区别？——Pipeline 只打包，不保证原子也不隔离；MULTI/EXEC 保证批次不被插入但没有回滚；「Pipeline 还是 Lua」——只要原子性选 Lua，只要批量吞吐选 Pipeline，Lua 脚本执行期间会阻塞整个实例；「客户端支持吗」——go-redis 用 Pipeline()，redis-py 用 pipeline()，都有官方实现。"
+      "notes": "常见追问：Pipeline 和事务的区别？——Pipeline 只打包，不保证原子也不隔离；MULTI/EXEC 保证批次不被插入但没有回滚；「Pipeline 还是 Lua」——只要原子性选 Lua，只要批量吞吐选 Pipeline，Lua 脚本执行期间会阻塞整个实例；「客户端支持吗」——go-redis 用 Pipeline()，redis-py 用 pipeline()，都有官方实现。常见错误回答：「Pipeline 能保证原子性」——它只打包减少往返，不保证原子也不隔离。"
     },
     {
       "title": "Redis 的事务（MULTI/EXEC）是什么？为什么很多场景不推荐用？",
@@ -82,7 +82,7 @@
         "第二层原因：要基于前面结果做判断就必须 WATCH 加重试，代码复杂度比直接写 Lua 高得多",
         "官方建议：要原子性用 Lua 脚本（服务端一次执行、天然原子、能拿结果并重试），只要批量吞吐用 Pipeline"
       ],
-      "notes": "常见追问：MULTI/EXEC 能保证哪些命令不被插队？——EXEC 内的命令不会与其它客户端的命令交错，但不回滚，也不提供跨批次的隔离；「队列里的命令出错会怎样」——入队期的语法错误会让 EXEC 整体报错返回；「为什么 Redis 做了事务却少人用」——需求被 Pipeline 和 Lua 两条路覆盖得更便宜。"
+      "notes": "常见追问：MULTI/EXEC 能保证哪些命令不被插队？——EXEC 内的命令不会与其它客户端的命令交错，但不回滚，也不提供跨批次的隔离；「队列里的命令出错会怎样」——入队期的语法错误会让 EXEC 整体报错返回；「为什么 Redis 做了事务却少人用」——需求被 Pipeline 和 Lua 两条路覆盖得更便宜。常见错误回答：「Redis 事务出错会回滚」——运行期错误不回滚，只有入队语法错误会让 EXEC 整体失败。"
     },
     {
       "title": "Lua 脚本为什么是原子的？它一般用来做什么？",
@@ -97,7 +97,7 @@
       ],
       "code": "const decrScript = `\nlocal stock = tonumber(redis.call(\"GET\", KEYS[1]))\nif not stock or stock <= 0 then\n\treturn -1\nend\nreturn redis.call(\"DECR\", KEYS[1])\n`\nfmt.Println(decrScript) // 用 EVALSHA 把这段脚本交给 Redis 原子执行",
       "lang": "go",
-      "notes": "常见追问：Lua 脚本能提升性能吗？——主要收益是原子性和少几次往返，不是执行更快；「脚本多了会不会撑爆内存」——脚本缓存在服务端，客户端缓存 SHA，建议集中管理脚本；「Cluster 下怎么用」——用 hash tag 让相关 key 同槽，比如 {user:123}:name；「怎么调试」——SCRIPT DEBUG 或 redis-cli --eval。跨组提示：释放锁的 Lua 见「Redis 分布式锁与一致性」分组。"
+      "notes": "常见追问：Lua 脚本能提升性能吗？——主要收益是原子性和少几次往返，不是执行更快；「脚本多了会不会撑爆内存」——脚本缓存在服务端，客户端缓存 SHA，建议集中管理脚本；「Cluster 下怎么用」——用 hash tag 让相关 key 同槽，比如 {user:123}:name；「怎么调试」——SCRIPT DEBUG 或 redis-cli --eval。常见错误回答：「Lua 脚本可以跨任意 key」——Cluster 下必须用 hash tag 保证同槽。"
     },
     {
       "title": "内存淘汰策略有哪几种？怎么选？",
@@ -110,7 +110,7 @@
         "淘汰算法是近似的：每次淘汰时随机采样 maxmemory-samples 个 key（默认 5 个）挑最差的删，不是精确的全局 LRU",
         "触发时机是写入时内存已经超过 maxmemory，删除动作发生在命令执行路径上，key 特别多时淘汰本身会带来延迟抖动"
       ],
-      "notes": "常见追问：为什么默认是 noeviction？——防止 Redis 悄悄丢数据；「allkeys-lru 和 allkeys-lfu 怎么选」——访问分布稳定、热点集中用 LFU，分布均匀用 LRU；「为什么没有精确 LRU」——精确 LRU 要在每次访问时维护链表，额外开销大，Redis 用采样近似；「内存满了业务怎么办」——缓存场景降级，数据库场景必须扩容。"
+      "notes": "常见追问：为什么默认是 noeviction？——防止 Redis 悄悄丢数据；「allkeys-lru 和 allkeys-lfu 怎么选」——访问分布稳定、热点集中用 LFU，分布均匀用 LRU；「为什么没有精确 LRU」——精确 LRU 要在每次访问时维护链表，额外开销大，Redis 用采样近似；「内存满了业务怎么办」——缓存场景降级，数据库场景必须扩容。常见错误回答：「默认淘汰策略是 allkeys-lru」——默认 noeviction，内存满时写命令直接报错。"
     },
     {
       "title": "LRU 和 LFU 有什么区别？",
@@ -123,7 +123,7 @@
         "Redis 的 LFU 计数是 8 位对数计数器（lfu-log-factor 默认 10），并且每 lfu-decay-time 分钟（默认 1 分钟）没被访问就把计数减半，不是清零",
         "Redis 4.0 才引入 LFU，更早的版本只有 LRU；在配置里就是 allkeys-lru 和 allkeys-lfu 两个值"
       ],
-      "notes": "常见追问：为什么 LFU 要做衰减？——热点 key 热度过去后应该能被淘汰，计数减半让它慢慢降下来；「lfu-decay-time 调大调小的效果」——调大更抗热点固化，调小更容易淘汰老 key；「为什么线上默认还是 LRU」——LRU 行为更可预测，LFU 要在数据分布稳定时才显优势。"
+      "notes": "常见追问：为什么 LFU 要做衰减？——热点 key 热度过去后应该能被淘汰，计数减半让它慢慢降下来；「lfu-decay-time 调大调小的效果」——调大更抗热点固化，调小更容易淘汰老 key；「为什么线上默认还是 LRU」——LRU 行为更可预测，LFU 要在数据分布稳定时才显优势。常见错误回答：「LFU 只看访问次数、从不衰减」——有衰减，否则老热点永远淘汰不掉。"
     },
     {
       "title": "过期的 key 是怎么被删掉的？惰性删除和定期删除各是什么？",
@@ -136,7 +136,7 @@
         "过期判断看服务端时钟，主从两边的时钟偏差会导致两边对同一个 key 的过期时刻判断不一致",
         "过期 key 在物理删除前仍然占内存、SCAN 还能扫到；TTL 返回 -2 表示不存在或已过期，-1 表示存在但没有过期时间"
       ],
-      "notes": "常见追问：为什么两套机制都要有？——只有惰性删除，热点以外的过期 key 永远不释放内存；只有主动删除，会误删还在 TTL 内的 key；「过期和淘汰什么关系」——淘汰是内存不够时主动删，删除是 TTL 到点后回收，两条路径都会触发内存释放；「删大 key 用 DEL 还是 UNLINK」——UNLINK 把真正的释放交给后台线程，避免阻塞主线程。跨组提示：TTL 语义与主从时钟偏差见「Redis 分布式锁与一致性」分组。"
+      "notes": "常见追问：为什么两套机制都要有？——只有惰性删除，热点以外的过期 key 永远不释放内存；只有主动删除，会误删还在 TTL 内的 key；「过期和淘汰什么关系」——淘汰是内存不够时主动删，删除是 TTL 到点后回收，两条路径都会触发内存释放；「删大 key 用 DEL 还是 UNLINK」——UNLINK 把真正的释放交给后台线程，避免阻塞主线程。常见错误回答：「过期 key 会被立刻删除」——靠惰性和定期删除，物理释放有延迟。"
     },
     {
       "title": "内存碎片率（mem_fragmentation_ratio）怎么看？",
@@ -149,7 +149,7 @@
         "常见成因：频繁 fork 的写时复制让 RSS 临时虚高、THP 透明大页让 jemalloc 无法归还内存、之前删过大量 key 但碎片没被整理",
         "处理手段：开 activedefrag yes 让 jemalloc 主动整理（Redis 4.0 以上且编译时支持），重启能立刻释放但代价大，同时排查 THP 和 fork 频率"
       ],
-      "notes": "常见追问：碎片率 3.0 要不要紧？——先看 used_memory 有多大，才几十 MB 就不用管；「为什么删了 key 内存没降」——碎片不会自动归还给操作系统，DEL 只是还给 jemalloc；「和 swap 什么关系」——swap 里有 Redis 页面时，访问会触发缺页，延迟飙升，vmstat 的 si/so 能看出来。"
+      "notes": "常见追问：碎片率 3.0 要不要紧？——先看 used_memory 有多大，才几十 MB 就不用管；「为什么删了 key 内存没降」——碎片不会自动归还给操作系统，DEL 只是还给 jemalloc；「和 swap 什么关系」——swap 里有 Redis 页面时，访问会触发缺页，延迟飙升，vmstat 的 si/so 能看出来。常见错误回答：「碎片率高就要马上重启」——先看 used_memory 规模和是否在用 swap，小实例不用管。"
     },
     {
       "title": "Redis Cluster 的槽位机制是什么？MOVED 和 ASK 有什么区别？",
@@ -162,7 +162,7 @@
         "客户端处理方式：收到重定向就按目标地址重发一次，同时刷新拓扑缓存；生产上要用支持 Cluster 的客户端（go-redis ClusterClient、redis-py 的 RedisCluster）自动处理",
         "跨槽的多 key 命令、跨槽的事务和 Lua 脚本会直接报 CROSSSLOT 错误，这是 Cluster 最常见的坑"
       ],
-      "notes": "常见追问：为什么是 16384 个槽？——槽数量固定在配置文件里，拓扑变更时用位图广播每个槽归谁，增删节点只改槽归属不用搬全部 key；「ASK 期间命令失败了怎么办」——先按 ASK 重试一次，仍失败再等拓扑刷新；「为什么客户端刷新拓扑很重要」——只在 MOVED 时刷新的话，槽迁移期间会一直重定向打不中。"
+      "notes": "常见追问：为什么是 16384 个槽？——槽数量固定在配置文件里，拓扑变更时用位图广播每个槽归谁，增删节点只改槽归属不用搬全部 key；「ASK 期间命令失败了怎么办」——先按 ASK 重试一次，仍失败再等拓扑刷新；「为什么客户端刷新拓扑很重要」——只在 MOVED 时刷新的话，槽迁移期间会一直重定向打不中。常见错误回答：「16384 个槽是随便定的、MOVED 和 ASK 一样」——槽数是广播成本和集群规模的折中，MOVED 是永久迁移、ASK 是临时重定向。"
     },
     {
       "title": "客户端连接池怎么设？Redis 的连接数有什么限制？",
@@ -175,7 +175,7 @@
         "客户端侧还要设最大空闲连接和最大连接数，避免突发把连接撑爆，也避免连接频繁重建（go-redis 的 PoolSize、MaxIdleConns、MinIdleConns）",
         "故障后最怕重连风暴：所有客户端同时重连会瞬间打满 accept 队列，要错开重连时间并调大 tcp-backlog（默认 511）"
       ],
-      "notes": "常见追问：连接数超限了怎么办？——先确认是不是连接泄漏（客户端没复用、没设超时），再考虑调大 maxclients 和 ulimit；「超时怎么设」——服务端 timeout 0 表示不超时，建议客户端自己设读超时，避免慢命令把连接池占死；「阻塞命令要不要单独连接」——要，BLPOP 这类连接会长期占用，必须和普通命令池分开，否则整个池会被占满。"
+      "notes": "常见追问：连接数超限了怎么办？——先确认是不是连接泄漏（客户端没复用、没设超时），再考虑调大 maxclients 和 ulimit；「超时怎么设」——服务端 timeout 0 表示不超时，建议客户端自己设读超时，避免慢命令把连接池占死；「阻塞命令要不要单独连接」——要，BLPOP 这类连接会长期占用，必须和普通命令池分开，否则整个池会被占满。常见错误回答：「连接池越大越好」——连接数受 maxclients 和 ulimit 限制，过大反而增加内存和切换开销。"
     },
     {
       "title": "怎么监控 Redis？INFO 里该看哪些字段？",
@@ -190,7 +190,7 @@
       ],
       "code": "info := \"keyspace_hits:1000\\r\\nkeyspace_misses:20\\r\\n\"\nhits, misses := 0, 0\nfor _, line := range strings.Split(info, \"\\r\\n\") {\n\tk, v, ok := strings.Cut(strings.TrimSpace(line), \":\")\n\tif !ok {\n\t\tcontinue\n\t}\n\tn, _ := strconv.Atoi(v)\n\tswitch k {\n\tcase \"keyspace_hits\":\n\t\thits = n\n\tcase \"keyspace_misses\":\n\t\tmisses = n\n\t}\n}\nrate := float64(hits) / float64(hits+misses)\nfmt.Printf(\"hit rate: %.1f%%\\n\", rate*100)",
       "lang": "go",
-      "notes": "常见追问：只盯几个指标够吗？——至少要有内存使用率、命中率、连接数、ops、延迟、复制延迟、持久化失败这几条告警线；「INFO 里的数据准吗」——大部分是累计值，要看变化率，instantaneous_ops_per_sec 才是当前值；「延迟怎么采集」——服务端用 LATENCY DOCTOR，客户端侧用 APM 采集 P99、P999 才靠谱。"
+      "notes": "常见追问：只盯几个指标够吗？——至少要有内存使用率、命中率、连接数、ops、延迟、复制延迟、持久化失败这几条告警线；「INFO 里的数据准吗」——大部分是累计值，要看变化率，instantaneous_ops_per_sec 才是当前值；「延迟怎么采集」——服务端用 LATENCY DOCTOR，客户端侧用 APM 采集 P99、P999 才靠谱。常见错误回答：「只盯内存和 QPS 就够」——还要看复制延迟、持久化失败和延迟分位数。"
     },
     {
       "title": "Redis 突然变慢，怎么排查？",
@@ -203,7 +203,33 @@
         "查过期和淘汰压力：expired_keys、evicted_keys 突增说明大量 key 同时到期或内存打满，淘汰动作在命令路径上会拖慢响应",
         "应急手段：先把 SLOWLOG 和 INFO 存成现场证据，再用 UNLINK 替掉大 key 的 DEL、用 ACL 或 rename-command 禁掉危险命令、必要时临时调高 maxmemory 接受淘汰"
       ],
-      "notes": "常见追问：最快的止血手段是什么？——先限流并禁用 KEYS 这类危险命令，再看是不是 fork 或 swap；「怎么复现」——压测时同时盯 SLOWLOG 和系统指标；「怎么防止再犯」——拆分大 key、把危险命令换成 SCAN、常开慢日志和延迟监控；「和慢日志对不上怎么办」——慢日志只记服务端执行时间，命令执行前的排队不算进去，这时要看连接池和客户端事件循环。"
+      "notes": "常见追问：最快的止血手段是什么？——先限流并禁用 KEYS 这类危险命令，再看是不是 fork 或 swap；「怎么复现」——压测时同时盯 SLOWLOG 和系统指标；「怎么防止再犯」——拆分大 key、把危险命令换成 SCAN、常开慢日志和延迟监控；「和慢日志对不上怎么办」——慢日志只记服务端执行时间，命令执行前的排队不算进去，这时要看连接池和客户端事件循环。常见错误回答：「Redis 变慢一定是网络问题」——先看慢日志、fork、swap 和大 key，再怀疑网络。"
+    },
+    {
+      "title": "Redis 的 ACL 怎么配？未授权访问的安全基线要怎么做？",
+      "description": "Redis 暴露公网且无认证是最常见的入侵入口，这题要从攻击链讲到 ACL、危险命令和 TLS。",
+      "answer": [
+        "未授权访问的典型攻击链：6379 暴露公网且没密码，攻击者用 CONFIG SET dir 和 dbfilename 把 SSH 公钥或 crontab 写到磁盘，再 SAVE 落地拿到 shell",
+        "protected-mode 从 3.2 起默认开启，但它只在没有显式 bind 且没设密码时才把访问限制在回环；一旦 bind 0.0.0.0 或关掉它，这层保护就失效，第一道防线仍是防火墙和安全组",
+        "认证优先用 ACL（6.0+）而不是全局 requirepass：ACL SETUSER app on >pwd ~app:* +@read +@write -@dangerous 按业务给最小权限，ACL LOG 看被拒绝的命令，ACL SAVE 配合 aclfile 持久化",
+        "Redis 7.0 起 ACL 支持 selectors 和 %R~/%W~ 读写分离的 key 权限，可以给同一个用户按 key 前缀配不同权限",
+        "危险命令用 rename-command CONFIG \"\" 之类禁用，但它只能写在配置文件、不能 CONFIG SET 动态改，且官方已标记 deprecated，优先用 ACL 的 -@dangerous",
+        "跨公网或跨机房开 TLS（6.0+，编译时 BUILD_TLS=yes）：配 tls-port、tls-cert-file、tls-key-file、tls-ca-cert-file，tls-auth-clients 默认 yes 要求客户端证书；Redis 还要用非 root 用户运行"
+      ],
+      "notes": "常见追问：protected-mode 能防住 bind 0.0.0.0 吗？——不能，它只在没有显式 bind 且没有密码时生效。常见追问：rename-command 和 ACL 该用哪个？——新版本优先 ACL，rename-command 已废弃且改完要重启。常见错误回答：「设了 requirepass 就安全了」——密码只挡认证，挡不住 CONFIG 写文件，危险命令和网络暴露要一起收。"
+    },
+    {
+      "title": "Redis 的 Functions、分片 Pub/Sub 和客户端缓存分别解决什么问题？",
+      "description": "三个常被混在一起问的新特性，版本和适用场景要分开说。",
+      "answer": [
+        "Functions 是 Redis 7.0 引入的服务端脚本库：FUNCTION LOAD 注册 Lua 库，FCALL/FCALL_RO 调用；函数随 RDB/AOF 持久化并复制到副本，不像 EVAL 的脚本缓存重启就没了",
+        "客户端缓存（client-side caching）是 6.0 引入的，依赖 RESP3：HELLO 3 切协议，CLIENT TRACKING ON 打开追踪，key 变化时服务端推送失效消息（RESP2 走 __redis__:invalidate 通道，RESP3 走 push）",
+        "RESP3 也是 6.0 引入的，除了字符串还能直接返回 map、set、double、bool，push 类型让服务端可以主动发通知",
+        "分片 Pub/Sub 是 7.0 引入的：SSUBSCRIBE/SUNSUBSCRIBE/SPUBLISH 把频道按 slot 固定在一个分片，消息只在该分片内传播，不再经集群总线广播到所有节点",
+        "普通 Pub/Sub 在 Cluster 下是全局广播，节点越多放大越严重；频道吞吐大、要水平扩展时改用分片 Pub/Sub",
+        "7.0 还把 AOF 改成 multi-part（base + incr + manifest），重写期间的新写入落到 incr 文件，减少重写带来的内存和 IO 抖动"
+      ],
+      "notes": "常见追问：Functions 和 EVAL 怎么选？——需要持久化、可管理、可复用的脚本用 Functions，临时执行用 EVAL；两者都要求 key 在同一 slot。常见追问：客户端缓存的失效消息丢了怎么办？——收到失效就删本地 key，连接断开要清空本地缓存并定期 PING 失效通道。常见错误回答：「客户端缓存是 7.0 才有的」——它是 6.0 的 RESP3 能力，7.0 的是 Functions 和分片 Pub/Sub。"
     }
   ]
 }

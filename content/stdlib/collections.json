@@ -77,7 +77,7 @@
       "description": "从 map 里取出键、值做成切片，或者复制一份 map 常用于「先备份再改」的写法。",
       "code": "scores := map[string]int{\"alice\": 90, \"bob\": 80}\nkeys := slices.Sorted(maps.Keys(scores))\nvalues := slices.Sorted(maps.Values(scores))\nbackup := maps.Clone(scores)\nfmt.Println(keys, values, backup)",
       "lang": "go",
-      "notes": "Go 1.23 起 maps.Keys / maps.Values 返回的是迭代器 iter.Seq，要变成切片得配 slices.Collect 或 slices.Sorted（Go 1.21/1.22 里它们直接返回切片）。maps.Clone 是真复制，改副本不影响原 map；直接赋值两个 map 变量却是共享同一份数据。"
+      "notes": "Go 1.23 起 maps.Keys / maps.Values 返回的是迭代器 iter.Seq，要变成切片得配 slices.Collect 或 slices.Sorted。maps.Clone 是真复制，改副本不影响原 map；直接赋值两个 map 变量却是共享同一份数据。"
     },
     {
       "title": "maps.Keys 的顺序是随机的",
@@ -91,14 +91,14 @@
       "description": "cmp 包（Go 1.21+）提供统一的比较函数，可以直接喂给 slices.SortFunc；cmp.Or 用来给多个候选值挑出第一个「有值」的。",
       "code": "fmt.Println(cmp.Compare(3, 5))\nfmt.Println(cmp.Compare(\"b\", \"a\"))\n\nname := cmp.Or(\"\", \"默认名称\")\nlevel := cmp.Or(0, 3)\nfmt.Println(name, level)",
       "lang": "go",
-      "notes": "cmp.Compare 返回 -1 / 0 / 1，任何可比较类型都能用。cmp.Or 返回第一个非零值，全是零值时返回零值；参数类型必须可比较。"
+      "notes": "cmp.Compare 的签名是 Compare[T cmp.Ordered]，只接受能用 < 排序的类型（整数、浮点、字符串），不是任意可比较类型。cmp.Or 要求参数 comparable，返回第一个非零值，全是零值时返回零值。"
     },
     {
-      "title": "排序自定义类型",
-      "description": "自己定义的结构体没有现成的排序函数，要用 slices.SortFunc 传比较函数（Go 1.21+），或用 sort.Slice 传 less 函数。",
-      "code": "type Task struct {\n\tName  string\n\tScore int\n}\n\ntasks := []Task{{Name: \"甲\", Score: 90}, {Name: \"乙\", Score: 80}}\nslices.SortFunc(tasks, func(a, b Task) int {\n\treturn cmp.Compare(a.Score, b.Score)\n})\nfmt.Println(tasks)",
+      "title": "多字段排序：先比主键再比次键",
+      "description": "按多个字段排序时，先比主键，主键相等再比次键；比较函数里用 cmp.Compare 拼起来，不要写 a.Score - b.Score。",
+      "code": "type Task struct {\n\tName  string\n\tScore int\n}\n\ntasks := []Task{{Name: \"乙\", Score: 90}, {Name: \"甲\", Score: 90}, {Name: \"丙\", Score: 80}}\nslices.SortFunc(tasks, func(a, b Task) int {\n\tif c := cmp.Compare(b.Score, a.Score); c != 0 {\n\t\treturn c\n\t}\n\treturn cmp.Compare(a.Name, b.Name)\n})\nfmt.Println(tasks)",
       "lang": "go",
-      "notes": "比较函数里用 cmp.Compare 比字段，不用自己算差值——差值可能溢出，而且 cmp.Compare 的语义更清楚。要排序的是指针切片（[]*Task）时，把元素类型写成 *Task 即可。"
+      "notes": "cmp.Compare 返回 -1/0/1，直接 return 它就能表达升序；降序把参数反过来。比较函数必须满足严格弱序，否则排序结果未定义。"
     },
     {
       "title": "组合示例：把这一组用起来",

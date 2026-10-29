@@ -88,6 +88,13 @@
       "notes": "标准库到处都在用这种接口（maps.Keys、slices.All）。yield 返回 false 表示提前停止，遍历方用 break 就能中断。"
     },
     {
+      "title": "接口嵌入与组合",
+      "description": "想用一个小接口拼出大接口时，把接口名直接嵌进 interface 里：外层自动具备所有嵌入接口的方法，不用重复写。",
+      "code": "type Reader interface{ Read(p []byte) (int, error) }\ntype Writer interface{ Write(p []byte) (int, error) }\n\n// 嵌入两个接口，ReadWriter 同时具备 Read 和 Write\ntype ReadWriter interface {\n\tReader\n\tWriter\n}\n\nvar rw ReadWriter\nfmt.Println(rw == nil)",
+      "lang": "go",
+      "notes": "嵌入的两个接口如果有同名但签名不同的方法，编译报错 duplicate method；同名同签名则合成一个。接口嵌入不是继承：只合并方法集，不带来字段和实现。标准库的 io.ReadWriter 就是这么定义的。"
+    },
+    {
       "title": "组合示例：把这一组用起来",
       "description": "把这一组的东西放在一起：使用方定义接口、实现方隐式实现、编译期检查、接口作参数、类型断言、类型 switch、nil 动态类型。",
       "code": "package main\n\nimport \"fmt\"\n\n// 使用方定义接口\ntype Notifier interface {\n\tNotify(msg string)\n}\n\n// 实现方隐式实现 Notifier\ntype LogNotifier struct{}\n\nfunc (LogNotifier) Notify(msg string) {\n\tfmt.Println(\"[通知]\", msg)\n}\n\nvar _ Notifier = (*LogNotifier)(nil) // 编译期检查\n\nfunc send(n Notifier, msg string) {\n\tn.Notify(msg)\n}\n\nfunc main() {\n\tsend(LogNotifier{}, \"订单已创建\")\n\n\tvar v any = \"键盘\"\n\tif s, ok := v.(string); ok { // 类型断言\n\t\tfmt.Println(\"名称\", s)\n\t}\n\n\tswitch x := v.(type) { // 类型 switch\n\tcase int:\n\t\tfmt.Println(\"整数\", x)\n\tcase string:\n\t\tfmt.Println(\"字符串\", x)\n\tdefault:\n\t\tfmt.Printf(\"其它 %T\\n\", x)\n\t}\n\n\tvar p *int\n\tvar e any = p\n\tfmt.Println(\"接口是 nil 吗？\", e == nil) // false\n}",

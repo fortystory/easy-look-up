@@ -106,7 +106,7 @@
         "解法二：EPOLLEXCLUSIVE（Linux 4.5+）——注册 fd 时带上它，一个事件只唤醒一个等待者；用 EPOLLONESHOT 也能达到类似效果",
         "解法三：架构上别共享 fd——单线程 acceptor 加队列把连接分给工作线程，或像 Go 那样一个 netpoller 管所有连接"
       ],
-      "notes": "常见追问：Go 里有惊群吗？—— goroutine 层面也有类似现象：一个连接把一批等在 channel 上的 goroutine 全唤醒，那是另一类问题，见并发排查分组。常见追问：SO_REUSEPORT 等于负载均衡吗？—— 它是内核按哈希分发，不是轮询，连接分布不均时仍会倾斜。常见错误回答：「加 SO_REUSEADDR 就解决了」——SO_REUSEADDR 只解决端口被 TIME_WAIT 占用，不能消除惊群。"
+      "notes": "常见追问：Go 里有惊群吗？—— goroutine 层面也有类似现象：一个连接把一批等在 channel 上的 goroutine 全唤醒，那是另一类问题。常见追问：SO_REUSEPORT 等于负载均衡吗？—— 它是内核按哈希分发，不是轮询，连接分布不均时仍会倾斜。常见错误回答：「加 SO_REUSEADDR 就解决了」——SO_REUSEADDR 只解决端口被 TIME_WAIT 占用，不能消除惊群。"
     },
     {
       "title": "Go 的 netpoller 是怎么实现 IO 多路复用的？",
@@ -115,7 +115,7 @@
         "代码位置：runtime 里的 netpoll.go（通用逻辑）和 netpoll_epoll.go（Linux 实现），internal/poll 是它对外的封装",
         "底层就是 epoll：runtime 用 epoll_create1 建一个进程级的全局 epoll 实例（所有 P 共享它），每个网络 fd 创建时用 epoll_ctl 注册，事件类型是 EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET",
         "每个 fd 对应一个 pollDesc，里面有两个二进制信号量（rg 和 wg），分别给等读和等写的 goroutine 用；goroutine 阻塞时把自己挂上去并让出 P，而不是占着 OS 线程",
-        "唤醒路径：M 在调度器里找不到活干时会调一次非阻塞的 netpoll（内部是 epoll_wait），拿到就绪 fd 后 netpollready 把对应的 goroutine 从信号量上摘下来塞进 runq 重新调度；必要时用 netpollBreak 往一个 eventfd 写一个数，让阻塞在 epoll_wait 上的 M 立刻返回",
+        "唤醒路径：M 找不到活干时调一次非阻塞的 netpoll（内部 epoll_wait），把就绪 fd 对应的 goroutine 塞进 runq；必要时 netpollBreak 往 eventfd 写一个数，让阻塞的 M 立刻返回",
         "跨平台：Linux 用 epoll，BSD/macOS 用 kqueue，Windows 用 IOCP，各有 netpoll_*.go 实现，对外 API 一致",
         "落到用户态：net.Conn 的 Read/Write 最终走 internal/poll，读之前先 prepareRead，真正 read 拿到 EAGAIN 才 waitRead 挂起，这就是「Go 暴露阻塞 API、底层跑非阻塞加多路复用」的由来"
       ],
@@ -139,7 +139,7 @@
       "description": "这题考动手能力：知道标准库已经是 O_NONBLOCK，也知道底层怎么改。",
       "answer": [
         "标准库 net 内部本来就是 O_NONBLOCK：internal/poll 建 socket 时用 fcntl(F_SETFL) 加上 O_NONBLOCK（internal/poll/sys_cloexec.go），对外却暴露阻塞风格的 Read/Write",
-        "自己操作 fd 时用 syscall.SetNonblock(fd, true)（Unix 平台可用），它内部就是 fcntl(F_GETFL) 取出当前标志、或上 O_NONBLOCK 后 fcntl(F_SETFL) 写回；第三方库 golang.org/x/sys/unix 的 unix.SetNonblock 语义相同，是更推荐的写法",
+        "自己操作 fd 时用 syscall.SetNonblock(fd, true)，内部就是 fcntl 取标志、或上 O_NONBLOCK 再写回；更推荐 golang.org/x/sys/unix 的 unix.SetNonblock",
         "设成非阻塞后，read/write 在数据不够时立刻返回 EAGAIN/EWOULDBLOCK，业务循环要靠 EAGAIN 判断「暂时没数据」而不是当成错误",
         "在 Go 里拿底层 fd 用 net.TCPConn.SyscallConn()，在 raw.Control 回调里拿到 fd 再改标志；fd 会随连接关闭失效，不能缓存到回调外长期使用",
         "注意 accept 出来的新 fd 默认是阻塞的，不会继承监听 fd 的 O_NONBLOCK（Linux 上要么用 accept4 带 SOCK_NONBLOCK，要么自己再设一次；Go 内部就是这么做的）",
@@ -153,11 +153,11 @@
       "title": "什么是零拷贝？sendfile、splice、mmap 各自解决什么问题？",
       "description": "这题要看得出你知不知道「省的是哪一次拷贝、哪一次系统调用」。",
       "answer": [
-        "零拷贝的目标是让数据从内核页缓存直接走到网卡或目标缓冲区，不经过用户态，省掉 2 次拷贝和 2 次系统调用（传统 read + write 一共 4 次上下文切换）",
+        "零拷贝的目标是让数据从内核页缓存直接走到网卡或目标缓冲区，不经过用户态；以 sendfile 对比传统 read+write，省 2 次拷贝、2 次上下文切换和 1 次系统调用",
         "sendfile(out_fd, in_fd, offset, count)：在内核态把 in_fd（普通文件）的页直接交给 out_fd（socket）的发送缓冲区，用户态零参与；Linux 3.1 之后 in_fd 也可以是 socket",
         "splice：在两个 pipe 之间搬运数据，也能 socket→pipe、pipe→socket，常用于零拷贝代理（Nginx 的 proxy_pass 就用过 splice 方案）；代价是要额外建管道",
         "mmap：把文件映射进虚拟内存，用户态直接读写映射区，省掉 read/write 系统调用和一次缓冲区拷贝；但数据仍要在页缓存和用户态之间走，严格说不算完全零拷贝，还有缺页开销",
-        "其他方案：MSG_ZEROCOPY（Linux 4.1+ 的 TCP 场景）、O_DIRECT 绕过页缓存、io_uring 的固定缓冲区",
+        "其他方案：MSG_ZEROCOPY（Linux 4.14+ 的 TCP 场景）、O_DIRECT 绕过页缓存、io_uring 的固定缓冲区",
         "Go 里的用法：io.Copy(dst, src) 在 dst 是 *net.TCPConn、src 是 *os.File 且平台是 Linux 时，底层会走 internal/poll 的 sendfile（net/sendfile.go 调 poll.SendFile），不用自己写"
       ],
       "notes": "常见追问：零拷贝是不是一次内存拷贝都没有了？—— sendfile 内部仍有内核页的处理，只是没有用户态参与的拷贝。常见追问：Go 怎么用 splice？—— 标准库没直接暴露，一般用 x/sys/unix 自己封装。常见追问：TLS 场景还能用 sendfile 吗？—— 数据要加密，通常得先在用户态解密，零拷贝链路会断。常见错误回答：把 mmap 说成「完全没有拷贝」。"
@@ -200,6 +200,19 @@
         "大量并发连接时标准做法就是非阻塞 connect 加 epoll；Go 用的是另一种路径：内部把 socket 设成非阻塞，靠 netpoller 等连接完成，对外仍是阻塞风格（internal/poll 的 dial 就是先等可写再查 SO_ERROR）"
       ],
       "notes": "常见追问：EINPROGRESS 和 EALREADY 有什么区别？—— EINPROGRESS 是首次连接还在进行，EALREADY 是同一个 fd 上重复发起 connect。常见追问：为什么可写不代表连接成功？—— 出错状态下 socket 同样报告可写，必须查 SO_ERROR。常见追问：连接超时该关 fd 还是留着？—— 关掉，不然会泄露；Go 的 net.Dialer 靠 context 的 deadline 自动收尾。常见错误回答：看到 EPOLLOUT 就当连接成功。"
+    },
+    {
+      "title": "L4 和 L7 负载均衡有什么区别？健康检查、会话保持和 X-Forwarded-For 怎么处理？",
+      "description": "四层和七层的选型决定了健康检查能看到什么、会话怎么保持、真实 IP 怎么传。",
+      "answer": [
+        "L4 只看 IP、端口和 TCP/UDP 连接，转发快、不改应用层内容，适合数据库、MQTT、长连接和非 HTTP 协议；L7 解析 HTTP，能按 Host/Path/Header 路由，还能做 TLS 终止、改写和缓存",
+        "健康检查分层：L4 只探端口能不能建连，端口通不代表业务可用；L7 用 GET /healthz 看状态码和响应体，检查间隔、超时和连续失败阈值要按业务定",
+        "会话保持：L4 常用源 IP 哈希，NAT 后大量用户共享出口 IP 会倾斜；L7 可以插 sticky cookie 或按 header 做一致性哈希，更可控，但最好把会话外置到 Redis",
+        "X-Forwarded-For 是逗号分隔的链路，每经过一个可信代理追加一个地址；应用只能信任已知代理层，并从右往左跳过可信代理，取第一个不可信地址",
+        "Nginx 里用 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;，再用 set_real_ip_from + real_ip_header X-Forwarded-For 让 $remote_addr 变成真实客户端 IP；不配 real_ip 模块拿到的就是上一跳代理地址",
+        "L7 代理会终止客户端连接再向后端新建连接，要配 upstream keepalive 和合理的 proxy_read_timeout；L4 可以透传 TLS，但拿不到 HTTP 信息，排障只能靠连接五元组和抓包"
+      ],
+      "notes": "常见追问：X-Forwarded-For 为什么可以伪造？——客户端可以自带这个头，只有最外层可信代理追加的那一段才可信。常见追问：L4 能不能做会话保持？——能，靠源 IP 哈希，但 NAT 后不均匀。常见错误回答：「L7 一定比 L4 好」——L7 功能多但更耗 CPU、要终止连接，纯 TCP 或超低延迟场景 L4 更合适。"
     }
   ]
 }

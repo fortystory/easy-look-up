@@ -13,7 +13,7 @@
         "根本防线是按输出上下文编码：HTML 正文、HTML 属性、JS 字符串、URL 各用对应的转义方案，模板引擎默认自动转义就别自己拼 HTML",
         "前端改用 textContent 和 DOM API 替代 innerHTML、eval；服务端再加 CSP 做纵深防御，会话 Cookie 设 HttpOnly 降低 cookie 被偷后的损失"
       ],
-      "notes": "常见追问：怎么确认有没有 XSS？——别在生产环境手点，用静态分析加专门的扫描工具，回溯参数从入口到渲染点的完整链路。常见追问：innerHTML 为什么危险？——它会解析并执行里面的 script 标签和事件属性。常见错误回答：「CSP 能彻底防住 XSS」——CSP 只是第二道防线，脚本一旦在同源上下文里跑起来，CSP 未必拦得住。"
+      "notes": "常见追问：怎么确认有没有 XSS？——别在生产环境手点，用静态分析加专门的扫描工具，回溯参数从入口到渲染点的完整链路。常见追问：innerHTML 为什么危险？——它会解析 HTML，插入的 script 标签不会执行，但事件属性（onerror 等）和 javascript: 链接会执行。常见错误回答：「CSP 能彻底防住 XSS」——CSP 只是第二道防线，脚本一旦在同源上下文里跑起来，CSP 未必拦得住。"
     },
     {
       "title": "CSP（Content-Security-Policy）是什么？怎么配？",
@@ -29,17 +29,17 @@
       "notes": "常见追问：nonce 怎么生成？——每次响应都用密码学随机数生成，绝不能复用。常见追问：script-src 列白名单域名够吗？——攻击者只要能往白名单域名下上传内容就能绕过，strict-dynamic 更稳。常见错误回答：「把 script-src 设成 'unsafe-inline' 就不影响页面」——那等于没配 CSP。"
     },
     {
-      "title": "CSRF 是什么？有哪些防御手段？",
-      "description": "考的是能不能说清成立前提，以及知道 token、SameSite、Origin 校验是三条并行的防线。",
+      "title": "CSRF 是什么？它和 XSS 有什么区别和联系？",
+      "description": "先讲 CSRF 成立的前提和防线，再从攻击代码位置、危害和修复位置对比 XSS。",
       "answer": [
-        "CSRF（跨站请求伪造）是攻击者诱导已登录用户的浏览器自动带上 Cookie 向目标站点发请求，借用户的登录态完成操作，攻击代码本身不在目标站点里",
-        "成立前提是浏览器会自动附带凭据：Cookie 不受同源策略约束，跨站表单发起的 POST 能以受害者身份打到服务器",
-        "Token 防护：表单里带服务端生成的随机 CSRF token（或用会话密钥 HMAC 签出来的 token），服务端校验不匹配就拒绝，token 要与会话绑定",
-        "SameSite：把会话 Cookie 设成 Lax 或 Strict，跨站请求不再携带 Cookie，从根上断掉这条路，现代浏览器（Chrome 80 起、Firefox 96 起、Safari 13.1 起）默认按 Lax 处理",
-        "校验 Origin/Referer：写操作要求请求头 Origin 等于本站 origin，Referer 作为兜底；GET 不校验，因为图片、预取都可能带 GET 触发",
-        "最彻底的方案是不用 Cookie 认证，把 token 放 Authorization 头，浏览器不会自动附带；代价是 XSS 能读到它，所以 XSS 防护依然不能省"
+        "CSRF 是攻击者诱导已登录用户的浏览器自动带 Cookie 向目标站点发请求，借用户的登录态完成操作，攻击代码本身不在目标站点",
+        "成立前提是浏览器会自动附带凭据：Cookie 不受同源策略约束，跨站表单就能以受害者身份发 POST",
+        "防御三条并行：CSRF token（与会话绑定）、SameSite=Lax/Strict、校验 Origin/Referer；最彻底的是改用 Authorization 头而不是 Cookie",
+        "XSS 是把脚本注入目标站点，在受害者浏览器里以目标站点的源执行；CSRF 的攻击代码在第三方站点，只借了登录凭证",
+        "危害和触发不同：XSS 能读页面、偷 token、发任意请求；CSRF 只能做受害者本来有权限做的操作，且需要受害者已登录",
+        "两者会互相加成：XSS 能读走 CSRF token 或直接发同源请求，绕过 CSRF 防护；所以 XSS 是更根本的问题，修复也要分别落在渲染层和后端中间件"
       ],
-      "notes": "常见追问：只校验 Referer 行不行？——Referer 可能被隐私策略、代理或 referrer-policy 剥掉，只能当辅助。常见追问：为什么 GET 不校验 Origin？——跨站图片和预取都会带 GET 触发，校验了会误伤且挡不住。常见错误回答：「加了 CORS 就不用管 CSRF」——表单是简单请求，浏览器照样直接发出去。"
+      "notes": "常见追问：只校验 Referer 行不行？——可能被隐私策略或代理剥掉，只能当辅助；「加了 CORS 还要防 CSRF 吗」——要，表单是简单请求，CORS 拦不住；「有了 CSRF 防护还要防 XSS 吗」——要，XSS 能绕过 CSRF。常见错误回答：「CSRF 危害更大因为能直接转账」——转账一般还有二次确认和风控，XSS 的影响面更广。"
     },
     {
       "title": "SameSite 有哪几个取值？Cookie 的安全属性该怎么配？",
@@ -55,43 +55,17 @@
       "notes": "常见追问：SameSite 和跨子域是什么关系？——SameSite 看的是站（可注册域），a.example.com 和 b.example.com 属于同站；但它们不同源，CORS 仍要单独配。常见追问：Lax 挡得住所有 CSRF 吗？——挡不住 POST 表单之外的绕过，尤其是不认 SameSite 的老浏览器，所以还要配 token。常见错误回答：「SameSite=Lax 等于没有跨站限制」——顶级导航的 GET 是被明确放行的。"
     },
     {
-      "title": "CORS 是什么？预检请求（OPTIONS）在做什么？",
-      "description": "考的是能不能说清浏览器同源策略之外的放行机制，以及预检到底在问什么。",
+      "title": "同源策略具体限制什么？CORS 又是怎么放行的？",
+      "description": "把「限制读取、不限制发送」和「CORS 是服务端授权」两件事讲清，别和 CSRF 混在一起。",
       "answer": [
-        "CORS（跨源资源共享）是 W3C 标准，由服务端用响应头告诉浏览器「哪些来源的跨源请求允许读取响应」，是浏览器强制的跨源读授权机制",
-        "常用响应头：Access-Control-Allow-Origin、Access-Control-Allow-Credentials、Access-Control-Allow-Methods、Access-Control-Allow-Headers、Access-Control-Max-Age、Access-Control-Expose-Headers",
-        "预检 OPTIONS：浏览器在真正发跨源请求前先发一个 OPTIONS 探路，问「这个方法、这个来源、这些头允不允许」，拿到允许的答复后才发真正的请求",
-        "触发预检的条件：方法不是 GET/HEAD/POST、带了自定义请求头、Content-Type 不是 application/x-www-form-urlencoded、multipart/form-data、text/plain 这三种简单类型",
-        "简单请求不预检、直接发，所以表单伪造的 POST 根本不会触发 CORS 检查，这是 CORS 挡不住 CSRF 的根本原因",
-        "预检响应要写 Access-Control-Max-Age 让浏览器缓存一段时间，避免每个请求都探一次；回显 Origin 时必须同时写 Vary: Origin，否则 CDN 缓存会把某个来源的许可串给别的来源"
+        "同源要求协议、主机、端口三者全同；不是同源就默认隔离，读不到对方的 DOM、存储和 XHR/fetch 响应",
+        "同源策略限制的是读取不是发送：跨源图片、脚本、表单都能加载或提交，只是 JS 拿不到响应内容",
+        "CORS 是服务端用响应头做的跨源读授权：Access-Control-Allow-Origin 等头告诉浏览器哪些来源可以读，浏览器只负责执行",
+        "简单请求（GET/HEAD/POST 加常见 Content-Type、不带自定义头）直接发；非简单请求先发 OPTIONS 预检，服务端回 Allow-Methods 和 Allow-Headers 才放行",
+        "带 Cookie 时前端要设凭据（XHR 的 withCredentials 或 fetch 的 credentials: include），服务端必须回具体来源的 Allow-Origin 并带 Allow-Credentials: true，不能用 *",
+        "CORS 挡不住 CSRF：表单提交是简单请求，浏览器照样发出去；把 CORS 配成 * 或无条件回显 Origin 反而会泄露带凭据的响应"
       ],
-      "notes": "常见追问：带 Cookie 的跨源请求要满足什么条件？——响应要有 Access-Control-Allow-Credentials: true，且 Allow-Origin 不能是 *，必须是具体来源。常见追问：预检请求本身带 Cookie 吗？——不带，预检是无凭据的。常见错误回答：「Allow-Origin: * 配 Allow-Credentials: true 最省事」——规范禁止这种组合，浏览器会直接拒绝响应。"
-    },
-    {
-      "title": "CORS 和 CSRF 有什么区别？",
-      "description": "这题专门考两者的方向：一个是管读，一个是防写。",
-      "answer": [
-        "CORS 管的是「跨源能不能读取响应」，CSRF 防的是「跨站能不能用别人身份发起写操作」，方向相反",
-        "CORS 是服务端给浏览器的授权规则，靠 Access-Control-Allow-Origin 等响应头表达；CSRF 利用的是浏览器自动带 Cookie 这个行为",
-        "CORS 拦的是读：不合规的跨源响应浏览器不给 JS 读；而 CSRF 的破坏力体现在写，攻击者不需要读响应，所以 CORS 挡不住表单发起的简单请求",
-        "反过来，CSRF 的防御手段（token、SameSite、Origin 校验）也不影响合法跨源 API 的读取，该放行的接口照样放行",
-        "两者都要做：CORS 保证接口数据不被任意站点读取，CSRF 防护保证用户登录态不被跨站滥用",
-        "一个典型错误配置是把 CORS 放开成 *，或者无条件回显 Origin 又带 Allow-Credentials，这比不配更危险，等于把带凭据的跨源读取送给了任何站点"
-      ],
-      "notes": "常见追问：CORS 配错会造成什么后果？——任意站点能带用户 Cookie 读取接口数据，等于数据泄露。常见追问：预检失败会怎样？——浏览器直接不发真正的请求，服务端连真实请求都看不到。常见错误回答：「CORS 是限制服务端之间调用的」——那是网关和服务治理的事，CORS 只作用于浏览器。"
-    },
-    {
-      "title": "XSS 和 CSRF 有什么区别？",
-      "description": "考的是能不能从攻击代码在哪、危害面、防御手段三个维度把两者拆开。",
-      "answer": [
-        "XSS 是把代码注入进目标站点，攻击代码在受害者浏览器里以目标站点的源执行；CSRF 的攻击代码在第三方站点，只是借了受害者的登录凭证",
-        "危害不同：XSS 能读页面数据、偷 token、代替用户发任意请求；CSRF 通常只能做受害者本来就有权限做的操作，比如确认转账、改密码",
-        "触发条件不同：XSS 需要有注入点（内容渲染、URL 参数进 DOM）；CSRF 需要受害者已登录，且请求会自动带 Cookie",
-        "防御手段不同：XSS 靠输出编码、避开危险 DOM API、CSP；CSRF 靠 token、SameSite、Origin/Referer 校验",
-        "两者会互相加成：XSS 能读走 CSRF token，也能直接以受害者身份发同源请求，等于绕过全部 CSRF 防护，所以 XSS 是更根本的问题",
-        "修复位置也不同：XSS 通常在前端渲染逻辑里修，后端补编码和安全响应头；CSRF 通常在后端中间件里统一校验"
-      ],
-      "notes": "常见追问：有了 CSRF 防护还要防 XSS 吗？——要，XSS 能绕过 CSRF 防护。常见追问：CSRF 能演变成 XSS 吗？——单靠 CSRF 不能，它没法往页面注入内容。常见错误回答：「CSRF 危害更大因为能直接转账」——转账类操作一般还有二次确认和业务风控，而 XSS 的持久化影响面更广。"
+      "notes": "常见追问：预检请求带 Cookie 吗？——不带，预检是无凭据的；「Allow-Origin: * 配 Allow-Credentials: true 行不行」——规范禁止，浏览器直接拒绝；「回显 Origin 要注意什么」——同时写 Vary: Origin，否则 CDN 会把许可串给别的来源。常见错误回答：「CORS 是限制服务端之间调用的」——它只作用于浏览器。"
     },
     {
       "title": "SQL 注入怎么防？",
@@ -196,6 +170,19 @@
         "敏感信息绝不能放前端：JS 包、source map、localStorage 全在用户机器上，所谓「藏起来」只是障眼法，打开 DevTools 就能拿走；密钥和密码只能待在服务端，前端只拿范围受限、短时效的令牌，构建时也要扫描产物防止 .env 被打进包里"
       ],
       "notes": "常见追问：怎么系统地排查？——按攻击面做一轮安全评审加依赖漏洞扫描（CVE），再补上 SAST/DAST。常见追问：前端藏个密钥算安全吗？——不算，构建产物人人可解，NEXT_PUBLIC_ 这类公开前缀会直接打进包里。常见错误回答：「上了 WAF 就覆盖了这些攻击面」——WAF 挡的是已知特征，业务逻辑漏洞和越权它挡不住。"
+    },
+    {
+      "title": "OAuth2 授权码流程是怎样的？PKCE 解决了什么问题？",
+      "description": "授权码模式是 OAuth2 最常用的流程，PKCE 则是公共客户端必须补上的那一环。",
+      "answer": [
+        "第一步把浏览器重定向到授权服务器 /authorize，带 response_type=code、client_id、redirect_uri、scope 和随机 state；回跳时校验 state，防 CSRF",
+        "用户在授权服务器登录并同意后，浏览器带着一次性 code 回到 redirect_uri；code 短期有效、只能用一次，并绑定 client 和 redirect_uri",
+        "后端用 code + client_id + client_secret 到 /token 换 access token（需要时再拿 refresh token）；client_secret 只能放后端，不能进浏览器",
+        "公共客户端（SPA、移动端）没有 secret，用 PKCE：随机生成 code_verifier（43–128 字符），授权请求带 code_challenge=BASE64URL(SHA256(verifier)) 和 code_challenge_method=S256，换 token 时再带原 verifier",
+        "PKCE 防的是授权码被截获后冒用；它不能替代 state（防 CSRF），也不能把公共客户端变成机密客户端",
+        "OIDC 在 OAuth2 之上加身份认证：scope 带 openid，额外返回 ID Token（JWT），用 JWKS 验签；只拿身份时用 OIDC，不要把 access token 当身份凭证"
+      ],
+      "notes": "常见追问：state 和 PKCE 能互相替代吗？——不能，state 防 CSRF，PKCE 防授权码拦截，两个都要。常见追问：授权码为什么不能让前端换 token？——机密客户端的前端换会暴露 client_secret；公共客户端用 PKCE 可以在前端换，但没有 secret 保护。常见错误回答：「PKCE 是加密 token 的」——PKCE 只证明换 token 的是发起授权请求的那个客户端。"
     }
   ]
 }

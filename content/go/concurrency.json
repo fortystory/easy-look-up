@@ -101,6 +101,27 @@
       "notes": "常见原因：往没人接收的 channel 发送、接收方等一个永远不会来的数据、忘记 close 导致 range 一直等。避免办法：给每个 goroutine 一条明确的退出路径，比如用 context 取消或者 select 加超时分支，不要让它无限期地等下去。"
     },
     {
+      "title": "用 context 取消 goroutine",
+      "description": "后台 goroutine 要能被外面叫停时，用 context.WithCancel 派生出 ctx，goroutine 里监听 ctx.Done()，调用 cancel() 就退出。",
+      "code": "ctx, cancel := context.WithCancel(context.Background())\ndefer cancel() // 提前返回也要调用，否则 context 泄漏\n\ngo func() {\n\t<-ctx.Done() // 取消时 Done 返回的 channel 被关闭\n\tfmt.Println(\"收到取消信号，退出\")\n}()\n\ncancel()",
+      "lang": "go",
+      "notes": "cancel 必须调用，通常紧跟 defer cancel()。取消是协作式的：goroutine 不检查 ctx.Done()，谁也停不了它。ctx 要作为函数第一个参数往下传，不要存进结构体。"
+    },
+    {
+      "title": "sync.Once 只执行一次",
+      "description": "初始化只能做一次、又要并发安全时用 sync.Once：无论多少个 goroutine 调 Do，函数都只执行一次，其余调用等它做完就返回。",
+      "code": "var once sync.Once\nvar config map[string]string\n\nload := func() {\n\tconfig = map[string]string{\"env\": \"dev\"}\n}\n\nonce.Do(load)\nonce.Do(load) // 第二次不会再执行\nfmt.Println(config[\"env\"])",
+      "lang": "go",
+      "notes": "并发调用 Do 时，其他 goroutine 会阻塞到第一次执行完。f 里 panic 之后 Once 仍视为已执行，后续调用不会再跑。f 里不要再调用同一个 once.Do，会死锁。"
+    },
+    {
+      "title": "sync/atomic 原子计数",
+      "description": "多个 goroutine 只对一个整数做加减、又不想为此加锁时，用 sync/atomic 的原子操作，单次读写不会被别的 goroutine 插进来。",
+      "code": "var hits atomic.Int64\nhits.Add(1)\nhits.Add(1)\nfmt.Println(hits.Load()) // 2",
+      "lang": "go",
+      "notes": "原子操作只保证单个变量上的单次操作不可分割，两步组合仍要加锁或用 CompareAndSwap。atomic.Int64 是 Go 1.19 加的，零值可用，但不能拷贝——别按值传参或赋值给另一个变量。"
+    },
+    {
       "title": "组合示例：并发处理一批任务",
       "description": "把这一组的东西放在一起：goroutine 并行干活、WaitGroup 等全部结束、带缓冲的 channel 传数据、close 加 range 收尾、Mutex 保护共享计数、select 等信号。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n\t\"time\"\n)\n\nfunc greet(name string) {\n\tfmt.Println(\"你好，\", name)\n}\n\nfunc main() {\n\tvar wg sync.WaitGroup\n\tvar mu sync.Mutex\n\ttotal := 0\n\n\tjobs := make(chan int, 3) // 带缓冲的 channel\n\tresults := make(chan string, 3)\n\n\t// 两个 worker 并行处理任务\n\tfor id := 1; id <= 2; id++ {\n\t\twg.Add(1)\n\t\tgo func(id int) {\n\t\t\tdefer wg.Done()\n\t\t\tfor job := range jobs {\n\t\t\t\tresults <- fmt.Sprintf(\"worker %d 完成任务 %d\", id, job)\n\t\t\t\tmu.Lock()\n\t\t\t\ttotal++\n\t\t\t\tmu.Unlock()\n\t\t\t}\n\t\t}(id)\n\t}\n\n\tfor job := 1; job <= 3; job++ {\n\t\tjobs <- job\n\t}\n\tclose(jobs) // worker 的 range 收到关闭信号才会结束\n\n\twg.Wait()\n\tclose(results)\n\n\tfor msg := range results {\n\t\tfmt.Println(msg)\n\t}\n\tfmt.Println(\"共完成\", total, \"个任务\")\n\n\t// select：等完成信号，最多等 1 秒\n\tdone := make(chan struct{})\n\tgo func() {\n\t\ttime.Sleep(100 * time.Millisecond)\n\t\tclose(done)\n\t}()\n\tselect {\n\tcase <-done:\n\t\tfmt.Println(\"收到完成信号\")\n\tcase <-time.After(time.Second):\n\t\tfmt.Println(\"超时了\")\n\t}\n\n\tgo greet(\"并发世界\")\n\ttime.Sleep(50 * time.Millisecond)\n}",

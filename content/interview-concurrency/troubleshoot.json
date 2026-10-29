@@ -4,6 +4,7 @@
   "entries": [
     {
       "title": "怎么发现 goroutine 泄露？pprof 的 goroutine profile 怎么看？",
+      "description": "goroutine 泄露的发现手段，pprof 是第一入口。",
       "answer": [
         "先看趋势：把 runtime.NumGoroutine() 做成监控指标，只涨不回、且和请求量不成正比，就是泄露的信号",
         "再抓快照：pprof 的 goroutine profile 是全量栈，不是采样，一个不漏地列出当前所有 goroutine 卡在哪一行",
@@ -12,10 +13,11 @@
         "典型泄露特征：栈顶停在 chan send、chan receive、net.(*persistConn).readLoop 或 sync.(*WaitGroup).Wait，且同一栈的 goroutine 数持续增长",
         "差分法：隔几秒抓两份 profile，用 go tool pprof -base 做差，多出来的那批 goroutine 就是新增的泄露"
       ],
-      "notes": "常见追问：goroutine profile 是采样还是全量？——全量快照，线上可以直接抓；「debug=1 和 debug=2 有什么区别」——1 是按栈聚合计数，2 是逐个 goroutine 打印完整栈和创建位置；「抓 profile 本身有开销吗」——有，采集要短暂 stop the world，见「为什么用 go 抓 goroutine 栈会卡住」那题。"
+      "notes": "常见追问：goroutine profile 是采样还是全量？——全量快照，线上可以直接抓；「debug=1 和 debug=2 有什么区别」——1 是按栈聚合计数，2 是逐个 goroutine 打印完整栈和创建位置；「抓 profile 本身有开销吗」——有，采集要短暂 stop the world，高频抓会拖垮延迟，要控制频率。常见错误回答：goroutine 数涨了就是泄露——流量上涨也会涨，要看是否回落到基线。"
     },
     {
       "title": "goroutine 泄露常见的来源有哪些？",
+      "description": "泄露的常见来源分类，考排查经验。",
       "answer": [
         "channel 没人接收：往无缓冲 channel 发送、或往缓冲区已满的 channel 发送，发送方就永久阻塞；只 close 不消费也会留下永远等不到的接收方",
         "HTTP 响应体没关：resp.Body 没有 Close() 时连接不归还连接池，transport 的 readLoop goroutine 卡在读上，连接数和 goroutine 数一起涨",
@@ -26,10 +28,11 @@
       ],
       "code": "ch := make(chan int) // 无缓冲 channel：没人接收时，发送方永久阻塞\ngo func() {\n\tch <- 1 // 发送方卡在这里，就是最常见的 goroutine 泄露\n}()",
       "lang": "go",
-      "notes": "常见追问：响应体不关具体卡在哪？——net/http.(*persistConn).readLoop 等着下一个请求或等连接关闭；「怎么批量发现这类问题」——goroutine profile 按栈聚合，看 readLoop 数量是不是和并发请求数同步涨；「time.After 到底泄不泄」——Go 1.23 前会堆在 runtime 的 timer heap 里，1.23 后未被引用的 Timer 可回收，但 time.After 仍持有到触发。"
+      "notes": "常见追问：响应体不关具体卡在哪？——net/http.(*persistConn).readLoop 等着下一个请求或等连接关闭；「怎么批量发现这类问题」——goroutine profile 按栈聚合，看 readLoop 数量是不是和并发请求数同步涨；「time.After 到底泄不泄」——Go 1.23 前会堆在 runtime 的 timer heap 里，1.23 后未被引用的 Timer 可回收，但 time.After 仍持有到触发。常见错误回答：goroutine 泄露都是 channel 引起的——WaitGroup 漏 Done、Body 没关、Ticker 没停都算。"
     },
     {
       "title": "time.Timer 不 Stop、context 不取消，会造成什么后果？",
+      "description": "Timer 和 context 不清理的后果。",
       "answer": [
         "time.NewTimer 创建的定时器在触发前挂在 runtime 的 timer heap 上，不 Stop 就一直占着堆内存和唤醒开销",
         "Go 1.23 改了定时器管理：只要程序不再引用这个 Timer，它就能被 GC 回收，不再无限堆积；用 time.After 写出来的定时器仍然要等到触发才释放",
@@ -40,48 +43,39 @@
       ],
       "code": "ctx, cancel := context.WithCancel(context.Background())\ndefer cancel() // 派生了就必须取消，否则等 ctx.Done() 的 goroutine 全部滞留\ngo func() {\n\t<-ctx.Done() // 永久等取消信号\n}()",
       "lang": "go",
-      "notes": "常见追问：Go 1.23 之后还要写 timer.Stop() 吗？——不再引用的 Timer 会被回收，但显式 Stop 仍然能省掉一次唤醒；「defer cancel() 会不会太早释放」——defer 在函数返回时执行，作用域刚好；「context 能复用吗」——不能复用已经取消的 ctx，每次派生都要新的。"
+      "notes": "常见追问：Go 1.23 之后还要写 timer.Stop() 吗？——不再引用的 Timer 会被回收，但显式 Stop 仍然能省掉一次唤醒；「defer cancel() 会不会太早释放」——defer 在函数返回时执行，作用域刚好；「context 能复用吗」——不能复用已经取消的 ctx，每次派生都要新的。常见错误回答：Timer 不 Stop 只是浪费一点内存——它还会让定时器堆增长，高并发下拖慢运行时。"
     },
     {
-      "title": "Go 服务卡住不动、报 all goroutines are asleep - deadlock!，怎么排查？",
+      "title": "all goroutines are asleep - deadlock! 怎么判定？打印出来的栈怎么读？",
+      "description": "全局死锁的判定和栈阅读。",
       "answer": [
-        "这条 fatal error 是运行时在「所有 goroutine 都阻塞、没有任何 goroutine 可运行、也没有别的唤醒源」时主动报出的，属于死锁判定",
-        "读栈先看每个 goroutine 头部的状态标记：[chan send]、[chan receive]、[select]、[semacquire]、[sync.Mutex.Lock] 各自代表卡在哪类同步原语上",
-        "再找环：A 卡在等 B 持有的锁、B 卡在等 C 的 channel、C 又在等 A 持有的锁——闭环就是死锁",
-        "最常见的成因是加锁顺序不一致：两个 goroutine 分别按 mu1→mu2 和 mu2→mu1 的顺序加锁",
-        "注意「不报错但卡死」的情况：只要还有 goroutine 在跑（忙循环），或者有定时器、网络 I/O 在等，运行时不会报 deadlock，只能靠抓栈发现",
-        "抓栈手段：kill -QUIT 打印所有 goroutine 栈，或抓 pprof 的 goroutine profile 做差分"
+        "这条 fatal error 是运行时在「所有 goroutine 都阻塞、没有可运行的 goroutine、也没有定时器或系统调用等唤醒源」时主动报出的，属于全局死锁判定",
+        "读栈先看每个 goroutine 头部的状态：[chan send]、[chan receive]、[select]、[semacquire]、[sync.Mutex.Lock] 各自代表卡在哪类同步原语上",
+        "再找环：A 卡在等 B 持有的锁、B 卡在等 C 的 channel、C 又在等 A 持有的锁——闭环就是死锁；没人服务的那个等待往往就是根因",
+        "最常见成因是加锁顺序不一致：两个 goroutine 分别按 mu1→mu2 和 mu2→mu1 的顺序加锁",
+        "注意「不报错但卡死」：只要还有 goroutine 在跑（忙循环），或者有定时器、网络 I/O 在等，运行时不会报 deadlock，只能靠抓栈发现",
+        "抓栈手段：kill -QUIT 打印所有 goroutine 栈，或抓 pprof 的 goroutine profile 做差分；成百上千个同状态 goroutine 说明是连锁阻塞，不是单个死锁点"
       ],
       "code": "// 唯一的 goroutine 往一个没人收的 channel 发送：永久阻塞，运行时判定为死锁\nch := make(chan int)\nch <- 1",
       "lang": "go",
-      "notes": "常见追问：all goroutines are asleep 一定是真死锁吗？——是运行时的判定，但业务上可能只是「都在等一个不会来的信号」，本质还是推不动；「为什么程序卡了却没报这个错」——还有 goroutine 在运行或等待外部事件，达不到全阻塞的条件；「怎么预防」——统一加锁顺序、给等待加超时兜底、用带 context 的 channel。"
-    },
-    {
-      "title": "all goroutines are asleep - deadlock! 打印出来的栈该怎么读？",
-      "answer": [
-        "每段栈前面有一行 goroutine N [状态]:，状态直接告诉你它卡在哪种等待上：chan send、chan receive、select、semacquire、sync.Mutex.Lock、IO wait",
-        "栈底部的那个 goroutine 多半是根因：它是一个没人服务的等待，比如往没人收的 channel 发送；上面那些是被它拖累的",
-        "把每个 goroutine 等待的资源（某把锁、某个 channel）和「谁正持有它」对上，环就出来了",
-        "注意 goroutine 数量：栈里出现成百上千个同样状态的 goroutine，说明是惊群式的连锁阻塞，不是单个死锁点",
-        "栈里的 runtime.chanrecv、runtime.chansend、runtime.semacquire 这类是运行时函数，只说明阻塞类型，真正的业务代码在它们下面一层",
-        "看到 [select] 说明卡在多路选择上：往回看 select 的每个 case，判断是哪个 channel 永远不会有值"
-      ],
-      "notes": "常见追问：栈里全是 runtime.xxx 怎么看？——runtime 函数只是阻塞点，业务代码在其上一层；「一个 goroutine 都没打印说明什么」——说明不是死锁，而是没崩但慢；「怎么确认是锁顺序问题」——把两边的加锁顺序列出来对比就能看出来。"
+      "notes": "常见追问：all goroutines are asleep 一定是真死锁吗？——是运行时的全阻塞判定，但业务上可能只是都在等一个不会来的信号；为什么程序卡了却没报这个错——还有 goroutine 在运行或等待外部事件；栈里全是 runtime.xxx 怎么看——那是阻塞点，业务代码在上一层。常见错误回答：程序卡住但没报 deadlock 就不是死锁——还有 goroutine 在跑或等外部事件时运行时不会判定；或者以为这个报错能发现所有死锁——它只覆盖「全员睡着」这一种。"
     },
     {
       "title": "锁竞争怎么发现？pprof 的 mutex profile 有什么用？",
+      "description": "锁竞争的发现方式和 mutex profile 的局限。",
       "answer": [
         "mutex profile 记录的是同步原语上的阻塞：谁在等、等了多久、等待时栈在哪，是找锁竞争的第一手材料",
         "它默认不采样，要先打开：runtime.SetMutexProfileFraction(rate)，rate=1 记录全部竞争，线上通常设成 1/N 抽样",
         "开启后从 /debug/pprof/mutex 抓，或者用 pprof.Lookup(\"mutex\") 写文件，再用 go tool pprof -top mutex.out 分析",
         "看 delay 累计最高的栈：那是竞争最激烈的临界区；同一个栈的 count 很大，说明很多 goroutine 在同一把锁上排队",
-        "mutex profile 里有两类样本：等锁时间（delay）和持锁时间（hold）——delay 高是有人抢，hold 高说明临界区太长",
+        "mutex profile 只有两类样本：竞争次数（contentions）和等锁时间（delay）；它不记录持锁时间，想知道临界区持锁多久要用 trace 或自己打点",
         "配套还有 block profile（runtime.SetBlockProfileRate），它记录 goroutine 在 channel、锁等阻塞点上的阻塞时长，覆盖面比 mutex profile 更广"
       ],
-      "notes": "常见追问：mutex profile 是采样吗？——是，所以没出现在 profile 里不等于没有竞争；「block 和 mutex profile 什么区别」——block 管所有阻塞点（含 channel），mutex 只管锁；「采样率怎么选」——排查时用 1 全采，上线再降到 1/100；「SetMutexProfileFraction 在哪调」——main 里启动早期设置就行。"
+      "notes": "常见追问：mutex profile 是采样吗？——是，所以没出现在 profile 里不等于没有竞争；「block 和 mutex profile 什么区别」——block 管所有阻塞点（含 channel），mutex 只管锁；「采样率怎么选」——排查时用 1 全采，上线再降到 1/100；「SetMutexProfileFraction 在哪调」——main 里启动早期设置就行。常见错误回答：mutex profile 能看出持锁时间——它只记竞争次数和等锁时间，持锁时长要靠 trace。"
     },
     {
       "title": "CPU 打满怎么排查？top 和火焰图分别看什么？",
+      "description": "CPU 打满的排查路径。",
       "answer": [
         "先定位到进程和线程：top -H -p <pid> 看线程级 CPU，占用最高的线程名如果是 runtime.mcall、runtime.mallocgc、runtime.gcBgMarkWorker，多半是 GC 在抢 CPU；是业务函数才说明真有热点",
         "把线程和 goroutine 对上：记下高 CPU 线程的 TID，kill -QUIT <pid> 打印所有 goroutine 栈，在栈里按 goroutine id 找到对应的那一个，就知道是哪个请求在烧 CPU",
@@ -90,10 +84,11 @@
         "区分业务消耗和 GC 消耗：pprof 里 runtime.gcBgMarkWorker、runtime.mallocgc 占比高，说明分配太频繁或堆在涨，要转去看内存而不是继续找业务热点",
         "CPU profile 本身有明显开销（通常在 5% 量级），别在高 QPS 的生产实例上长时间采集，也别在所有实例上一起开"
       ],
-      "notes": "常见追问：top 里线程数很多正常吗？——Go 会用多个 OS 线程跑 goroutine，线程多不等于有问题；「火焰图横轴代表什么」——横轴是采样占比（越宽越热），纵轴是调用栈深度；「CPU 高一定是业务代码吗」——不一定，GC、正则回溯、同步写日志都可能是元凶；「pprof 抓不到瞬时尖峰怎么办」——profile?seconds=30 只覆盖窗口期，尖峰要靠更长采样或 exec 采样。"
+      "notes": "常见追问：top 里线程数很多正常吗？——Go 会用多个 OS 线程跑 goroutine，线程多不等于有问题；「火焰图横轴代表什么」——横轴是采样占比（越宽越热），纵轴是调用栈深度；「CPU 高一定是业务代码吗」——不一定，GC、正则回溯、同步写日志都可能是元凶；「pprof 抓不到瞬时尖峰怎么办」——profile?seconds=30 只覆盖窗口期，尖峰要靠更长采样或 exec 采样。常见错误回答：CPU 打满就是有死循环——也可能在忙等、GC、序列化，先看火焰图定位热点。"
     },
     {
       "title": "内存占用突然暴涨怎么排查？heap profile 怎么读？",
+      "description": "内存暴涨的排查路径。",
       "answer": [
         "先分清是进程 RSS 涨还是 Go 堆涨：runtime.MemStats 的 HeapAlloc/HeapInuse 和 RSS 的差额是堆外内存（goroutine 栈、mmap、CGO 分配），heap profile 只管堆内",
         "heap profile 有两个视角：-inuse_space 看当前还活着的对象占了多少（查泄漏），-alloc_space 看累计分配量（查分配 churn 和 GC 压力）",
@@ -102,10 +97,11 @@
         "差分法：隔一段时间抓两份 heap profile，用 go tool pprof -base 做差，增长的那部分就是元凶",
         "常见元凶：goroutine 泄露（每个 goroutine 一份栈，初始 2KB 起并会增长）、无界增长的 map/缓存、slice 截取后仍持有大底层数组、大对象被长期意外持有"
       ],
-      "notes": "常见追问：heap profile 没涨但 RSS 涨？——那多半是堆外内存，去看 CGO、mmap 或大量 goroutine 的栈；「inuse_space 和 alloc_space 差很大说明什么」——分配量大但存活少，是 GC 压力不是泄漏；「采样会不会漏掉小泄漏」——会，排查时开 MemProfileRate=1；「怎么定位到具体代码行」——用 -lines 或 -traces 选项。"
+      "notes": "常见追问：heap profile 没涨但 RSS 涨？——那多半是堆外内存，去看 CGO、mmap 或大量 goroutine 的栈；「inuse_space 和 alloc_space 差很大说明什么」——分配量大但存活少，是 GC 压力不是泄漏；「采样会不会漏掉小泄漏」——会，排查时开 MemProfileRate=1；「怎么定位到具体代码行」——用 -lines 或 -traces 选项。常见错误回答：内存涨了就是泄漏——也可能是缓存增长或 GC 没跟上，先看 inuse 和 alloc 的趋势。"
     },
     {
       "title": "什么是 data race？go test -race 怎么用？",
+      "description": "数据竞争的检测。",
       "answer": [
         "data race 是两个 goroutine 并发访问同一块内存、至少一个是写，并且两者之间没有 happens-before 关系",
         "后果是未定义行为：轻则读到脏值，重则 fatal error: concurrent map writes 直接崩，recover 也救不回来",
@@ -116,10 +112,11 @@
       ],
       "code": "var counter int\nvar wg sync.WaitGroup\nwg.Add(2)\nfor i := 0; i < 2; i++ {\n\tgo func() {\n\t\tdefer wg.Done()\n\t\tcounter++ // 没有同步：这是 data race，go test -race 会报出来\n\t}()\n}\nwg.Wait()\nfmt.Println(counter)",
       "lang": "go",
-      "notes": "常见追问：为什么 CI 里跑一次没报就没问题？——race 是概率性的，要反复跑（go test -race -count=10）并保证 GOMAXPROCS > 1；「能在线上开 -race 吗」——可以跑带 race 的二进制，但会慢好几倍，只适合排查；「race 报告里的 Previous write at 是谁的」——那是冲突访问的另一半栈，两边一起看才能定位读写点。"
+      "notes": "常见追问：为什么 CI 里跑一次没报就没问题？——race 是概率性的，要反复跑（go test -race -count=10）并保证 GOMAXPROCS > 1；「能在线上开 -race 吗」——可以跑带 race 的二进制，但会慢好几倍，只适合排查；「race 报告里的 Previous write at 是谁的」——那是冲突访问的另一半栈，两边一起看才能定位读写点。常见错误回答：-race 能查出所有并发 bug——它只报数据竞争，死锁和逻辑竞态查不出来。"
     },
     {
       "title": "接口延迟突然变长，怎么分层排查？",
+      "description": "延迟变长的分层排查方法。",
       "answer": [
         "先划范围：是所有接口都慢还是只有某个接口慢；再看 p50 还是 p99——平均延迟会掩盖长尾，p99 涨而 p50 不涨通常指向排队或少量请求走了慢路径",
         "接入层看：网络错误率、连接数、负载均衡、入口 QPS 和限流触发次数，先排除只是流量涨了",
@@ -128,10 +125,11 @@
         "用分布式追踪把一次慢请求拆开：trace 里每个 span 的耗时直接指出是哪一跳慢，比翻日志猜快得多",
         "日志里带 request id，把同一次请求在各层的日志串起来；再把请求量、goroutine 数、GC 次数、锁等待这几条曲线放一起看是不是同时动的"
       ],
-      "notes": "常见追问：延迟涨但 CPU 不满？——瓶颈在等待（下游、锁、磁盘）不在算力；「延迟涨但错误率没变」——多半是排队，或者下游变慢还没到超时阈值；「怎么知道是哪一跳慢」——看 trace 的 span 耗时；「要不要先加个超时」——先加，别把自己拖垮，但超时是止血手段不是排查手段。"
+      "notes": "常见追问：延迟涨但 CPU 不满？——瓶颈在等待（下游、锁、磁盘）不在算力；「延迟涨但错误率没变」——多半是排队，或者下游变慢还没到超时阈值；「怎么知道是哪一跳慢」——看 trace 的 span 耗时；「要不要先加个超时」——先加，别把自己拖垮，但超时是止血手段不是排查手段。常见错误回答：延迟变长先扩容——没定位到瓶颈就扩容可能只是把排队换个地方。"
     },
     {
       "title": "什么是惊群效应？Go 服务里怎么避免？",
+      "description": "惊群效应的成因和缓解。",
       "answer": [
         "惊群效应指一大群 goroutine（或客户端）被同一个事件同时唤醒，集体争抢同一份资源，结果是 CPU 打满、锁争抢、延迟抖动，整体比串行处理还慢",
         "典型来源：缓存失效瞬间大量请求同时回源（缓存击穿）、一批定时器同一时刻到期、sync.Cond.Broadcast 唤醒全部等待者、failover 后所有实例同时接管",
@@ -140,10 +138,11 @@
         "缓解手段二：加随机抖动（jitter）把重试、回源的时刻打散，再用令牌桶限流限制同时打到下游的数量",
         "缓解手段三：广播用 close(ch) 而不是往 channel 写 N 次；初始化用 sync.Once 或 Go 1.21 起的 sync.OnceFunc，保证只有一个 goroutine 真正执行"
       ],
-      "notes": "常见追问：惊群和「负载不均」是一回事吗？——不是，惊群是唤醒瞬间的集中争抢；「singleflight 要防重复执行吗」——要，它靠 once 加计数保证同一个 key 只执行一次；「怎么发现惊群」——goroutine profile 里同一栈的 goroutine 数在某个时刻集体上涨；「抖动加多少」——按上游实例数取个随机相位即可。"
+      "notes": "常见追问：惊群和「负载不均」是一回事吗？——不是，惊群是唤醒瞬间的集中争抢；「singleflight 要防重复执行吗」——要，它靠 once 加计数保证同一个 key 只执行一次；「怎么发现惊群」——goroutine profile 里同一栈的 goroutine 数在某个时刻集体上涨；「抖动加多少」——按上游实例数取个随机相位即可。常见错误回答：惊群只会发生在操作系统 accept 上——Go 里大量 goroutine 被同一事件唤醒抢同一资源，同样是惊群。"
     },
     {
       "title": "为什么说「用 go 抓 goroutine 栈会卡住」？有什么替代方案？",
+      "description": "抓全量栈的代价和替代方案。",
       "answer": [
         "抓全量栈要 stop the world：runtime.Stack(buf, true) 和 SIGQUIT 都会让所有 goroutine 停在安全点，goroutine 越多、栈越大，停机时间越长",
         "输出本身也很重：几百 MB 的栈文本要格式化并写进 stdout 或日志，这个串行 I/O 期间进程基本没法正常处理请求",
@@ -152,10 +151,11 @@
         "替代方案二：监控只上报数字不上报栈——runtime/metrics 里有 /sched/goroutines:goroutines、/sched/latency:seconds 这类指标，够判断趋势了",
         "替代方案三：必须抓栈时控制输出量，用 GOTRACEBACK=single 只打印当前 goroutine，GOTRACEBACK=none 则连 SIGQUIT 都不打印；注意 SIGQUIT 默认还会再打印一份停在安全点的栈，然后进程退出"
       ],
-      "notes": "常见追问：pprof 的 goroutine profile 也会卡吗？——会，它同样要 stop the world，所以要控制频率，不是每次怀疑就抓；「GOTRACEBACK 有哪些取值」——none、single、all（默认）、crash、trace、system（Go 1.21 起）；「抓栈会不会把进程搞挂」——SIGQUIT 默认打完栈进程就退出，要用 kill -QUIT 时先确认；「线上还有别的办法吗」——上报指标 + 采样 + 差分是更稳的组合。"
+      "notes": "常见追问：pprof 的 goroutine profile 也会卡吗？——会，它同样要 stop the world，所以要控制频率，不是每次怀疑就抓；「GOTRACEBACK 有哪些取值」——none、single、all（默认）、crash、trace、system（Go 1.21 起）；「抓栈会不会把进程搞挂」——SIGQUIT 默认打完栈进程就退出，要用 kill -QUIT 时先确认；「线上还有别的办法吗」——上报指标 + 采样 + 差分是更稳的组合。常见错误回答：以为抓栈是只读操作、随时可抓——全量抓栈会 STW 并写出大量文本，高频抓会拖垮延迟。"
     },
     {
       "title": "超时设置不合理会表现成什么样？",
+      "description": "超时配置不合理的表现。",
       "answer": [
         "超时太短：自己的客户端先超时断开，但下游其实还在正常处理——表现是错误率高、延迟不高、下游 CPU 和 QPS 都不高，错误日志全是 context deadline exceeded",
         "超时太长：慢下游把连接、goroutine、内存全占住，请求在本地排队，p99 可能是设定超时的好几倍，因为排队时间并不算在超时里",
@@ -166,10 +166,11 @@
       ],
       "code": "ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)\ndefer cancel()\nselect {\ncase <-ctx.Done():\n\tfmt.Println(\"超时:\", ctx.Err())\ncase <-time.After(2 * time.Second):\n\tfmt.Println(\"完成\")\n}",
       "lang": "go",
-      "notes": "常见追问：超时该设多少？——按下游 P99 的 2~3 倍起步，再按 SLO 调整；「context deadline exceeded 和 i/o timeout 有什么区别」——前者是 ctx 超时，后者是底层 socket 读超时；「超时后要不要重试」——只对幂等请求重试，且要有总预算和指数退避。"
+      "notes": "常见追问：超时该设多少？——按下游 P99 的 2~3 倍起步，再按 SLO 调整；「context deadline exceeded 和 i/o timeout 有什么区别」——前者是 ctx 超时，后者是底层 socket 读超时；「超时后要不要重试」——只对幂等请求重试，且要有总预算和指数退避。常见错误回答：超时设短一点总没错——会把慢但成功的请求判死，重试再把下游压垮。"
     },
     {
       "title": "下游服务变慢时，怎么保护自己不被拖垮？",
+      "description": "下游变慢时的自保手段。",
       "answer": [
         "设超时：每个下游调用都带 ctx 超时，慢的时候快速失败，不要无限等",
         "限流加隔离：给每个下游独立的并发上限和令牌桶，一个下游变慢不会把本服务的线程和连接占满，这就是舱壁隔离",
@@ -180,7 +181,7 @@
       ],
       "code": "// 信号量：最多 10 个并发请求打同一个下游，满了就在发送处阻塞形成背压\nsem := make(chan struct{}, 10)\nsem <- struct{}{}\ndefer func() { <-sem }() // 用完立刻归还",
       "lang": "go",
-      "notes": "常见追问：熔断和限流有什么区别？——限流控制速率，熔断按失败或延迟状态直接切断；「为什么不能无限重试」——慢的时候重试会放大负载形成正反馈；「超时和熔断怎么配合」——超时是单次请求的兜底，熔断是整段时间的兜底，两个都要有；「降级数据从哪来」——通常是缓存里的旧值或默认值。"
+      "notes": "常见追问：熔断和限流有什么区别？——限流控制速率，熔断按失败或延迟状态直接切断；「为什么不能无限重试」——慢的时候重试会放大负载形成正反馈；「超时和熔断怎么配合」——超时是单次请求的兜底，熔断是整段时间的兜底，两个都要有；「降级数据从哪来」——通常是缓存里的旧值或默认值。常见错误回答：下游慢就调大超时——那只会让上游资源被占更久，正确是超时、隔离、熔断加降级。"
     }
   ]
 }

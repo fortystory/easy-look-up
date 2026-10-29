@@ -3,13 +3,6 @@
   "title": "初学者常踩的坑",
   "entries": [
     {
-      "title": "包名、文件名、目录名不是一回事",
-      "description": "Go 里三者互相独立：目录名决定别人用哪条路径 import 你，包名决定你在文件里写什么，文件名可以随便起。唯一的硬规矩是同一个目录里的所有普通文件必须写同一个包名。",
-      "code": "package main\n\nimport \"fmt\"\n\n// 文件叫 main.go，包名是 main，所在目录名又不是 main。\n// 三者不必一致：目录名只决定别人用哪条路径 import 你。\n// 唯一硬规矩是——同一个目录里所有普通文件必须写同一个包名。\n\nfunc main() {\n\tfmt.Println(\"包名、文件名、目录名三者独立\")\n}",
-      "lang": "go",
-      "notes": "同一目录里 a.go 写 package foo、b.go 写 package bar，编译报错：found packages foo (a.go) and bar (b.go)。目录名用小写单词，别用下划线或驼峰。"
-    },
-    {
       "title": "大小写敏感",
       "description": "Go 的标识符严格区分大小写，标准库的类型名都是大写开头的缩写（FS、HTTP、ID、URL）。写错一个字母编译器不会提示你，只会说找不到。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io/fs\"\n\t\"os\"\n)\n\nfunc main() {\n\t// 接口名是 fs.FS，不是 fs.Fs\n\tvar f fs.FS = os.DirFS(\".\")\n\tfmt.Println(f != nil)\n}",
@@ -59,14 +52,6 @@
       "notes": "在 Windows 上 filepath.Join 生成 content\\go\\basic-types.json，fs.ReadFile 找不到它，报 file does not exist。io/fs 只认斜杠，而且路径必须是包目录内的相对路径，不能带 ..。"
     },
     {
-      "title": "未使用的局部变量会编译报错",
-      "description": "Go 要求函数内的局部变量必须被使用，否则整个包编译不过。这是有意设计的，不让你留一堆没用的变量。",
-      "code": "count := 1\n// count 从未被使用 —— 编译报错：\n// declared and not used: count",
-      "lang": "go",
-      "notes": "确实想丢掉一个值就用 _ 接住：_ = someFunc()。这条只针对函数内的局部变量，包级的变量声明了不用不报错。",
-      "expect_error": true
-    },
-    {
       "title": "json tag 拼错不会报错",
       "description": "encoding/json 按 tag 里的名字匹配 JSON 的键，对不上就当这个键不存在：既不报错，字段也保持零值。",
       "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n)\n\ntype Entry struct {\n\tTitle string `json:\"title\"`\n\tNotes string `json:\"notes\"`\n}\n\nfunc main() {\n\tvar e Entry\n\t// JSON 里写的是 \"titel\"，少个 t：不报错，Title 还是零值\n\tif err := json.Unmarshal([]byte(`{\"titel\":\"整型\"}`), &e); err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Printf(\"title=%q notes=%q\\n\", e.Title, e.Notes)\n}",
@@ -74,18 +59,32 @@
       "notes": "json.Unmarshal 也不检查多余的键，拼错的键会被整个忽略（只是大小写不同倒是对得上，Go 的匹配不区分大小写）。想要必填字段得自己校验，比如解出来 Title == \"\" 就当数据有问题。"
     },
     {
-      "title": "多返回值要全部接住",
-      "description": "一个函数返回几个值，调用时就得接几个，不想用的用 _ 占位。漏接一个直接编译不过。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strconv\"\n)\n\nfunc main() {\n\t// strconv.Atoi 返回两个值，都要接住\n\tn, err := strconv.Atoi(\"42\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(n)\n}",
+      "title": "切片共享底层数组",
+      "description": "截取出来的切片和原切片共用底层数组，改一个视图里的元素，其它视图和原切片一起变。",
+      "code": "nums := []int{1, 2, 3, 4}\na := nums[:2]\nb := nums[1:3]\nb[0] = 99\nfmt.Println(a, b, nums)",
       "lang": "go",
-      "notes": "只接一个编译报错：assignment mismatch: 1 variable but strconv.Atoi returns 2 values。确实不需要 error 就写 n, _ := strconv.Atoi(s)。"
+      "notes": "切片只是底层数组的视图，截取不会复制。传给别人的子切片也可能改到你的数据；要独立就用 slices.Clone 或 copy。"
     },
     {
-      "title": "大写开头才是导出的",
-      "description": "包级标识符首字母大写才对包外可见，小写开头只在本包里能用。跨包用到小写标识符，编译器只会说找不到。",
-      "code": "package main\n\nimport \"fmt\"\n\n// 首字母大写才是导出给包外的\nfunc Add(a, b int) int {\n\treturn a + b\n}\n\nfunc main() {\n\tfmt.Println(Add(1, 2))\n}",
+      "title": "defer 在循环里堆到函数返回",
+      "description": "循环里打开资源又 defer 关闭时，这些 defer 要等整个函数返回才执行，文件句柄会在循环期间一直占着。",
+      "code": "for i := 0; i < 3; i++ {\n\tdefer fmt.Println(\"关闭\", i) // 三次都堆到函数返回才执行\n}\nfmt.Println(\"循环结束\")",
       "lang": "go",
-      "notes": "别的包里用 p.add 报 undefined: p.add (but have Add)。首字母小写的标识符也不会出现在 godoc 里。"
+      "notes": "循环里要立刻释放就把循环体抽成函数，让 defer 在每次调用结束时执行；否则可能开够数量报 too many open files。"
+    },
+    {
+      "title": "defer 的参数在注册时求值",
+      "description": "defer 调用的参数当时就求值，函数体读到的是旧值；要靠 defer 读取最终状态时用闭包。",
+      "code": "x := 1\ndefer fmt.Println(\"defer 里的 x =\", x) // 这里就把 x 的值定住了\nx = 2\nfmt.Println(\"后来的 x =\", x)",
+      "lang": "go",
+      "notes": "defer 只延迟「调用」，不延迟「求值」；参数在 defer 语句执行时就复制好了。想用最终值就传闭包：defer func() { fmt.Println(x) }()。"
+    },
+    {
+      "title": "range 里取地址",
+      "description": "Go 1.22 起每次迭代都是新变量，取地址安全；读 1.21 及更早的代码时要注意，那些版本里所有 &v 都指向同一个变量。",
+      "code": "nums := []int{1, 2, 3}\nptrs := make([]*int, 0, len(nums))\nfor _, v := range nums {\n\tptrs = append(ptrs, &v)\n}\nfor _, p := range ptrs {\n\tfmt.Println(*p)\n}",
+      "lang": "go",
+      "notes": "1.21 及之前，循环变量在整个循环里只有一个，循环结束后所有指针都指向最后一个值；老代码要在循环体里写 v := v 再取地址。go.mod 的 go 指令低于 1.22 时，编译器仍按旧语义处理。"
     },
     {
       "title": "组合示例：把这些坑都绕开",

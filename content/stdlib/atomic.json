@@ -1,0 +1,90 @@
+{
+  "id": "atomic",
+  "title": "原子操作与 sync 原语",
+  "entries": [
+    {
+      "title": "atomic.Int64：并发安全的计数器",
+      "description": "多个 goroutine 同时给一个计数加一时，用 atomic.Int64 的 Add/Load，比加锁轻。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar hits atomic.Int64\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 10; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\thits.Add(1)\n\t\t}()\n\t}\n\twg.Wait()\n\tfmt.Println(\"hits =\", hits.Load())\n}",
+      "lang": "go",
+      "notes": "atomic.Int64 的零值就能用，不用初始化；别把普通 int64 和 atomic 操作混着用，普通读写不受原子保护。"
+    },
+    {
+      "title": "atomic.Bool：原子开关",
+      "description": "只要一个开关状态（是否停止、是否就绪）且会被多个 goroutine 读写时，用 atomic.Bool。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar stopped atomic.Bool\n\tstopped.Store(true)\n\told := stopped.Swap(false)\n\tfmt.Println(old, stopped.Load())\n}",
+      "lang": "go",
+      "notes": "Swap 返回旧值；Load/Store 只保证单个布尔值，多个状态之间的一致性还得靠锁。"
+    },
+    {
+      "title": "CompareAndSwap：比较并交换",
+      "description": "想“值还是旧的才改成新的”做无锁更新时，用 CompareAndSwap，失败就重读重试。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar stock atomic.Int64\n\tstock.Store(1)\n\tok := stock.CompareAndSwap(1, 0)\n\tfmt.Println(ok, stock.Load())\n}",
+      "lang": "go",
+      "notes": "CAS 比较的是当前值，失败返回 false 且不会自动重试；常见写法是 for 循环里重新 Load 再试。"
+    },
+    {
+      "title": "atomic.Pointer[T]：原子替换指针",
+      "description": "配置或大对象要整体替换、读的一方不想加锁时，用 atomic.Pointer[T] 存指针。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar cfg atomic.Pointer[string]\n\taddr := \"127.0.0.1:8080\"\n\tcfg.Store(&addr)\n\tfmt.Println(*cfg.Load())\n}",
+      "lang": "go",
+      "notes": "Pointer 存的是指针，读到的是一份完整对象的快照；换配置时别去改指针指向的旧对象，直接换新对象。"
+    },
+    {
+      "title": "atomic.Value：存一份配置",
+      "description": "还没有泛型原子类型、或者要存任意类型的一份值时，用 atomic.Value（Go 1.19 前的老办法）。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar cfg atomic.Value\n\tcfg.Store(\"v1\")\n\told := cfg.Swap(\"v2\")\n\tfmt.Println(old, cfg.Load())\n}",
+      "lang": "go",
+      "notes": "第一次 Store 之后类型就固定了，再存别的类型会 panic；能用 atomic.Pointer[T] 就别用 Value。"
+    },
+    {
+      "title": "sync.Once：只初始化一次",
+      "description": "初始化只允许做一次（连数据库、加载配置）时，用 sync.Once 包住。",
+      "code": "var once sync.Once\nonce.Do(func() { fmt.Println(\"只初始化一次\") })\nonce.Do(func() { fmt.Println(\"这行不会执行\") })",
+      "lang": "go",
+      "notes": "Do 里的函数 panic 时，Once 仍认为已经执行过，后续调用不会再试；初始化失败要自己记下错误。"
+    },
+    {
+      "title": "sync.OnceFunc：把初始化包成函数",
+      "description": "想把“只执行一次”的初始化直接变成可调用函数时，用 sync.OnceFunc（Go 1.21+）。",
+      "code": "initDB := sync.OnceFunc(func() {\n\tfmt.Println(\"只连接一次数据库\")\n})\ninitDB()\ninitDB()",
+      "lang": "go",
+      "notes": "OnceFunc 返回的函数并发安全，但 f panic 时每次调用都会用同一个值 panic；初始化不会失败的场景才适合。"
+    },
+    {
+      "title": "sync.OnceValue：缓存计算结果",
+      "description": "只算一次并缓存结果（比如读版本号、解析模板）时，用 sync.OnceValue。",
+      "code": "loadConfig := sync.OnceValue(func() string {\n\treturn \"从文件读到的配置\"\n})\nfmt.Println(loadConfig(), loadConfig())",
+      "lang": "go",
+      "notes": "结果只算一次并缓存，即使返回零值也不会重算；要同时返回 error 用 sync.OnceValues。"
+    },
+    {
+      "title": "多个字段一起改要用 Mutex",
+      "description": "两个以上字段要一起改、要保持一致时，用 Mutex，别用多个 atomic 拼。",
+      "code": "var mu sync.Mutex\nvar total, success int\nmu.Lock()\ntotal++\nsuccess++\nmu.Unlock()\nfmt.Println(total, success)",
+      "lang": "go",
+      "notes": "两个字段要在同一把锁里改，否则别人可能看到 total 已经加了、success 还没加的半成品状态。"
+    },
+    {
+      "title": "map 并发读写必须加锁",
+      "description": "多个 goroutine 读写同一个 map 时，必须用锁把整段读写包起来。",
+      "code": "var mu sync.Mutex\nm := map[string]int{}\nmu.Lock()\nm[\"a\"]++\nmu.Unlock()\nfmt.Println(m[\"a\"])",
+      "lang": "go",
+      "notes": "并发写 map 会直接 fatal error: concurrent map writes，运行时崩掉，recover 接不住；读也要加锁或用 sync.RWMutex。"
+    },
+    {
+      "title": "atomic 保护不了多个值的组合",
+      "description": "多个 atomic 变量各自原子，不代表读到的是一致快照；需要一致快照时改用锁或整体替换指针。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar x, y atomic.Int64\n\tx.Store(1)\n\ty.Store(2)\n\tfmt.Println(x.Load(), y.Load())\n}",
+      "lang": "go",
+      "notes": "两次 Load 之间别的 goroutine 可以插进来，读到的组合可能互相矛盾；要一致快照用一把锁或 atomic.Pointer 指向不可变结构。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把 Once 初始化、atomic.Pointer 发布配置、并发计数、atomic.Bool、Mutex 保护 map 和原子替换串起来。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n\t\"sync/atomic\"\n)\n\n// Config 是不可变配置，换配置时整体替换指针\ntype Config struct {\n\tAddr string\n}\n\nvar (\n\tconfigOnce sync.Once\n\tconfigPtr  atomic.Pointer[Config]\n\thits       atomic.Int64\n\tready      atomic.Bool\n\tstatsMu    sync.Mutex\n\tstats      = map[string]int{}\n)\n\nfunc loadConfig() *Config {\n\treturn &Config{Addr: \"127.0.0.1:8080\"}\n}\n\nfunc handle(name string) {\n\thits.Add(1)\n\tstatsMu.Lock()\n\tstats[name]++\n\tstatsMu.Unlock()\n}\n\nfunc main() {\n\t// 1. Once 初始化，再用 atomic.Pointer 发布出去\n\tconfigOnce.Do(func() {\n\t\tconfigPtr.Store(loadConfig())\n\t})\n\tready.Store(true)\n\n\t// 2. 并发处理请求：atomic 计数，Mutex 保护 map\n\tvar wg sync.WaitGroup\n\tfor _, name := range []string{\"login\", \"login\", \"pay\", \"query\"} {\n\t\twg.Add(1)\n\t\tgo func(name string) {\n\t\t\tdefer wg.Done()\n\t\t\thandle(name)\n\t\t}(name)\n\t}\n\twg.Wait()\n\n\tfmt.Println(\"配置:\", configPtr.Load().Addr, \"就绪:\", ready.Load())\n\tfmt.Println(\"总请求:\", hits.Load())\n\tfmt.Println(\"登录次数:\", stats[\"login\"])\n\n\t// 3. 换配置：整体替换指针，读的一方不用加锁\n\tnext := &Config{Addr: \"127.0.0.1:9090\"}\n\told := configPtr.Swap(next)\n\tfmt.Println(\"旧配置:\", old.Addr, \"新配置:\", configPtr.Load().Addr)\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

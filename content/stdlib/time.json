@@ -42,7 +42,7 @@
       "description": "不想用 select 等，就让 time.AfterFunc 到点自己跑一个函数。回调在独立的 goroutine 里执行，主流程不等它。",
       "code": "time.AfterFunc(100*time.Millisecond, func() {\n\tfmt.Println(\"回调触发\")\n})\ntime.Sleep(200 * time.Millisecond)\nfmt.Println(\"主流程结束\")",
       "lang": "go",
-      "notes": "回调里 panic 不会带崩主流程。要拿到定时器本身（比如为了 Stop），用它的返回值 *time.Timer。"
+      "notes": "回调在独立的 goroutine 里跑，没 recover 的 panic 会让整个进程退出，不是只影响回调。要拿到定时器本身（比如为了 Stop），用它的返回值 *time.Timer。"
     },
     {
       "title": "Timer.Stop：取消还没触发的定时器",

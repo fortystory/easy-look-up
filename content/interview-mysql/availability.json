@@ -45,7 +45,7 @@
       "title": "主从延迟怎么解决？",
       "description": "排查完要落到具体怎么改，并且要分清哪些是治标、哪些是治本，哪些手段会真的丢数据。",
       "answer": [
-        "治本之一是并行复制：5.6 起按库并行，5.7.6 起支持基于 LOGICAL_CLOCK 的并行，8.0.27 起可用 binlog_transaction_dependency_tracking=WRITESET 提升并行度；8.0.26 起参数名从 slave_parallel_workers 改为 replica_parallel_workers，默认 4",
+        "治本之一是并行复制：5.6 起按库并行，5.7.6 起支持 LOGICAL_CLOCK 并行；8.0.1 起支持基于 WRITESET 的依赖跟踪，8.0.27 起默认值改为 WRITESET；8.0.26 起参数名从 slave_parallel_workers 改为 replica_parallel_workers",
         "治本之二是拆大事务：批量 insert/delete 改成分批提交，单笔大事务在从库要整个应用完才能继续，是延迟最常见的来源",
         "治本之三是硬件和负载对等：从库的 CPU、IOPS、内存与主库同规格，并且不要在从库上跑报表和大范围扫描，重读流量要分流出去",
         "扩展复制拓扑也能缓解：级联复制（从库下面再挂从库）把扇出压力摊开，代价是延迟会逐级累积",
@@ -89,7 +89,7 @@
         "第三步提升：STOP REPLICA、RESET REPLICA ALL、清掉复制配置、关掉 read_only 和 super_read_only，新主才能接受写入",
         "第四步改拓扑：其它从库用 CHANGE REPLICATION SOURCE TO 指向新主（8.0.23 起的语法，旧版本是 CHANGE MASTER TO），位点或 GTID 要对齐",
         "第五步切流量：VIP、DNS、注册中心或配置中心让应用连到新主，这一步必须原子，否则会有一段时间部分请求还落在旧主上",
-        "防脑裂的核心是「仲裁 + 隔离」：用 Consul/etcd/ZooKeeper 的多数派选主保证同一时刻只有一个主；旧主恢复时必须先被 fencing（云厂商 API 断电、STONITH、强制只读）才能降级成从库，而且旧主上「已提交但没同步到新主」的事务要先按位点比对后丢弃或人工合并，否则接回去会带回分叉数据"
+        "防脑裂靠「仲裁 + 隔离」：Consul/etcd/ZooKeeper 的多数派选主保证同一时刻只有一个主；旧主恢复前必须先 fencing（断电、STONITH 或强制只读），并丢弃未同步到新主的事务"
       ],
       "notes": "常见追问：脑裂具体长什么样？——两个节点同时接受写，客户端在不同时刻连到不同节点，数据互相覆盖且无法自动合并。常见追问：旧主恢复后数据怎么办？——以新主为准，旧主的独有事务要么用 pt-table-checksum 比对后人工合并，要么直接丢弃、把旧主重建为从库。常见错误回答：「主库挂了直接把某个从库改成主库就行」——忽略了仲裁、fencing、旧主数据分叉、VIP 原子切换这四件事。"
     },
@@ -162,11 +162,11 @@
       "title": "MySQL 监控要盯哪些指标？",
       "description": "监控分连接、吞吐、延迟、复制、存储五层。回答时要能说出具体的状态变量名，而不只是「QPS 和慢查询」。",
       "answer": [
-        "连接层：Threads_connected（当前连接数）、Threads_running（正在跑的线程，接近 CPU 核数就是过载）、Max_used_connections（历史峰值）、Connection_errors_max_connections（被 max_connections 拒掉的次数，不为 0 就说明连接数要调）",
-        "吞吐层：Questions（QPS）、Com_select/Com_insert/Com_update/Com_delete、Bytes_sent/Bytes_received，以及 InnoDB 缓冲池命中率（Innodb_buffer_pool_read_requests 与 Innodb_buffer_pool_reads 的比值）",
-        "延迟层：slow_queries 计数、performance_schema 的 events_statements_summary_by_digest（按 SQL 指纹聚合耗时和次数，定位慢 SQL 首选）、Innodb_buffer_pool_pages_dirty（脏页压力）、Innodb_log_waits（redo 刷盘被阻塞的次数）",
-        "复制层：Replica_IO_Running 和 Replica_SQL_Running（8.0.22 起的名字，旧版是 Slave_IO_Running）、Seconds_Behind_Source、Last_IO_Error/Last_SQL_Error、Replica_SQL_Running_State",
-        "存储与主机层：Innodb_data_file_size 与 Innodb_data_free（数据文件大小和剩余空间）、Innodb_history_list_length（长事务导致 undo 堆积、历史版本链变长）、binlog 文件大小、磁盘剩余空间、CPU、内存、IOPS、网卡带宽；磁盘写满和被 OOM killer 杀掉是 MySQL 最经典的两种猝死原因",
+        "连接层：Threads_connected 看当前连接、Threads_running 看活跃线程、Max_used_connections 看历史峰值、Connection_errors_max_connections 不为 0 说明连接被打满",
+        "吞吐层：Questions 和 Com_* 看 QPS 与读写比例，Bytes_sent/received 看流量，Innodb_buffer_pool_read_requests 与 reads 的比值看命中率",
+        "延迟层：slow_queries 计数、performance_schema 按 SQL 指纹聚合的耗时、Innodb_buffer_pool_pages_dirty 和 Innodb_log_waits 看刷脏压力",
+        "复制层：Replica_IO_Running/Replica_SQL_Running（8.0.22 起的名字）、Seconds_Behind_Source、Last_IO_Error/Last_SQL_Error",
+        "存储与主机层：数据文件大小与剩余空间、Innodb_history_list_length（长事务）、binlog 大小、磁盘、CPU、IOPS；磁盘写满和 OOM 是最常见的猝死原因",
         "告警要用速率和趋势：连接数缓慢爬升是连接泄漏，磁盘使用率按天增长是容量问题，瞬时阈值只会在半夜把你吵醒；工具上 Prometheus 的 mysqld_exporter 加 Grafana、或 Percona PMM 是常见组合"
       ],
       "notes": "常见追问：slow_queries 计数够用吗？——不够，它只给数量不给耗时，要配合 long_query_time 和 digest 聚合表看具体哪类 SQL 慢。常见追问：Threads_running 到多少算过高？——接近 CPU 核数就说明开始排队，超过了就是在堆上下文切换。常见错误回答：「监控 QPS 就够了」——复制断了、磁盘满、连接泄漏这三类问题在 QPS 上完全看不出来。"

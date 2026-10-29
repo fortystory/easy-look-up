@@ -36,8 +36,7 @@
         "第二次：被动关闭方回 ACK（ack=u+1）进入 CLOSE_WAIT —— 此时它可能还有数据要发，所以不能马上发 FIN",
         "第三次：被动关闭方的应用 close 之后发 FIN（seq=v）进入 LAST_ACK",
         "第四次：主动方回 ACK（ack=v+1）进入 TIME_WAIT，然后连接才真正消失",
-        "所以数量不固定：被动方若此刻已无数据可发，可以把 ACK 和 FIN 合并成一个包，就成了三次",
-        "常见的「四次是为了防止旧报文进入新连接」这个说法其实属于 TIME_WAIT 的作用，不是四次挥手的根本原因"
+        "所以数量不固定：被动方若此刻已无数据可发，可以把 ACK 和 FIN 合并成一个包，就成了三次"
       ],
       "notes": "常见追问：能合并成三次吗？——能，被动关闭方没有待发数据时 ACK+FIN 合并即可。常见追问：FIN_WAIT_1 卡住怎么办？——对端没回 ACK，通常是 FIN 丢了或存在半开连接，用 keepalive 探测兜底。常见错误回答：「因为是全双工所以要三次」——握手三次的原因是互相确认序号，方向数不是原因。"
     },
@@ -49,23 +48,9 @@
         "理由一：保证最后一个 ACK 能重传 —— 若这个 ACK 丢了，对端会重发 FIN，处于 TIME_WAIT 还能再回一个 ACK，否则对端会一直挂着 FIN",
         "理由二：让本连接内迷途报文在网络中消散 —— 防止旧连接的延迟报文进入四元组相同的新连接，RFC 793 因此要求等待 2MSL",
         "时长：RFC 793 规定 2MSL，MSL 理论值 2 分钟，所以经典答案是 4 分钟",
-        "Linux 的实际实现：内核把 MSL 当 30 秒算，TIME_WAIT 固定 60 秒（内核常量，不可通过 sysctl 调整）",
-        "常见误区：net.ipv4.tcp_fin_timeout 控制的是 FIN_WAIT_2 的孤儿连接回收时间，跟 TIME_WAIT 无关"
+        "Linux 的实际实现：内核把 MSL 当 30 秒算，TIME_WAIT 固定 60 秒（内核常量，不可通过 sysctl 调整）"
       ],
       "notes": "常见追问：为什么 TIME_WAIT 在主动关闭方？——它最后发 ACK，必须等对端确认，所以留在最后一步的必然是它。常见追问：TIME_WAIT 占 fd 吗？——不占用户态 fd，但占内核连接跟踪表和临时端口。常见错误回答：「TIME_WAIT 是 2 分钟」——那只是 MSL 的经典取值，Linux 上实际是 60 秒。"
-    },
-    {
-      "title": "线上出现大量 TIME_WAIT，怎么处理？",
-      "description": "先分清「谁在主动关闭」，再从连接复用、关闭方向、参数三层依次处理。",
-      "answer": [
-        "先定性：ss -ant state time-wait | wc -l 看数量，netstat -s 看累计值，判断是客户端主动关得多还是服务端主动关得多",
-        "源头治理一：连接复用 —— 用长连接和连接池（HTTP keep-alive、数据库连接池）替代短连接，减少建连和挥手次数",
-        "源头治理二：调整关闭方向 —— 设计上让服务端做主动关闭方（如 HTTP 响应结束后由服务端先关），TIME_WAIT 就落在服务端而不是耗尽客户端端口",
-        "SO_REUSEADDR 只解决「端口处于 TIME_WAIT 导致 bind 失败」，并不减少 TIME_WAIT 的数量",
-        "参数是应急手段：net.ipv4.tcp_tw_reuse（允许对外主动连接时复用 TIME_WAIT 四元组）、tcp_max_tw_buckets（超过则直接销毁并打日志告警）",
-        "配套：扩大临时端口范围 net.ipv4.ip_local_port_range，缓解客户端端口耗尽"
-      ],
-      "notes": "常见追问：SO_REUSEADDR 能消除 TIME_WAIT 吗？——不能，它只让 bind 不因冲突失败，连接记录照旧存在。常见追问：tcp_tw_recycle 为什么不能随便开？——它靠对端时间戳做精确匹配，NAT 后面会误丢包，Linux 4.12 起已默认移除。常见错误回答：「调 tcp_fin_timeout 缩短 TIME_WAIT」——它管的是 FIN_WAIT_2。"
     },
     {
       "title": "CLOSE_WAIT 状态堆积说明什么问题？",
@@ -81,7 +66,7 @@
       "notes": "常见追问：CLOSE_WAIT 会被内核超时回收吗？——不会，它等的是本端应用去 close，内核不会替应用做决定。常见追问：为什么 TIME_WAIT 正常而 CLOSE_WAIT 不正常？——TIME_WAIT 是协议状态，CLOSE_WAIT 表示应用没配合。常见错误回答：「CLOSE_WAIT 说明对方没关」——恰恰相反，是对方已经关了本端没关。"
     },
     {
-      "title": "TCP 是怎么保证数据不丢的？确认和重传机制讲一下。",
+      "title": "TCP 是怎么保证数据不丢的？确认和重传机制是怎样的？",
       "description": "把序列号、累计确认、超时重传、快重传、SACK 五件事串成一条链。",
       "answer": [
         "序列号：每个字节有唯一序号，接收方据此判断缺段、重复和乱序",
@@ -175,7 +160,7 @@
       "title": "TCP 的校验和是怎么算的？有什么用？",
       "description": "考的是「哪些协议头校验和是强制的」以及伪首部的作用。",
       "answer": [
-        "强制性：TCP 头部的校验和是强制的；IPv4 的 IP 头校验和可选，IPv6 的 IP 头校验和强制；UDP 的校验和在 IPv4 下可选、在 IPv6 下强制",
+        "强制性：TCP 头部的校验和是强制的；IPv4 的 IP 头校验和也是强制的，IPv6 头干脆没有校验和（交给上层）；UDP 的校验和在 IPv4 下可选、IPv6 下强制",
         "计算范围：伪首部（源 IP、目的 IP、协议号、TCP 长度）+ TCP 头部 + 数据，按 16 位 one's complement sum 折叠成一个 16 位值",
         "伪首部的作用：把 IP 地址和协议号算进去，这样 IP 头在路由途中被改错时接收端也能发现",
         "作用是检错：线路噪声或内存错误导致的比特翻转会让校验失败，该段被直接丢弃，发送方靠超时或重复 ACK 感知并重传",
@@ -196,6 +181,19 @@
         "概念区分：TCP keepalive ≠ HTTP 的 keep-alive（连接复用）≠ Nginx 的 keepalive_timeout（读超时），三者名字像但完全不是一回事"
       ],
       "notes": "常见追问：keepalive 能代替业务心跳吗？——不能，它只能证明 TCP 栈还在，对端进程死了但机器还在时探测依然成功。常见追问：为什么默认是 2 小时？——RFC 1122 建议不过频繁，避免空闲连接上的额外流量和被中间设备干扰。常见错误回答：「keepalive 配得越短越好」——过短浪费带宽，且很多 NAT 网关会主动清理空闲连接表项。"
+    },
+    {
+      "title": "tcp_syn_retries 和 tcp_synack_retries 分别控制什么？半连接队列满了会怎样？",
+      "description": "SYN 重传和半连接队列是弱网、连接超时、SYN Flood 三类问题的共同底层。",
+      "answer": [
+        "tcp_syn_retries 控制客户端 SYN 的重传次数，Linux 默认 6；间隔按 1、2、4、8、16、32、64 秒指数退避，总共约 127 秒才返回 ETIMEDOUT",
+        "tcp_synack_retries 控制服务端 SYN-ACK 的重传次数，默认 5；间隔 1、2、4、8、16、32 秒，约 63 秒后放弃并删除这条半连接",
+        "服务端收到 SYN、回了 SYN-ACK 但还没收到最终 ACK 的连接处于 SYN_RECV，放在半连接队列（SYN queue）；队列上限主要受 tcp_max_syn_backlog 约束，accept 队列则由 listen backlog 和 somaxconn 决定",
+        "半连接队列满时：开了 tcp_syncookies 内核可以无状态回 SYN-ACK（cookie 编码在序列号里），不开就直接丢新 SYN，客户端只能重传",
+        "排查用 ss -s 看 SYN-RECV 数量、nstat -az TcpExtSyncookiesSent 看 cookie 发送量、netstat -s | grep -i syn 看 SYN 丢包计数；SYN_RECV 持续很高通常是被扫或 SYN Flood",
+        "调参要谨慎：调小 tcp_syn_retries 能更快失败，但弱网下会误杀；调大 tcp_synack_retries 只会让半连接占坑更久，防 SYN Flood 应靠 syncookies、限速和上游清洗"
+      ],
+      "notes": "常见追问：为什么客户端 connect 要等 127 秒？——SYN 重传 6 次，指数退避累加就是约 127 秒，对端完全不可达时会一直等到超时。常见追问：半连接队列和全连接队列是一回事吗？——不是，SYN_RECV 在半连接队列，三次握手完成后才进 accept 队列。常见错误回答：「SYN 重传 6 次就是 6 秒」——是指数退避，不是固定间隔。"
     }
   ]
 }

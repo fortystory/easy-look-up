@@ -52,11 +52,11 @@
       "notes": "Scan 返回 false 有两种情况：读完了，或者出错了。一定要再检查 scanner.Err()，否则出错会被当成正常结束。Text() 返回当前行的内容，不含行尾的换行符。"
     },
     {
-      "title": "bufio.Scanner 逐行读大文件",
-      "description": "日志、导出数据这类大文件用 Scanner 逐行处理，内存里只留一行，不会把整个文件读进来。",
-      "code": "f, err := os.Open(\"big.log\")\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\nscanner := bufio.NewScanner(f)\nhits := 0\nfor scanner.Scan() {\n\tif strings.Contains(scanner.Text(), \"ERROR\") {\n\t\thits++\n\t}\n}\nfmt.Println(\"匹配行数:\", hits, \"错误:\", scanner.Err())",
+      "title": "bufio.Scanner 默认一行最长 64KB",
+      "description": "日志里一行特别长时，Scanner 默认的 64KB 上限会报 bufio.ErrTooLong；先用 Buffer 把上限调大再扫。",
+      "code": "f, err := os.Open(\"big.log\")\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\nscanner := bufio.NewScanner(f)\nscanner.Buffer(make([]byte, 64*1024), 1024*1024) // 上限调到 1MB\nfor scanner.Scan() {\n\tfmt.Println(len(scanner.Text()))\n}\nfmt.Println(\"错误:\", scanner.Err())",
       "lang": "go",
-      "notes": "Scanner 默认一行最长 64KB，超了会返回 bufio.ErrTooLong；遇到超长行要用 scanner.Buffer 调大上限。大文件用 Scanner、小文件用 os.ReadFile 是常见分工。"
+      "notes": "Scanner 默认单行上限是 bufio.MaxScanTokenSize（64KB），超了 Scan 返回 false，Err() 是 bufio.ErrTooLong。Buffer 的第一个参数是初始缓冲，第二个才是最大长度；上限调太大等于把整行读进内存。"
     },
     {
       "title": "io.ReadAll 与 io.Copy：读完一个流，或把流搬走",
@@ -70,7 +70,7 @@
       "description": "想知道文件多大、是不是目录、什么时候改过的，用 os.Stat 拿 FileInfo。",
       "code": "info, err := os.Stat(\"main.go\")\nif err != nil {\n\tpanic(err)\n}\n\nfmt.Println(\"大小:\", info.Size(), \"字节\")\nfmt.Println(\"是不是目录:\", info.IsDir())\nfmt.Println(\"权限:\", info.Mode())\nfmt.Println(\"修改时间:\", info.ModTime())",
       "lang": "go",
-      "notes": "文件不存在时返回 error，用 os.IsNotExist(err) 判断。Stat 查的是符号链接本身，要看链接指向的目标用 os.Lstat。要列出目录里的内容用 os.ReadDir。"
+      "notes": "文件不存在时返回 error，用 os.IsNotExist(err) 判断。Stat 会跟随符号链接，拿到的是链接指向的目标信息；要看链接本身用 os.Lstat。要列出目录里的内容用 os.ReadDir。"
     },
     {
       "title": "os.MkdirAll、os.Remove、os.RemoveAll：建目录和删目录",
@@ -84,7 +84,7 @@
       "description": "改文件名、或者把文件挪到别的目录，用它一步完成。",
       "code": "dir, err := os.MkdirTemp(\"\", \"demo\")\nif err != nil {\n\tpanic(err)\n}\ndefer os.RemoveAll(dir)\n\noldPath := filepath.Join(dir, \"old.txt\")\nnewPath := filepath.Join(dir, \"new.txt\")\n\nif err := os.WriteFile(oldPath, []byte(\"data\"), 0644); err != nil {\n\tpanic(err)\n}\n\nerr = os.Rename(oldPath, newPath)\nfmt.Println(\"改名结果:\", err)",
       "lang": "go",
-      "notes": "目标已存在时 Unix 直接覆盖，Windows 会失败。跨文件系统（比如从 /tmp 挪到另一个挂载点）会报 invalid cross-device link，这时得先复制再删。"
+      "notes": "目标是已存在的非目录文件时会被替换，是已存在的目录时报错。跨文件系统（比如从 /tmp 挪到另一个挂载点）会报 invalid cross-device link，这时得先复制再删。"
     },
     {
       "title": "os.Getenv、os.Setenv、os.LookupEnv：环境变量",

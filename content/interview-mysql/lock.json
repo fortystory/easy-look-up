@@ -24,7 +24,7 @@
         "MyISAM 只有表级锁，整张表的写入完全串行化，这是 InnoDB 取代它的关键原因之一",
         "InnoDB 平时不主动使用表级锁，锁的粒度交给行锁；只有 LOCK TABLES、DDL 这类语句才需要整表级别的锁",
         "行锁退化成「锁住全表」的典型场景是 WHERE 条件没走索引：只能全表扫描，于是扫描到的每一行都被加上 X 锁，效果和表锁一样",
-        "在 RC 隔离级别下这种退化尤其常见，因为 RC 不加间隙锁，语句一结束就释放锁，问题更容易被误判成偶发"
+        "在 RC 下全表扫描的锁会一直压到事务结束：RC 只释放未命中行的锁，命中行要持有到提交，问题更容易被误判成偶发"
       ],
       "notes": "常见追问：怎么确认加锁语句走了索引？——EXPLAIN 看 type 和 key，Extra 里出现 Using index 最好，type=ALL 要警惕。常见追问：RC 下全表扫描真的锁住所有行吗？——会，锁的是扫描到的每一行。常见错误回答：「行锁一定比表锁好」——批量更新千万行时，行锁的锁管理开销反而更高。"
     },
@@ -78,7 +78,7 @@
         "FLUSH TABLES WITH READ LOCK 拿的是全局读锁，备份和主从切换时用，会阻塞所有写入",
         "「加表锁」和「锁住全表的行锁」是两回事：UPDATE 一个没有索引的 WHERE 条件虽然没加表锁，但效果上和表锁一样"
       ],
-      "notes": "常见追问：TRUNCATE 和 DELETE FROM 的区别？——见上面的答案；再补一句：TRUNCATE 以行格式写进 binlog，statement 格式的 binlog 下不能直接复制这条语句。常见追问：ALTER TABLE 期间并发 DML 会怎样？——DML 排在 MDL 队列里等锁，不是直接报错。常见错误回答：「TRUNCATE 可以回滚」——它是 DDL，会隐式提交。"
+      "notes": "常见追问：TRUNCATE 和 DELETE FROM 的区别？——见上面的答案；再补一句：TRUNCATE 是 DDL，始终以 statement 形式记 binlog，不按行格式记录。常见追问：ALTER TABLE 期间并发 DML 会怎样？——DML 排在 MDL 队列里等锁，不是直接报错。常见错误回答：「TRUNCATE 可以回滚」——它是 DDL，会隐式提交。"
     },
     {
       "title": "怎么查看当前有哪些锁被持有？",
@@ -115,7 +115,7 @@
         "另一类来源是范围更新加 next-key 锁：两个事务以不同顺序扫描同一段索引，锁住的区间互相重叠",
         "InnoDB 用等待图（wait-for graph）检测：每个事务是一个节点，持锁等待关系连成边，出现环就判定死锁",
         "检测到死锁后 InnoDB 选一个事务当牺牲者回滚，报 1213 Deadlock found when trying to get lock; try restarting transaction",
-        "等待图最多容纳 1000 个事务，超出后不再做环检测，只能等 innodb_lock_wait_timeout 超时；innodb_deadlock_detect 从 8.0.3 起已废弃"
+        "等待图最多容纳 1000 个事务，超出后不再做环检测，只能等 innodb_lock_wait_timeout 超时；innodb_deadlock_detect 仍是 8.0 的有效动态参数，默认 ON，关掉后才只靠超时"
       ],
       "notes": "常见追问：死锁和锁等待超时的区别？——死锁是 1213，立刻回滚整个事务；超时是 1205，通常只回滚最后一条语句。常见追问：为什么我看不到死锁日志？——INNODB STATUS 只保留最近一次死锁，历史要靠 innodb_print_all_deadlocks。常见错误回答：「死锁是低概率事故，不用管」——并发高且访问顺序不统一时必然频繁死锁。"
     },
@@ -183,6 +183,19 @@
         "实践上把超时调短到 5 到 10 秒并配合带退避的重试，比默认 50 秒更能避免请求堆积把线程池打满"
       ],
       "notes": "常见追问：超时设多少合适？——看业务能接受等多久，OLTP 通常几秒并配合重试，太长会让连接和线程被拖住。常见追问：改了变量不生效？——确认改的是当前会话的变量，SET GLOBAL 只影响之后新建的连接。常见错误回答：「锁等待超时就是死锁」——错误码不同，回滚粒度也不同。"
+    },
+    {
+      "title": "innodb_autoinc_lock_mode 的三种模式分别是什么？自增值为什么会不连续？",
+      "description": "自增锁的三种模式决定了并发插入能到什么程度，也解释了自增 ID 为什么会有空洞。",
+      "answer": [
+        "innodb_autoinc_lock_mode=0（traditional）：所有 INSERT-like 语句在语句开始时拿表级 AUTO-INC 锁，语句结束才释放，同一语句内分配的值连续",
+        "=1（consecutive）：简单插入（行数已知的单行/多行 INSERT）通常改用轻量互斥量分配，不再拿表锁；INSERT ... SELECT、LOAD DATA 这类批量插入仍拿表锁，MySQL 5.7 及以前的默认值",
+        "=2（interleaved）：完全不用 AUTO-INC 表锁，多个语句可以同时分配；值保证唯一且单调递增，但同一语句内也可能不连续，MySQL 8.0 起是默认值（因为默认 binlog 格式改成了 ROW）",
+        "自增值在插入时分配，不随事务回滚归还：ROLLBACK、唯一键冲突、INSERT IGNORE 跳过的行都会留下空洞",
+        "批量插入和 mixed-mode 插入（如 INSERT ... ON DUPLICATE KEY UPDATE）可能一次预留一段值，实际用不完的部分直接丢掉",
+        "MySQL 8.0 把自增计数器写进 redo log 并在 checkpoint 持久化，正常重启从持久值继续；5.7 及更早重启后按 MAX(ai_col)+1 重算，删掉最大值再重启可能复用旧值"
+      ],
+      "notes": "常见追问：自增 ID 能保证连续吗？——不能，InnoDB 只保证唯一和单调递增，跳号是正常现象。常见追问：statement-based replication 下能用 mode 2 吗？——不能，必须用 0 或 1，否则主从分配的值可能不一致。常见错误回答：「事务回滚会把自增值还回去」——已经分配的值直接丢弃，不会归还。"
     }
   ]
 }

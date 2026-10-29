@@ -46,10 +46,10 @@
     },
     {
       "title": "三索引切片",
-      "description": "s[low:high:max] 的第三个索引限定新切片的容量上限，cap 等于 max - low，用来挡住 append 写穿后面的区间。",
+      "description": "s[low:high:max] 的第三个索引限定新切片的容量上限，cap 等于 max - low。想挡住 append 写穿，就把 max 设成和 high 相等。",
       "code": "nums := []int{1, 2, 3, 4, 5}\nsub := nums[1:3:4]\nfmt.Println(sub, len(sub), cap(sub))",
       "lang": "go",
-      "notes": "限制住 cap 之后，append(sub, x) 会因为容量不够而重新分配，不会改到 nums 里还没纳入的区间。"
+      "notes": "这里 cap 是 3，append(sub, x) 不会重新分配，会直接写进 nums[3]，原切片跟着变。想挡住写穿用 nums[1:3:3]（cap 等于 len），append 才会重新分配。"
     },
     {
       "title": "copy 复制元素",

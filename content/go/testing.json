@@ -1,0 +1,90 @@
+{
+  "id": "testing",
+  "title": "测试与 go test",
+  "entries": [
+    {
+      "title": "go test 基本用法",
+      "description": "给一个函数写第一个测试时用：测试文件叫 xxx_test.go，函数名是 TestXxx(t *testing.T)，然后在包目录跑 go test。",
+      "code": "func add(a, b int) int { return a + b }\n\nfunc TestAdd(t *testing.T) {\n\tif got := add(1, 2); got != 3 {\n\t\tt.Fatalf(\"add(1, 2) = %d, 想要 3\", got)\n\t}\n}",
+      "lang": "go",
+      "notes": "测试函数必须以 Test 开头，且紧跟其后的第一个字符不能是小写字母：Testadd 不会被识别成测试，TestAdd 和 Test_Add 都可以。go test ./... 跑当前模块所有包，go test -run TestAdd 只跑匹配的。t.Errorf 继续往下执行，t.Fatalf 立刻结束当前测试。"
+    },
+    {
+      "title": "表驱动测试",
+      "description": "同一个函数要测很多组输入时用表驱动：用例写成切片，循环逐个跑，以后加用例只加一行数据。",
+      "code": "func add(a, b int) int { return a + b }\n\nfunc TestAddTable(t *testing.T) {\n\tcases := []struct {\n\t\tname string\n\t\ta, b int\n\t\twant int\n\t}{\n\t\t{\"正数\", 1, 2, 3},\n\t\t{\"负数\", -1, -2, -3},\n\t\t{\"零\", 0, 0, 0},\n\t}\n\tfor _, tc := range cases {\n\t\tif got := add(tc.a, tc.b); got != tc.want {\n\t\t\tt.Errorf(\"%s: got %d, want %d\", tc.name, got, tc.want)\n\t\t}\n\t}\n}",
+      "lang": "go",
+      "notes": "表驱动别漏了 name 字段，失败时才知道是哪组输入。tc 是每次循环的值拷贝，循环体里改它不会影响原用例。用例很多时拆成单独的变量或 testdata，别让测试函数太长。"
+    },
+    {
+      "title": "t.Run 子测试",
+      "description": "表驱动之外还想让每组用例有独立名字、能单独跑、能各自 t.Fatal 时，把每组用例包进 t.Run 里。",
+      "code": "func add(a, b int) int { return a + b }\n\nfunc TestAddSubtests(t *testing.T) {\n\tcases := []struct {\n\t\tname string\n\t\ta, b int\n\t\twant int\n\t}{\n\t\t{\"正数\", 1, 2, 3},\n\t\t{\"负数\", -1, -2, -3},\n\t}\n\tfor _, tc := range cases {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := add(tc.a, tc.b); got != tc.want {\n\t\t\t\tt.Errorf(\"%s: got %d, want %d\", tc.name, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}",
+      "lang": "go",
+      "notes": "子测试全名是 TestAddSubtests/正数，用 -run 'TestAddSubtests/正数' 单独跑。Go 1.22 起循环变量每轮独立，闭包直接捕获 tc 是安全的；更早版本要先写 tc := tc。子测试里的 t 是它自己的，别拿父测试的 t 混用。"
+    },
+    {
+      "title": "t.Helper 标记辅助函数",
+      "description": "把重复的断言抽成辅助函数时，记得第一行调 t.Helper()，否则失败信息里的行号会指向辅助函数内部，看不出是哪个调用点。",
+      "code": "func assertEqual(t *testing.T, got, want int) {\n\tt.Helper() // 报错时行号指向调用它的测试\n\tif got != want {\n\t\tt.Fatalf(\"got %d, want %d\", got, want)\n\t}\n}\n\nfunc TestAssert(t *testing.T) {\n\tassertEqual(t, 1+2, 3)\n}",
+      "lang": "go",
+      "notes": "t.Helper() 只影响报错时的文件名和行号，不影响控制流。辅助函数第一个参数按惯例写 t *testing.T，调用方传进来的 t 才让 t.Fatalf 算在正确的测试上。"
+    },
+    {
+      "title": "t.Cleanup 注册清理",
+      "description": "测试里打开了文件、起了服务，要在结束时收尾时用 t.Cleanup：注册的函数会在测试（含子测试）结束时执行，后注册的先执行。",
+      "code": "func TestCleanup(t *testing.T) {\n\tt.Cleanup(func() {\n\t\tfmt.Println(\"测试结束后清理\")\n\t})\n\tfmt.Println(\"测试主体\")\n}",
+      "lang": "go",
+      "notes": "多个 Cleanup 按后进先出执行。清理放在辅助函数里注册时，比 defer 更合适——defer 会在辅助函数返回时就跑掉。t.FailNow 之后 Cleanup 仍然会执行。"
+    },
+    {
+      "title": "t.TempDir 临时目录",
+      "description": "测试要写文件时用 t.TempDir()：每个测试拿到一个独享目录，测试结束自动删掉，不用自己清理。",
+      "code": "func TestTempDir(t *testing.T) {\n\tdir := t.TempDir() // 每个测试独享，测试结束自动删除\n\tpath := filepath.Join(dir, \"out.txt\")\n\tif err := os.WriteFile(path, []byte(\"hi\"), 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tfmt.Println(path)\n}",
+      "lang": "go",
+      "notes": "目录由测试框架自动删除，别再手动 os.RemoveAll。每个测试和子测试各拿一个不同的随机目录，不能假设路径固定。测试失败时目录也会被删，想看现场就在失败分支里先打印文件内容。"
+    },
+    {
+      "title": "Benchmark 基准测试",
+      "description": "想知道一段代码跑多快时写 BenchmarkXxx(b *testing.B)，函数体循环 b.N 次，用 go test -bench . 跑。",
+      "code": "var concatSink string\n\nfunc BenchmarkConcat(b *testing.B) {\n\tfor i := 0; i < b.N; i++ {\n\t\tconcatSink = \"a\" + \"b\" + \"c\"\n\t}\n}",
+      "lang": "go",
+      "notes": "b.N 由框架自动调整，别在循环里做初始化，耗时的准备放到循环外并调用 b.ResetTimer()。结果要写到包级变量或传给能产生副作用的地方，否则可能被编译器优化掉。加 -benchmem 看内存分配。"
+    },
+    {
+      "title": "b.Loop（Go 1.24+）",
+      "description": "Go 1.24 起基准测试可以写 for b.Loop()，不用自己写 b.N 循环，也不用记着重置计时器。",
+      "code": "func BenchmarkRepeat(b *testing.B) {\n\tfor b.Loop() {\n\t\t_ = strings.Repeat(\"a\", 3)\n\t}\n}",
+      "lang": "go",
+      "notes": "b.Loop 第一次调用时会重置计时器，之前的准备代码不计入耗时；循环结束后自动停表。它需要 Go 1.24 及以上，老代码里的 for i := 0; i < b.N; i++ 仍然可用。"
+    },
+    {
+      "title": "go test -race 检测数据竞争",
+      "description": "怀疑并发代码有竞争、或者改动了共享状态时，用 go test -race 跑一遍，竞态检测器会把冲突的读写位置都打出来。",
+      "code": "func TestRace(t *testing.T) {\n\tvar wg sync.WaitGroup\n\tcounter := 0\n\tfor i := 0; i < 2; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tcounter++ // 两个 goroutine 同时写\n\t\t}()\n\t}\n\twg.Wait()\n\tfmt.Println(counter)\n}",
+      "lang": "go",
+      "notes": "这段普通 go test 能过，go test -race 会报 DATA RACE，并给出两个冲突的调用栈。-race 只能抓实际执行到的竞争，没跑到的分支抓不到。开了 -race 会慢几倍到十几倍、内存占用更高，通常在 CI 里跑。"
+    },
+    {
+      "title": "go test -cover 看覆盖率",
+      "description": "想知道测试覆盖了哪些代码时用 go test -cover，加上 -coverprofile 还能生成 HTML 报告逐行看。",
+      "code": "func add(a, b int) int { return a + b }\n\nfunc TestAddCover(t *testing.T) {\n\tif add(1, 2) != 3 {\n\t\tt.Fatal(\"add 结果不对\")\n\t}\n}",
+      "lang": "go",
+      "notes": "go test -cover 只给一个百分比，go test -coverprofile=cover.out 再用 go tool cover -html=cover.out 打开报告。覆盖率只说明哪行被执行过，不说明断言写对了，别为了数字写没有意义的测试。"
+    },
+    {
+      "title": "跳过测试 t.Skip",
+      "description": "测试依赖外部服务或环境变量、当前环境不具备条件时，用 t.Skip 明确跳过，而不是让它失败。",
+      "code": "func TestNeedDB(t *testing.T) {\n\tif os.Getenv(\"DB_DSN\") == \"\" {\n\t\tt.Skip(\"没有设置 DB_DSN，跳过\")\n\t}\n\tfmt.Println(\"连上数据库再测\")\n}",
+      "lang": "go",
+      "notes": "t.Skip 会立刻结束当前测试，状态是 SKIP 不是 PASS，CI 统计能区分。go test -v 才显示跳过原因。用 t.Skipf 可以带格式化参数；跳过之后后面的代码都不会执行。"
+    },
+    {
+      "title": "组合示例：把断言抽成函数跑一遍",
+      "description": "把这一组的东西放在一起：表驱动用例、把断言抽成返回 error 的纯函数、手写 runner 逐条跑并汇总失败。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n\n// checkAdd 把断言逻辑抽成纯函数：通过返回 nil，失败返回错误。\n// 真实项目里这层交给 *testing.T，这里用纯函数是为了能 go run。\nfunc checkAdd(a, b, want int) error {\n\tif got := a + b; got != want {\n\t\treturn fmt.Errorf(\"add(%d, %d) = %d, want %d\", a, b, got, want)\n\t}\n\treturn nil\n}\n\nfunc main() {\n\tcases := []struct {\n\t\tname string\n\t\ta, b int\n\t\twant int\n\t}{\n\t\t{\"正数\", 1, 2, 3},\n\t\t{\"负数\", -1, -2, -3},\n\t\t{\"零\", 0, 0, 0},\n\t}\n\n\tfailed := 0\n\tfor _, tc := range cases {\n\t\tif err := checkAdd(tc.a, tc.b, tc.want); err != nil {\n\t\t\tfmt.Printf(\"FAIL %s: %v\\n\", tc.name, err)\n\t\t\tfailed++\n\t\t\tcontinue\n\t\t}\n\t\tfmt.Printf(\"PASS %s\\n\", tc.name)\n\t}\n\n\tif failed > 0 {\n\t\tos.Exit(1)\n\t}\n\tfmt.Println(\"全部通过\")\n}",
+      "lang": "go",
+      "notes": "真实项目不用手写 runner：把 checkAdd 的断言换成 t.Errorf / t.Fatalf，函数名改成 TestXxx(t *testing.T)，放进 xxx_test.go，跑 go test 就行。这里写成 package main 只是为了让 go run 能演示断言逻辑。"
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "id": "http",
+  "title": "HTTP 客户端与服务器",
+  "entries": [
+    {
+      "title": "http.Get：发一个 GET 请求",
+      "description": "调下游只读接口、抓页面时用它；示例里用 httptest 起本地服务，避免依赖外网。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n)\n\nfunc main() {\n\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tfmt.Fprint(w, \"hello\")\n\t}))\n\tdefer srv.Close()\n\n\tresp, err := http.Get(srv.URL)\n\tif err != nil {\n\t\tfmt.Println(\"请求失败:\", err)\n\t\treturn\n\t}\n\tdefer resp.Body.Close() // 必须关，否则连接无法复用\n\tfmt.Println(resp.StatusCode)\n}",
+      "lang": "go",
+      "notes": "忘关 resp.Body 会泄漏连接；http.Get 用的是没有超时的 DefaultClient，线上请求要自己建带 Timeout 的 Client。"
+    },
+    {
+      "title": "http.Post：提交 JSON 请求体",
+      "description": "要往接口写数据（创建资源、上报事件）时，把 body 包成 io.Reader 交给 Post。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n)\n\nfunc main() {\n\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tfmt.Fprint(w, \"ok\")\n\t}))\n\tdefer srv.Close()\n\n\tresp, err := http.Post(srv.URL, \"application/json\", strings.NewReader(`{\"name\":\"张三\"}`))\n\tif err != nil {\n\t\tfmt.Println(\"请求失败:\", err)\n\t\treturn\n\t}\n\tdefer resp.Body.Close()\n\tfmt.Println(resp.StatusCode)\n}",
+      "lang": "go",
+      "notes": "Post 的第三个参数是 io.Reader，发 JSON 要自己包 strings.NewReader 并设置 Content-Type；它同样用 DefaultClient，没有超时。"
+    },
+    {
+      "title": "http.Client：设置超时并复用",
+      "description": "线上调外部服务必须有超时，别直接用 http.Get，自己建一个带 Timeout 的 Client 并复用。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"time\"\n)\n\nfunc main() {\n\tclient := &http.Client{Timeout: 3 * time.Second}\n\tfmt.Println(\"超时:\", client.Timeout)\n}",
+      "lang": "go",
+      "notes": "Client.Timeout 覆盖连接、重定向和读 body 的全过程；Client 自带连接池，全局复用一个即可，不要每次请求都 new。"
+    },
+    {
+      "title": "http.NewRequest：自定义 method 和 header",
+      "description": "需要在请求上带 token、Accept 等 header，或者用 PUT、DELETE 这类方法时，先构造请求再 client.Do。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n)\n\nfunc main() {\n\treq, err := http.NewRequest(http.MethodGet, \"https://example.com/api/users\", nil)\n\tif err != nil {\n\t\tfmt.Println(\"构造请求失败:\", err)\n\t\treturn\n\t}\n\treq.Header.Set(\"Authorization\", \"Bearer token\")\n\treq.Header.Set(\"Accept\", \"application/json\")\n\tfmt.Println(req.Method, req.URL.Path, req.Header.Get(\"Authorization\"))\n}",
+      "lang": "go",
+      "notes": "NewRequest 只是构造请求，不会发出去，要发得调 client.Do(req)；header 的 key 会被规范化，直接改 Header map 会绕过规范化。"
+    },
+    {
+      "title": "http.HandlerFunc：把函数变成 handler",
+      "description": "写接口处理函数时，用 HandlerFunc 适配 http.Handler 接口，主要逻辑放在一个普通函数里。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n)\n\nfunc main() {\n\th := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tw.Header().Set(\"Content-Type\", \"text/plain; charset=utf-8\")\n\t\tfmt.Fprint(w, \"hello, \", r.URL.Query().Get(\"name\"))\n\t})\n\trec := httptest.NewRecorder()\n\th.ServeHTTP(rec, httptest.NewRequest(\"GET\", \"/?name=go\", nil))\n\tfmt.Println(rec.Code, rec.Body.String())\n}",
+      "lang": "go",
+      "notes": "handler 的签名必须是 func(http.ResponseWriter, *http.Request)；用 Recorder 调 ServeHTTP 就能不启服务直接验证 handler。"
+    },
+    {
+      "title": "http.ServeMux：Go 1.22 的方法与路径参数",
+      "description": "新项目直接用 Go 1.22 起支持的模式写法，方法、路径参数都能写进 pattern，不用再引第三方路由。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n)\n\nfunc main() {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc(\"GET /users/{id}\", func(w http.ResponseWriter, r *http.Request) {\n\t\tfmt.Fprintf(w, \"用户 %s\", r.PathValue(\"id\"))\n\t})\n\tmux.HandleFunc(\"POST /users\", func(w http.ResponseWriter, r *http.Request) {\n\t\tw.WriteHeader(http.StatusCreated)\n\t})\n\trec := httptest.NewRecorder()\n\tmux.ServeHTTP(rec, httptest.NewRequest(\"GET\", \"/users/42\", nil))\n\tfmt.Println(rec.Code, rec.Body.String())\n}",
+      "lang": "go",
+      "notes": "路径参数用 r.PathValue(\"id\") 取，Go 1.22 之前没有这个写法；同一路径不同方法要分开注册，否则请求会被 405 拦掉。"
+    },
+    {
+      "title": "http.Request：读 query、header 和 body",
+      "description": "handler 里拿到请求后，第一件事就是按来源取参数：URL 上的 query、header、请求体。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"strings\"\n)\n\nfunc main() {\n\treq := httptest.NewRequest(\"POST\", \"/search?q=go&page=2\", strings.NewReader(`{\"name\":\"张三\"}`))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tfmt.Println(\"query:\", req.URL.Query().Get(\"q\"), req.URL.Query().Get(\"page\"))\n\tfmt.Println(\"header:\", req.Header.Get(\"Content-Type\"))\n\tbuf := make([]byte, req.ContentLength)\n\t_, _ = req.Body.Read(buf)\n\tfmt.Println(\"body:\", string(buf))\n}",
+      "lang": "go",
+      "notes": "r.Body 是一次性的读流，读完就没了，想多次读要先 io.ReadAll 存下来；query 用 r.URL.Query()，表单用 r.ParseForm()，JSON 用 json.NewDecoder(r.Body)。"
+    },
+    {
+      "title": "状态码与错误处理：WriteHeader、http.Error",
+      "description": "接口要按结果返回 400、404 这类状态码，用 http.Error 能一次写好状态码和错误文本。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n)\n\nfunc main() {\n\th := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tif r.URL.Query().Get(\"id\") == \"\" {\n\t\t\thttp.Error(w, \"id 不能为空\", http.StatusBadRequest)\n\t\t\treturn\n\t\t}\n\t\tw.WriteHeader(http.StatusNoContent)\n\t})\n\trec := httptest.NewRecorder()\n\th.ServeHTTP(rec, httptest.NewRequest(\"GET\", \"/users\", nil))\n\tfmt.Println(rec.Code, strings.TrimSpace(rec.Body.String()))\n}",
+      "lang": "go",
+      "notes": "WriteHeader 只能生效一次，重复调用会被忽略并记日志；http.Error 会设置 Content-Type 并写入换行，之后不要再往 body 里写业务数据。"
+    },
+    {
+      "title": "httptest 测试 handler：断言状态码和 body",
+      "description": "给 handler 写单测时不用起服务，NewRecorder 记录响应，NewRequest 构造请求，表驱动跑多个用例。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n)\n\nfunc main() {\n\th := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\tw.WriteHeader(http.StatusOK)\n\t})\n\tcases := []struct {\n\t\tmethod string\n\t\twant   int\n\t}{{\"GET\", 200}, {\"POST\", 200}}\n\tfor _, c := range cases {\n\t\trec := httptest.NewRecorder()\n\t\th.ServeHTTP(rec, httptest.NewRequest(c.method, \"/\", nil))\n\t\tfmt.Println(c.method, rec.Code == c.want)\n\t}\n}",
+      "lang": "go",
+      "notes": "rec.Code 默认是 200，handler 没写 WriteHeader 也是 200；断言 body 用 rec.Body.String()，断言 header 用 rec.Header().Get()。"
+    },
+    {
+      "title": "http.Server：启动与优雅关闭",
+      "description": "要自己控制端口、超时和关闭流程时，用 http.Server 而不是 http.ListenAndServe 的默认配置。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"time\"\n)\n\nfunc main() {\n\tsrv := &http.Server{Addr: \"127.0.0.1:0\", Handler: http.NewServeMux()}\n\tgo func() {\n\t\tif err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {\n\t\t\tfmt.Println(\"服务异常:\", err)\n\t\t}\n\t}()\n\ttime.Sleep(20 * time.Millisecond)\n\tfmt.Println(\"关闭:\", srv.Close())\n}",
+      "lang": "go",
+      "notes": "ListenAndServe 是阻塞调用，写在 main 里后面的代码不会执行；优雅关闭用 srv.Shutdown(ctx) 等请求处理完，srv.Close() 是立即断开所有连接。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "用 ServeMux 注册路由，再用 httptest.NewRecorder 直接调 handler，不起监听端口，把请求、响应、JSON 和 Server 配置串起来。",
+      "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\t\"time\"\n)\n\ntype User struct {\n\tID   int    `json:\"id\"`\n\tName string `json:\"name\"`\n}\n\nfunc main() {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc(\"GET /users/{id}\", func(w http.ResponseWriter, r *http.Request) {\n\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n\t\t_ = json.NewEncoder(w).Encode(User{ID: 1, Name: r.PathValue(\"id\")})\n\t})\n\tmux.HandleFunc(\"POST /users\", func(w http.ResponseWriter, r *http.Request) {\n\t\tvar u User\n\t\tif err := json.NewDecoder(r.Body).Decode(&u); err != nil {\n\t\t\thttp.Error(w, \"JSON 不合法\", http.StatusBadRequest)\n\t\t\treturn\n\t\t}\n\t\tw.WriteHeader(http.StatusCreated)\n\t\t_ = json.NewEncoder(w).Encode(u)\n\t})\n\n\t// 用 Recorder 直接调 handler，不监听端口\n\tgetRec := httptest.NewRecorder()\n\tmux.ServeHTTP(getRec, httptest.NewRequest(\"GET\", \"/users/42\", nil))\n\tfmt.Println(\"GET:\", getRec.Code, strings.TrimSpace(getRec.Body.String()))\n\n\tpostRec := httptest.NewRecorder()\n\tpostReq := httptest.NewRequest(\"POST\", \"/users\", strings.NewReader(`{\"id\":7,\"name\":\"张三\"}`))\n\tmux.ServeHTTP(postRec, postReq)\n\tfmt.Println(\"POST:\", postRec.Code, strings.TrimSpace(postRec.Body.String()))\n\n\tclient := &http.Client{Timeout: 2 * time.Second}\n\tsrv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}\n\tfmt.Println(\"client 超时:\", client.Timeout, \"server 有 handler:\", srv.Handler != nil)\n}",
+      "lang": "go",
+      "notes": "组合示例里的 Server 只做了配置、没有 ListenAndServe；真正启动时把它交给 ListenAndServe 并放在 goroutine 里，主流程负责监听退出信号再 Shutdown。"
+    }
+  ]
+}

@@ -23,7 +23,7 @@
         "可重复读（REPEATABLE READ，RR）：同一事务内的快照读始终看到同一个快照，防住脏读和不可重复读",
         "串行化（SERIALIZABLE）：所有读都加共享锁（MySQL 8.0 里普通 SELECT 会转成 SELECT ... FOR SHARE），三个读问题全防住，但并发度最低",
         "隔离级别越高并发越低，RU 因为连基本正确性都不保证，实际生产几乎不用，只在调试时用",
-        "SQL 标准里 RR 仍防不住幻读；InnoDB 用间隙锁加 next-key lock 在「写」这一侧把幻读补上了，具体见下一题"
+        "SQL 标准里 RR 仍防不住幻读；InnoDB 用间隙锁加 next-key lock 在「写」这一侧把幻读补上了，也就是锁住可能被插入的区间"
       ],
       "notes": "常见追问：脏读、不可重复读、幻读分别是什么？——脏读是读到未提交的数据，不可重复读是同一行两次读到的值变了，幻读是同一范围查询两次结果集的行数变了。常见错误回答：直接背「RR 防幻读」，忘了标准语义里 RU/RC/RR 都防不住幻读。"
     },
@@ -100,13 +100,13 @@
         "锁范围：RR 加 next-key lock（记录加间隙），RC 基本只加记录锁、不锁间隙，唯一性检查和外键检查等场景例外",
         "幻读：RC 下允许幻读（间隙可被插入），RR 下写场景被 next-key lock 挡住",
         "死锁与等待：RC 的锁范围小、死锁明显更少，但同一行被竞争时更容易直接表现为锁等待超时",
-        "复制影响：statement 格式的 binlog 要求 RC 及以上才能保证从库复现出一致结果，用 statement 格式时 RC 更安全",
+        "复制影响：statement 格式的 binlog 在 RR 下更安全，RC 一般配 row 格式；RC 配 statement 在并发更新时可能让从库重放出不同结果",
         "实践共识：需要「事务内多次读结果一致」就用 RR；只是「读到已提交数据」的普通业务用 RC 通常更划算，间隙锁少、并发高、主从延迟小"
       ],
       "notes": "常见追问：改成 RC 会不会破坏业务正确性？——要看业务是否依赖事务内的固定快照，比如「先查余额再扣减」这类扣库存逻辑在 RC 下要自己加条件（UPDATE ... WHERE stock > 0）或改用 SELECT ... FOR UPDATE。常见追问：RC 下怎么对付不可重复读？——用乐观锁版本号或行锁兜底，而不是指望隔离级别。"
     },
     {
-      "title": "事务是怎么提交的？redo log 的两阶段提交讲一下。",
+      "title": "事务提交时 redo log 的两阶段提交具体是怎么做的？",
       "description": "提交流程题考察对 InnoDB 和 Server 两层日志的理解，答出「为什么需要两阶段」才算答到根上。",
       "answer": [
         "正常提交流程：修改数据 → 写 redo log 并标记为 prepare → 写 binlog → 提交事务，把 redo log 标记为 commit；binlog 什么时候落盘由 sync_binlog 控制",
@@ -160,7 +160,7 @@
       "title": "怎么排查和终止长事务？",
       "description": "排查题考的是动手能力：能说出具体视图、具体列、具体命令，就比只讲「看监控」强很多。",
       "answer": [
-        "information_schema.INNODB_TRX：列出所有正在运行的事务，重点看 trx_state（RUNNING 或 LOCK WAIT）、trx_started、trx_mysql_thread_id（对应 processlist 的 Id）、trx_query、trx_rows_locked、trx_rows_modified",
+        "information_schema.INNODB_TRX 列出运行中的事务，重点看 trx_state、trx_started、trx_mysql_thread_id（对应 processlist 的 Id）、trx_query、trx_rows_locked",
         "按时间过滤出长事务：SELECT * FROM information_schema.INNODB_TRX WHERE trx_started < NOW() - INTERVAL 60 SECOND;",
         "SHOW FULL PROCESSLIST：看 Time 列（该连接已持续多久）和 Info 列（正在执行的语句），按 Time 排序就能找出久占连接的会话",
         "performance_schema 的 events_transactions_history_long 和 events_statements_history_long 能回看历史事务与语句，事后复盘比实时表更全",

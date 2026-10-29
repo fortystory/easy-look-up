@@ -17,6 +17,7 @@
     },
     {
       "title": "RDB 的优缺点是什么？",
+      "description": "快照紧凑、恢复快，但两次快照之间的数据会丢。",
       "answer": [
         "优点：文件紧凑、体积小，同样数据量通常只有 AOF 的一小部分，适合做备份和跨机器传输",
         "优点：恢复速度最快，加载 RDB 是直接解析二进制结构建内存表，不需要逐条重放命令",
@@ -29,6 +30,7 @@
     },
     {
       "title": "AOF 是什么？写命令是怎么落到磁盘的？",
+      "description": "AOF 追加写命令，落盘时机由 appendfsync 决定。",
       "answer": [
         "AOF 是把执行过的写命令按顺序追加到磁盘日志文件的持久化方式，Redis 7 用 appendonly.aof.manifest 管理 base.rdb + incr.aof 多段文件",
         "流程是：命令执行 → 追加进 AOF 缓冲区 → write 到操作系统页缓存 → fsync 真正刷到磁盘",
@@ -41,6 +43,7 @@
     },
     {
       "title": "AOF 的三种刷盘策略 appendfsync 分别是什么？各自的取舍？",
+      "description": "always、everysec、no 三档在数据安全和写入性能之间取舍。",
       "answer": [
         "always：每执行一个写命令就 fsync 一次，数据最安全，机器宕机也不丢已确认的写，但磁盘 IO 成为瓶颈，吞吐最低",
         "everysec：后台线程每秒 fsync 一次，最多丢最近 1 秒的写，性能接近 no 而安全性远好于 no，是默认值",
@@ -53,6 +56,7 @@
     },
     {
       "title": "为什么官方推荐 everysec，而不是 always 或 no？",
+      "description": "每秒刷盘是性能和丢失窗口的折中，也是官方推荐值。",
       "answer": [
         "always 用磁盘 IO 换零丢失，命令执行要等日志追加完成，长期写入场景性价比低",
         "no 把落盘时机完全交给操作系统，磁盘繁忙或负载高时缓冲会被内核提前刷走，丢失窗口没有上界",
@@ -65,6 +69,7 @@
     },
     {
       "title": "AOF 的优缺点是什么？",
+      "description": "AOF 可读、丢失少，但文件大、恢复慢，需要重写压缩。",
       "answer": [
         "优点：数据完整性比 RDB 好，everysec 下最多丢 1 秒，而 RDB 要丢整个快照间隔",
         "优点：内容是命令日志，可以按时间点截取、审计，也能查清是哪条写导致了脏数据",
@@ -77,6 +82,7 @@
     },
     {
       "title": "AOF 重写（rewrite）是什么？它解决什么问题？",
+      "description": "用当前数据生成最小命令集，压掉冗余历史、缩小文件。",
       "answer": [
         "AOF 是只追加的命令日志，key 反复更新会让文件无限膨胀，重写就是用当前内存数据生成一份最简命令集的新 AOF",
         "触发方式：手动执行 BGREWRITEAOF；或满足自动条件——文件比上次重写后增长超过 auto-aof-rewrite-percentage（默认 100%）且大于 auto-aof-rewrite-min-size（默认 64MB）",
@@ -89,6 +95,7 @@
     },
     {
       "title": "混合持久化（RDB + AOF）是什么？为什么需要它？",
+      "description": "RDB 头加增量 AOF，兼顾恢复速度和较小的丢失窗口。",
       "answer": [
         "混合持久化指 aof-use-rdb-preamble yes（Redis 4.0 引入，默认开启）：AOF 重写时先把当前数据集以 RDB 二进制格式写进 AOF 文件头部，再把重写期间的新命令以 AOF 文本格式追加在后面",
         "恢复时先加载 RDB 部分（快），再重放后面少量的 AOF 命令（补齐最新数据），两头的优点都占",
@@ -101,6 +108,7 @@
     },
     {
       "title": "主从复制的流程是怎样的？",
+      "description": "全量同步加命令传播，断线后按 offset 续传。",
       "answer": [
         "配置用 replicaof host port（旧语法 slaveof），从节点启动后周期性发 REPLCONF listening-port，主节点回复 +OK 后进入握手",
         "从节点发 PSYNC ? -1 请求全量同步；断线重连时它会带上自己的 replication id 和 offset 请求部分重同步",
@@ -113,6 +121,7 @@
     },
     {
       "title": "全量同步和增量同步分别是什么？断线重连走哪一种？",
+      "description": "首次同步走全量，断线重连优先走增量。",
       "answer": [
         "全量同步是把主节点的全量数据重新传一遍，从节点清空旧数据后重建，代价是主节点 fork 加网络传输加从节点加载",
         "增量同步只补发断线期间缺失的命令，依赖主节点内存里的复制积压缓冲区 replication backlog（默认 1MB）",
@@ -125,6 +134,7 @@
     },
     {
       "title": "为什么需要哨兵（Sentinel）？它解决了什么问题？",
+      "description": "Sentinel 负责监控、选主和通知，解决主从架构的自动故障转移。",
       "answer": [
         "主从复制只解决数据冗余，主节点宕机后没人自动把某个从节点提为主，也没人自动改其它从节点和客户端的配置，这个角色就是 Sentinel",
         "Sentinel 是独立于 Redis 实例的进程，监控一组主从实例，负责故障发现和自动故障转移（failover）",
@@ -137,6 +147,7 @@
     },
     {
       "title": "Sentinel 是怎么监控、怎么选新主、怎么通知客户端的？",
+      "description": "主观下线、客观下线、选主、通知客户端，四步完成一次切换。",
       "answer": [
         "监控：每个 Sentinel 定期对主节点和所有从节点发 INFO / PING，超过 down-after-milliseconds 收不到有效回复就标记主观下线（SDOWN）",
         "确认：Sentinel 之间互相同步下线信息，至少 quorum 个 Sentinel（默认 2）都认为主节点挂了才升级为客观下线（ODOWN）",
@@ -149,6 +160,7 @@
     },
     {
       "title": "Redis Cluster 为什么是 16384 个槽？槽是怎么分片和迁移的？",
+      "description": "16384 个槽把数据分片，MOVED 和 ASK 处理迁移中的重定向。",
       "answer": [
         "Cluster 把 keyspace 固定切成 16384 个 hash slot，每个主节点负责其中一段，槽数固定是 2 的 14 次方，客户端能直接用位运算算槽",
         "key 定位是 CRC16(key) % 16384；key 里带花括号时只对括号里的内容算，{user1001}:name 和 {user1001}:age 会落进同一个槽",
@@ -161,6 +173,7 @@
     },
     {
       "title": "Cluster 的节点之间是怎么互相感知的？Gossip 协议起什么作用？",
+      "description": "节点用 Gossip 交换槽位和状态，最终收敛出完整拓扑。",
       "answer": [
         "每个节点维护一张对全集群的认知表（节点 ID、IP、端口、负责的槽、状态），表里的信息靠 Gossip 协议不断互相交换来保持一致",
         "节点之间用 cluster bus 通信，端口是服务端口 + 10000，专门跑 PING / PONG 这类集群内部消息",
@@ -173,6 +186,7 @@
     },
     {
       "title": "脑裂（split-brain）是怎么回事？min-replicas-to-write 怎么解决？",
+      "description": "网络分区下旧主继续写会产生脑裂，min-replicas-to-write 用来降低风险。",
       "answer": [
         "脑裂指网络分区把集群分成两组，旧主仍被一部分客户端当作可用继续接受写，新主也在接受写，两边的数据从此分叉",
         "根源是主从复制是异步的：主节点确认写成功时副本可能还没收到，failover 之后新主缺少这些写",
@@ -182,6 +196,19 @@
         "客户端侧还能用 WAIT 命令等指定数量的副本确认后再给业务返回成功（注意 WAIT 不保证副本落盘），Sentinel 侧则靠 quorum 和 majority 减少误切换"
       ],
       "notes": "常见追问：设了 min-replicas-to-write 会影响性能吗？——正常情况下不影响，副本都在时几乎零开销；副本掉线时写入会被拒，这是刻意的取舍。常见追问：脑裂能彻底避免吗？——不能完全避免，只能缩小窗口并让业务感知到「写失败」，所以关键写操作仍要幂等。常见错误回答：「Sentinel 已经解决脑裂了」——Sentinel 只减少误切换概率，异步复制的丢写在任何架构下都存在。"
+    },
+    {
+      "title": "Redis Cluster 扩缩容和故障转移的流程是怎样的？",
+      "description": "考的是集群运维的完整动作：加节点、迁槽、下线、选主各有哪些步骤。",
+      "answer": [
+        "扩容先 redis-cli --cluster add-node 新节点:6379 现有节点:6379 加入一个空 master，再用 --cluster reshard 把槽从旧节点迁过来；缩容要先把该节点的槽全部 reshard 走，再 --cluster del-node 下线",
+        "一次 reshard 的底层动作：源节点对槽设 CLUSTER SETSLOT <slot> MIGRATING <target>，目标节点设 IMPORTING <source>，按 CLUSTER GETKEYSINSLOT 取 key，用 MIGRATE 逐个搬，最后双方 CLUSTER SETSLOT <slot> NODE <target> 完成交接",
+        "迁移期间访问已经搬走的 key 会收到 ASK 重定向：客户端要先发 ASKING 再发命令，且不能更新本地槽表；槽交接完成后才是 MOVED，客户端据此永久更新槽映射",
+        "故障转移靠集群总线（客户端端口 + 10000）互相 ping：超过 cluster-node-timeout（默认 15000 毫秒）判 PFAIL，多数 master 确认后标记 FAIL，从节点按复制偏移量竞选，拿到多数票后提升并接管槽",
+        "cluster-require-full-coverage 默认 yes，任意一个槽没有节点负责，整个集群就进入 CLUSTERDOWN 拒绝服务；要允许部分可用需设为 no，代价是对应槽的请求全部失败",
+        "rebalance 按各节点槽数做均衡，可用 --cluster-weight 调权重；它本质是多轮 reshard，生产上要限速并避开业务高峰"
+      ],
+      "notes": "常见追问：迁槽时遇到大 key 会怎样？——MIGRATE 是同步的，大 key 会阻塞源节点和客户端，最好在低峰做或先拆分大 key。常见追问：主节点挂了会立刻切换吗？——不会，要等 cluster-node-timeout 超时、多数 master 判定 FAIL 后才选主。常见错误回答：「加完节点槽会自动均衡」——新节点默认 0 个槽，必须手动 reshard 或 rebalance。"
     }
   ]
 }

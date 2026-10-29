@@ -5,24 +5,21 @@
     {
       "title": "defer 什么时候执行？多个 defer 的顺序是怎样的？",
       "description": "defer 的执行时机和顺序是 Go 里最容易想当然出错的地方之一。",
-      "code": "defer fmt.Println(\"第 1 个 defer\")\ndefer fmt.Println(\"第 2 个 defer\")\nfmt.Println(\"函数体先执行\")",
-      "lang": "go",
-      "notes": "常见追问：defer 里能不能改返回值？——看返回的是不是具名返回值，具名的能改，未命名的改不了。常见错误答案是「defer 在 return 之前执行」，准确说法是 return 的返回值先求值、defer 后执行。另一个追问：循环里 defer 会不会堆积？（会，循环体内的 defer 要等函数结束才跑；要在每轮结束就释放资源，用匿名函数把循环体包一层）",
       "answer": [
         "defer 把调用推迟到当前函数返回之前：函数体跑完 → return 语句求值 → 执行 defer → 函数真正返回",
         "同一个函数里的多个 defer 按后进先出（LIFO）执行，最后写的最先跑",
         "中途发生 panic 也不影响：已注册的 defer 会按 LIFO 全部执行完，然后 panic 继续向上抛",
         "所有退出路径都会执行 defer：正常 return、panic 展开、runtime.Goexit",
-        "os.Exit() 和主 goroutine 直接结束不会执行 defer，因为进程立刻就退出了",
+        "只有 os.Exit()、log.Fatal 这类直接终止进程的调用会跳过 defer；main 正常 return 时，main 里注册的 defer 照样执行",
         "defer 里可以修改具名返回值（return 求值之后才改），但改不了未命名返回值"
-      ]
+      ],
+      "code": "defer fmt.Println(\"第 1 个 defer\")\ndefer fmt.Println(\"第 2 个 defer\")\nfmt.Println(\"函数体先执行\")",
+      "lang": "go",
+      "notes": "常见追问：defer 里能不能改返回值？——看返回的是不是具名返回值，具名的能改，未命名的改不了。常见错误回答：「defer 在 return 之前执行」，准确说法是 return 的返回值先求值、defer 后执行。另一个追问：循环里 defer 会不会堆积？（会，循环体内的 defer 要等函数结束才跑；要在每轮结束就释放资源，用匿名函数把循环体包一层）"
     },
     {
       "title": "defer 的参数是调用的时候求值，还是执行的时候求值？",
       "description": "defer 延迟的是函数调用，实参的求值时机是另一回事。",
-      "code": "i := 1\ndefer fmt.Println(\"defer 里看到 i =\", i)\ni = 2\nfmt.Println(\"主流程里 i =\", i)",
-      "lang": "go",
-      "notes": "常见追问：那 defer 里的闭包和 defer 的参数有什么区别？——实参在注册时求值，闭包体里的表达式在执行时求值。常见错误回答是「defer 会把整条语句都延迟到最后」，其实延迟的只是函数调用。",
       "answer": [
         "defer f(a, b) 里的实参在 defer 语句执行的那一刻（也就是注册时）就求值并保存下来",
         "所以 defer fmt.Println(i) 打印的是注册那一刻的 i，之后再改 i 不影响它",
@@ -30,14 +27,14 @@
         "如果参数是靠闭包去读变量（defer func(){...}()），读到的就是执行那一刻的最新值",
         "想在调用时再取值，就把求值放进闭包：defer func(){ fmt.Println(i) }()",
         "循环里注册多个 defer：直接传参每轮打印当轮的值；用闭包在 Go 1.22 之前会全部打印最后一轮的值"
-      ]
+      ],
+      "code": "i := 1\ndefer fmt.Println(\"defer 里看到 i =\", i)\ni = 2\nfmt.Println(\"主流程里 i =\", i)",
+      "lang": "go",
+      "notes": "常见追问：那 defer 里的闭包和 defer 的参数有什么区别？——实参在注册时求值，闭包体里的表达式在执行时求值。常见错误回答：「defer 会把整条语句都延迟到最后」，其实延迟的只是函数调用。"
     },
     {
       "title": "panic 和 recover 应该怎么用？边界在哪里？",
       "description": "panic/recover 是给「不该发生的错误」兜底的手段，不是日常的错误处理方式。",
-      "code": "defer func() {\n\tif r := recover(); r != nil {\n\t\tfmt.Println(\"捕获到 panic：\", r)\n\t}\n}()\npanic(\"出错了\")",
-      "lang": "go",
-      "notes": "常见追问：recover 能恢复所有 runtime error 吗？——能接住 panic，但恢复后程序状态未必自洽，要谨慎。常见错误答案是「recover 之后程序继续跑，什么都能恢复」，实际上死锁、并发 map 写入这类 fatal error 是 recover 不了的。另外问：goroutine 里 panic 没人 recover 会怎样？——整个进程退出。",
       "answer": [
         "panic(v) 主动抛出一个运行时错误，中止当前 goroutine，沿调用栈逐层展开，每一层都会执行自己的 defer",
         "recover() 只能在 defer 调用的函数里直接调用才有效，作用是拦截 panic、把程序拉回正常流程",
@@ -45,29 +42,29 @@
         "recover() 只能救同一个 goroutine 里的 panic——每个 goroutine 独立，一个 goroutine 的 panic 另一个 recover 不到",
         "把 recover 藏进辅助函数再调用会失效，必须在 defer 的函数体里直接调 recover()",
         "适用边界：HTTP handler 边界兜底、库的初始化失败保护；能预见的错误应该用 error 返回而不是 panic"
-      ]
+      ],
+      "code": "defer func() {\n\tif r := recover(); r != nil {\n\t\tfmt.Println(\"捕获到 panic：\", r)\n\t}\n}()\npanic(\"出错了\")",
+      "lang": "go",
+      "notes": "常见追问：recover 能恢复所有 runtime error 吗？——能接住 panic，但恢复后程序状态未必自洽，要谨慎。常见错误回答：「recover 之后程序继续跑，什么都能恢复」，实际上死锁、并发 map 写入这类 fatal error 是 recover 不了的。另外问：goroutine 里 panic 没人 recover 会怎样？——整个进程退出。"
     },
     {
       "title": "Go 的零值是什么？哪些类型的零值可以直接用？",
       "description": "Go 不需要显式初始化变量就能用，靠的就是零值规则。",
-      "code": "var n int\nvar s string\nvar b bool\nvar arr [3]int\nvar ptr *int\nvar m map[string]int\nfmt.Println(n, s, b, arr, ptr == nil, m == nil)",
-      "lang": "go",
-      "notes": "常见追问：零值切片和 nil slice 一样吗？——零值切片就是 nil，没有底层数组，append 会重新分配。常见错误答案是「所有零值都是 nil」或「所有零值都是 0」。另外问：结构体里嵌了互斥锁能按值传递吗？——不能，go vet 的 copylocks 会报错。",
       "answer": [
         "变量声明后不赋值就是零值，Go 保证每个类型都有明确的零值，不用像 C 那样手工初始化",
         "数值类型是 0（int 是 0，float64 是 0.0），bool 是 false，string 是空串",
         "指针、切片、map、chan、func、interface 的零值都是 nil",
         "数组的零值是每个元素各自取零值（[3]int{} 是 {0 0 0}），结构体是每个字段各自取零值",
         "零值能直接用的典型：sync.Mutex（零值就是未加锁状态）、bytes.Buffer、time.Time（零值有效，但表示公元 1 年）",
-        "零值不能直接用的：需要注册或启动才能工作的资源，比如数据库连接、HTTP 客户端，这类要靠构造函数返回"
-      ]
+        "零值不能直接用的：需要注册或启动的资源，比如 sql.DB 要用 sql.Open 构造；http.Client 的零值可以直接发请求，只是默认没有超时"
+      ],
+      "code": "var n int\nvar s string\nvar b bool\nvar arr [3]int\nvar ptr *int\nvar m map[string]int\nfmt.Println(n, s, b, arr, ptr == nil, m == nil)",
+      "lang": "go",
+      "notes": "常见追问：零值切片和 nil slice 一样吗？——零值切片就是 nil，没有底层数组，append 会重新分配。常见错误回答：「所有零值都是 nil」或「所有零值都是 0」。另外问：结构体里嵌了互斥锁能按值传递吗？——不能，go vet 的 copylocks 会报错。"
     },
     {
       "title": "Go 的接口是隐式实现的吗？interface{} 和 any 又是什么关系？",
       "description": "接口这一问其实有两半：怎么满足接口，以及空接口能装什么。",
-      "code": "package main\n\nimport \"fmt\"\n\ntype Speaker interface {\n\tSpeak() string\n}\n\ntype Dog struct{}\n\n// 不需要写 implements Speaker，有 Speak 方法就自动满足接口\nfunc (d Dog) Speak() string {\n\treturn \"汪\"\n}\n\nfunc main() {\n\tvar s Speaker = Dog{}\n\tfmt.Println(s.Speak())\n\n\tvar v any = 42\n\tif n, ok := v.(int); ok {\n\t\tfmt.Println(\"any 里装的是 int：\", n)\n\t}\n}",
-      "lang": "go",
-      "notes": "常见追问：接口变量里到底存了什么？——是「动态类型 + 动态值」的组合，常见错误答案是「接口就是一个指针」。另外问：接口和泛型的约束是一回事吗？——不是，constraint 是编译期的类型约束，不是运行时接口。",
       "answer": [
         "Go 的接口是隐式实现的：类型只要有接口要求的全部方法就自动满足它，不需要写 implements 声明",
         "编译期检查：把具体类型赋给接口变量时会校验方法集，缺一个方法直接编译失败",
@@ -75,29 +72,29 @@
         "方法集规则：值类型 T 的方法集只有接收者为 T 的方法，*T 的方法集包含 T 和 *T 的方法，所以 *T 满足接口而 T 不满足",
         "interface{} 是没有任何方法的接口，所有类型都满足它；Go 1.18 起加了别名 any，两者完全等价",
         "空接口会丢掉静态类型，取出来要用类型断言 v.(T)：单值形式失败会 panic，双值形式 v, ok 更安全"
-      ]
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\ntype Speaker interface {\n\tSpeak() string\n}\n\ntype Dog struct{}\n\n// 不需要写 implements Speaker，有 Speak 方法就自动满足接口\nfunc (d Dog) Speak() string {\n\treturn \"汪\"\n}\n\nfunc main() {\n\tvar s Speaker = Dog{}\n\tfmt.Println(s.Speak())\n\n\tvar v any = 42\n\tif n, ok := v.(int); ok {\n\t\tfmt.Println(\"any 里装的是 int：\", n)\n\t}\n}",
+      "lang": "go",
+      "notes": "常见追问：接口变量里到底存了什么？——是「动态类型 + 动态值」的组合，常见错误回答：「接口就是一个指针」。另外问：接口和泛型的约束是一回事吗？——不是，constraint 是编译期的类型约束，不是运行时接口。"
     },
     {
       "title": "为什么接口里明明是 nil，err != nil 却成立？",
       "description": "接口值由动态类型和动态值两部分组成，只有一边是 nil 就不算 nil。",
-      "code": "package main\n\nimport \"fmt\"\n\ntype MyError struct{}\n\nfunc (e *MyError) Error() string {\n\treturn \"boom\"\n}\n\nfunc bad() error {\n\tvar p *MyError\n\treturn p // 装进 error 的是「类型 *MyError + 值 nil」\n}\n\nfunc main() {\n\terr := bad()\n\tfmt.Println(\"err == nil ?\", err == nil)\n}",
-      "lang": "go",
-      "notes": "常见追问：返回 error 的函数怎么保证返回真正的 nil？——显式 return nil。常见错误答案是「接口值会自动变成 nil」，实际上装进去的 nil 指针带着类型信息。另一问：两个 interface{} 比较相等怎么算？——动态类型和值都相同才相等，值不可比较时运行时报错。",
       "answer": [
         "接口值 = 动态类型 + 动态值，两部分都为空时接口才等于 nil",
         "把一个 nil 指针赋给接口，动态类型是 *MyError、动态值是 nil，所以接口 != nil",
-        "经典翻车现场：函数声明返回 error，出错时 return (*MyError)(nil), nil，调用方 err != nil 直接成立",
+        "经典翻车现场：函数只有一个 error 返回值、里面又是 nil 的 *MyError 时，直接 return (*MyError)(nil)，调用方 err != nil 成立",
         "正确写法是出错就 return nil, err，不要把 nil 指针塞进 error",
         "要判断具体错误用类型断言 err.(*MyError) 或 errors.As(err, &target)，而不是拿 err == nil 当唯一判断",
         "反方向也成立：装着 nil map 或 nil slice 的接口同样不等于 nil"
-      ]
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\ntype MyError struct{}\n\nfunc (e *MyError) Error() string {\n\treturn \"boom\"\n}\n\nfunc bad() error {\n\tvar p *MyError\n\treturn p // 装进 error 的是「类型 *MyError + 值 nil」\n}\n\nfunc main() {\n\terr := bad()\n\tfmt.Println(\"err == nil ?\", err == nil)\n}",
+      "lang": "go",
+      "notes": "常见追问：返回 error 的函数怎么保证返回真正的 nil？——显式 return nil。常见错误回答：「接口值会自动变成 nil」，实际上装进去的 nil 指针带着类型信息。另一问：两个 interface{} 比较相等怎么算？——动态类型和值都相同才相等，值不可比较时运行时报错。"
     },
     {
       "title": "切片和底层数组是什么关系？append 什么时候会重新分配？",
       "description": "切片是描述底层数组的一个窗口，共享内存是它最容易出事的地方。",
-      "code": "arr := [3]int{1, 2, 3}\ns := arr[:2]\ns[0] = 100\nfmt.Println(arr[0])\n\ns2 := append(s, 9)\nfmt.Println(s2, arr)",
-      "lang": "go",
-      "notes": "常见追问：为什么 append 之后原数组也变了？——容量够，底层数组被复用，常见错误答案是「append 总是复制一份」。另外问：把切片传给函数，函数里 append 会影响调用方吗？——看容量够不够，所以传切片时经常要显式传 [:0] 或让函数返回新切片。",
       "answer": [
         "切片是一个 header：指向底层数组的指针 + 长度 + 容量，本身不存数据",
         "切片表达式 s[low:high] 和原数组共享内存，改元素互相可见",
@@ -105,12 +102,14 @@
         "扩容策略：Go 1.18 起容量小于 256 时翻倍，超过 256 后按约 1.25 倍增长，实际容量还会按内存大小类别对齐，不是精确值",
         "append 可能返回新的切片，所以永远写 s = append(s, x)，别指望原切片变量自己变长",
         "子切片的老问题：s[:2] 再 append 一个元素，会把原切片后面那个位置的元素覆盖掉"
-      ]
+      ],
+      "code": "arr := [3]int{1, 2, 3}\ns := arr[:2]\ns[0] = 100\nfmt.Println(arr[0])\n\ns2 := append(s, 9)\nfmt.Println(s2, arr)",
+      "lang": "go",
+      "notes": "常见追问：为什么 append 之后原数组也变了？——容量够，底层数组被复用，常见错误回答：「append 总是复制一份」。另外问：把切片传给函数，函数里 append 会影响调用方吗？——看容量够不够，所以传切片时经常要显式传 [:0] 或让函数返回新切片。"
     },
     {
       "title": "map 的遍历顺序为什么是随机的？nil map 能用吗？",
       "description": "map 有两件反直觉的事：遍历顺序不稳定，nil map 只能读不能写。",
-      "notes": "常见追问：遍历的时候删 key 会怎样？——Go 1.12 之后，删掉还没遍历到的 key 是允许的，不会 panic；但边遍历边写会 panic。常见错误答案是「map 的遍历顺序是按 key 排序的」。另外问：map 的零值是 nil 还是空 map？——是 nil，但读没问题。",
       "answer": [
         "Go 故意随机化 map 的遍历起点和桶内偏移，防止有人依赖遍历顺序写代码",
         "同一份 map 每次遍历顺序都可能不同；要稳定顺序就把 key 收集到切片里 sort.Strings 或 slices.Sort",
@@ -118,14 +117,12 @@
         "nil map 是合法的 map 值：读返回零值、range 遍历 0 次，都不会 panic",
         "nil map 写入会 panic：assignment to entry in nil map，需要写入就用 make(map[K]V) 初始化",
         "map 不能和普通值比较（== 会编译报错），只能跟 nil 比；两个 nil map 倒是相等的"
-      ]
+      ],
+      "notes": "常见追问：遍历的时候删 key 会怎样？——规范从一开始就允许遍历中删除，还没遍历到的已删 key 不会再产出；同一 goroutine 里改已存在的 key 不会 panic，多个 goroutine 并发写才会 fatal。常见错误回答：「map 的遍历顺序是按 key 排序的」。另外问：map 的零值是 nil 还是空 map？——是 nil，但读没问题。"
     },
     {
       "title": "多个 goroutine 同时操作同一个 map 会发生什么？",
       "description": "并发访问 map 是 Go 里少数几个「直接让整个进程挂掉」的错误。",
-      "code": "var mu sync.RWMutex\nm := make(map[string]int)\n\nmu.Lock()\nm[\"a\"] = 1\nmu.Unlock()\n\nmu.RLock()\nv := m[\"a\"]\nmu.RUnlock()\nfmt.Println(v)",
-      "lang": "go",
-      "notes": "常见追问：多个 goroutine 只读不写安全吗？——纯并发读是安全的。常见错误答案是「map 本身线程安全」。另一问：为什么 Go 不像 Java 的 HashMap 那样内置锁？——为了性能，锁的代价高，所以方案要自己选。",
       "answer": [
         "并发写同一个 map 会触发运行时 fatal error: concurrent map writes，整个进程直接退出",
         "这不是普通的 panic，不能 recover，只能重启进程",
@@ -133,14 +130,14 @@
         "map 内部是分桶的哈希表，本身没有任何并发保护，运行时检测到冲突就直接 fatal error",
         "正确做法：用 sync.RWMutex 保护读写、用 sync.Map，或者用 channel 把访问串行化",
         "读写量差别很大时可以自己做写时复制：写时复制一份新 map 再整体替换，但要自己保证一致性"
-      ]
+      ],
+      "code": "var mu sync.RWMutex\nm := make(map[string]int)\n\nmu.Lock()\nm[\"a\"] = 1\nmu.Unlock()\n\nmu.RLock()\nv := m[\"a\"]\nmu.RUnlock()\nfmt.Println(v)",
+      "lang": "go",
+      "notes": "常见追问：多个 goroutine 只读不写安全吗？——纯并发读是安全的。常见错误回答：「map 本身线程安全」。另一问：为什么 Go 不像 Java 的 HashMap 那样内置锁？——为了性能，锁的代价高，所以方案要自己选。"
     },
     {
       "title": "struct 是值类型吗？赋值和传参是拷贝吗？",
       "description": "结构体的赋值、传参、返回都是按值拷贝，而且只是浅拷贝。",
-      "code": "package main\n\nimport \"fmt\"\n\ntype Point struct {\n\tX int\n\tY int\n}\n\n// 结构体按值传参，函数里改的是副本\nfunc move(p Point) {\n\tp.X = 100\n}\n\nfunc main() {\n\tp := Point{X: 1, Y: 2}\n\tmove(p)\n\tfmt.Println(p.X)\n}",
-      "lang": "go",
-      "notes": "常见追问：结构体里有 map 字段，拷贝后改 map 会互相影响吗？——会，map 是引用语义，常见错误答案是「值类型拷贝后完全独立」。另一问：什么时候该用指针接收者？——要改原对象、类型里有锁、或者结构体比较大时。",
       "answer": [
         "struct 是值类型：赋值、传参、返回值都会把整个结构体按值拷贝一份",
         "这个拷贝是浅拷贝：字段里的指针、切片、map、channel 仍然指向同一块底层数据",
@@ -148,27 +145,29 @@
         "想让函数能改调用方的结构体就传指针 *T；大结构体传参也优先传指针，避免拷贝开销",
         "结构体里含 sync.Mutex 时不要按值复制，go vet 的 copylocks 会直接报错",
         "数组也是值类型：数组赋值会拷贝整个数组，结构体里的数组字段也一样"
-      ]
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\ntype Point struct {\n\tX int\n\tY int\n}\n\n// 结构体按值传参，函数里改的是副本\nfunc move(p Point) {\n\tp.X = 100\n}\n\nfunc main() {\n\tp := Point{X: 1, Y: 2}\n\tmove(p)\n\tfmt.Println(p.X)\n}",
+      "lang": "go",
+      "notes": "常见追问：结构体里有 map 字段，拷贝后改 map 会互相影响吗？——会，map 是引用语义，常见错误回答：「值类型拷贝后完全独立」。另一问：什么时候该用指针接收者？——要改原对象、类型里有锁、或者结构体比较大时。"
     },
     {
       "title": "string、byte、rune 有什么区别？",
       "description": "这三个类型的关系其实是「字节序列」和「Unicode 码点」的关系。",
-      "code": "s := \"你好\"\n\n// len 返回字节数，中文一个字占 3 个字节\nfmt.Println(len(s))\n// 转成 rune 切片才是字符数\nfmt.Println(len([]rune(s)))\n// range 迭代出的是码点，下标是字节偏移\nfor i, r := range s {\n\tfmt.Println(i, r)\n}",
-      "lang": "go",
-      "notes": "常见追问：字符串能直接改吗？——不能，string 不可变，这也是它能当 map key 的原因。常见错误答案是「string 就是字符数组」或者「len(s) 是字符数」。另一问：range 拿到的是字节还是字符？——是码点，下标是字节偏移。",
       "answer": [
-        "string 是一段只读字节序列，内容保证是合法 UTF-8",
+        "string 是一段只读字节序列，可以是任意字节，不保证是合法 UTF-8；只有字符串字面量由编译器保证合法",
         "byte 是 uint8 的别名，表示一个字节；rune 是 int32 的别名，表示一个 Unicode 码点",
         "对 string 用 range 时迭代出的是 rune，下标是字节偏移；for i := 0; i < len(s); i++ 迭代的才是字节",
         "len(s) 是字节数不是字符数：中文一般 3 字节，emoji 一般 4 字节",
         "string 和 []byte、[]rune 之间要显式转换：[]byte(s) 复制一份字节，[]rune(s) 解码成码点切片",
         "大量拼接字符串用 strings.Builder，比反复 s += 少很多分配"
-      ]
+      ],
+      "code": "s := \"你好\"\n\n// len 返回字节数，中文一个字占 3 个字节\nfmt.Println(len(s))\n// 转成 rune 切片才是字符数\nfmt.Println(len([]rune(s)))\n// range 迭代出的是码点，下标是字节偏移\nfor i, r := range s {\n\tfmt.Println(i, r)\n}",
+      "lang": "go",
+      "notes": "常见追问：字符串能直接改吗？——不能，string 不可变，这也是它能当 map key 的原因。常见错误回答：「string 就是字符数组」或者「len(s) 是字符数」。另一问：range 拿到的是字节还是字符？——是码点，下标是字节偏移。"
     },
     {
       "title": "for range 的循环变量在 Go 1.22 前后有什么变化？",
       "description": "循环变量是不是每轮新建，直接决定了闭包捕获会不会出错。",
-      "notes": "常见追问：老代码升级会不会行为变化？——会，依赖「共用同一个循环变量」的旧代码在 go 指令升到 1.22 后语义会变，升级前要 review。常见错误答案是「Go 一直是一轮一个变量」。另一问：Go 1.22 之前怎么修这个 bug？——只能把变量复制一份（v := v）。",
       "answer": [
         "Go 1.22 之前，for 循环的循环变量整个循环只创建一次，所有迭代共用它",
         "所以循环里把 &v 或者闭包存下来，最后全都指向同一个变量（值是最后一轮的），这是经典 bug",
@@ -176,14 +175,12 @@
         "新语义由模块的 go 指令决定：go.mod 里写 go 1.21 及以下仍是旧行为，写 go 1.22 及以上才启用",
         "循环变量的作用域只在 for 语句块内，循环外面访问不到",
         "顺带一提：Go 1.22 支持 range over int（for i := range 10），Go 1.23 支持 range over func 迭代器"
-      ]
+      ],
+      "notes": "常见追问：老代码升级会不会行为变化？——会，依赖「共用同一个循环变量」的旧代码在 go 指令升到 1.22 后语义会变，升级前要 review。常见错误回答：「Go 一直是一轮一个变量」。另一问：Go 1.22 之前怎么修这个 bug？——只能把变量复制一份（v := v）。"
     },
     {
       "title": ":= 的作用域规则是什么？什么是变量遮蔽？",
       "description": "短变量声明看着简单，但它在 if、for 里开的新作用域经常埋雷。",
-      "code": "x := 1\n{\n\tx := 2 // 遮蔽了外层的 x\n\tfmt.Println(x)\n}\nfmt.Println(x)",
-      "lang": "go",
-      "notes": "常见追问：怎么发现遮蔽？——用专门的静态检查工具（比如 golangci-lint 的 shadow 规则），或者干脆给变量起不同的名字。常见错误答案是「:= 在同一作用域里不能重复声明，所以不会遮蔽」，实际上 if 的初始化语句就是一个新作用域。",
       "answer": [
         ":= 至少要声明一个新变量，否则报 no new variables on left side of :=",
         ":= 声明的变量作用域从声明处一直到所在代码块结束",
@@ -191,14 +188,14 @@
         "在内层块里用 := 重新声明同名变量就是遮蔽：外层变量还在，只是被挡住了",
         "内层想改外层的值要用 = 而不是 :=，:= 一定会新建一个变量",
         "if err := f(); err != nil 里的 err 是新变量，外层的 err 仍然是 nil——这既是遮蔽也是常见 bug 源"
-      ]
+      ],
+      "code": "x := 1\n{\n\tx := 2 // 遮蔽了外层的 x\n\tfmt.Println(x)\n}\nfmt.Println(x)",
+      "lang": "go",
+      "notes": "常见追问：怎么发现遮蔽？——用专门的静态检查工具（比如 golangci-lint 的 shadow 规则），或者干脆给变量起不同的名字。常见错误回答：「:= 在同一作用域里不能重复声明，所以不会遮蔽」，实际上 if 的初始化语句就是一个新作用域。"
     },
     {
       "title": "多返回值和命名返回值怎么用？",
       "description": "多返回值是 Go 处理「多个结果 + 一个 error」的标准姿势。",
-      "code": "package main\n\nimport \"fmt\"\n\nfunc divmod(a, b int) (q int, r int) {\n\tq = a / b\n\tr = a % b\n\treturn\n}\n\nfunc main() {\n\tq, r := divmod(7, 2)\n\tfmt.Println(q, r)\n}",
-      "lang": "go",
-      "notes": "常见追问：裸 return 和 return a, b 有什么区别？——裸 return 返回的是当前命名变量的值，所以 defer 改过之后裸 return 会带上改后的值，常见错误答案是「两者完全一样」。另一问：多返回值和返回 struct 怎么选？——少量、语义明确用多返回值，字段多或要扩展用 struct。",
       "answer": [
         "Go 函数可以返回多个值，调用方用 a, b := f() 接收，用不上的位置写 _ 丢掉",
         "常见约定：最后一个返回值是 error，调用方拿到后先判 err 再用数据",
@@ -206,14 +203,14 @@
         "具名返回值 + defer 是常见组合：在 defer 里改 err 或改返回值，能给正常返回的路径打补丁",
         "裸 return 只能在有具名返回值的函数里用；没有具名返回值就必须 return a, b",
         "别用命名返回值 + defer 改 err 来藏错误，真实错误来源会被掩盖，团队风格要统一"
-      ]
+      ],
+      "code": "package main\n\nimport \"fmt\"\n\nfunc divmod(a, b int) (q int, r int) {\n\tq = a / b\n\tr = a % b\n\treturn\n}\n\nfunc main() {\n\tq, r := divmod(7, 2)\n\tfmt.Println(q, r)\n}",
+      "lang": "go",
+      "notes": "常见追问：裸 return 和 return a, b 有什么区别？——裸 return 返回的是当前命名变量的值，所以 defer 改过之后裸 return 会带上改后的值，常见错误回答：「两者完全一样」。另一问：多返回值和返回 struct 怎么选？——少量、语义明确用多返回值，字段多或要扩展用 struct。"
     },
     {
       "title": "为什么 Go 里类型转换必须显式写出来？",
       "description": "Go 是静态强类型语言，不同类型之间不会隐式转换。",
-      "code": "var i32 int32 = 42\nf := float64(i32)\nb := []byte(\"hi\")\ns := string(b)\nfmt.Println(f, s)",
-      "lang": "go",
-      "notes": "常见追问：常量怎么转？——常量默认无类型，能隐式赋给具体类型，比如 var x int64 = 42，常见错误答案是「Go 里任何地方都能自动转换」。另一问：uint8 和 byte 是什么关系？——完全一样，byte 就是 uint8 的别名。",
       "answer": [
         "Go 是静态强类型语言，不同类型之间不会自动转换，必须写 T(v)",
         "转换只在底层表示兼容时成立：int 转 int32 可以，string 转 int 不行（要用 strconv.Atoi）",
@@ -221,7 +218,10 @@
         "常见转换：[]byte(s)、[]rune(s)、string(b)、int64 转 time.Duration",
         "接口转具体类型用类型断言 v.(T)，不是类型转换 T(v)：断言失败会 panic，转换只看编译期的可转换性",
         "[]byte 转 string 会复制一次；高频转换可以用 strings.Builder 之类的方式避免拷贝"
-      ]
+      ],
+      "code": "var i32 int32 = 42\nf := float64(i32)\nb := []byte(\"hi\")\ns := string(b)\nfmt.Println(f, s)",
+      "lang": "go",
+      "notes": "常见追问：常量怎么转？——常量默认无类型，能隐式赋给具体类型，比如 var x int64 = 42，常见错误回答：「Go 里任何地方都能自动转换」。另一问：uint8 和 byte 是什么关系？——完全一样，byte 就是 uint8 的别名。"
     }
   ]
 }

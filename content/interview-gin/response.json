@@ -15,7 +15,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"html/template\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.SetHTMLTemplate(template.Must(template.New(\"hi\").Parse(\"<h1>hello {{.}}</h1>\")))\n\n\tr.GET(\"/string\", func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"hello %s\", \"gin\")\n\t})\n\tr.GET(\"/json\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\"msg\": \"ok\"})\n\t})\n\tr.GET(\"/html\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"hi\", \"gin\")\n\t})\n\tr.GET(\"/data\", func(c *gin.Context) {\n\t\tc.Data(http.StatusOK, \"application/octet-stream\", []byte{0x01, 0x02})\n\t})\n\tr.GET(\"/redirect\", func(c *gin.Context) {\n\t\tc.Redirect(http.StatusFound, \"/json\")\n\t})\n\n\tfor _, path := range []string{\"/string\", \"/json\", \"/html\", \"/data\", \"/redirect\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-9s status=%d type=%-30q location=%q body=%q\\n\",\n\t\t\tpath, w.Code, w.Header().Get(\"Content-Type\"), w.Header().Get(\"Location\"), w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：c.String 的第二个参数是 printf 格式串吗？——是，用户数据要作为参数传进去，别拼进格式串，否则会输出 %!s(MISSING)。追问：还有哪些渲染方法？——c.YAML、c.XML、c.JSONP、c.PureJSON（不转义 HTML 字符）。追问：c.Data 和 c.JSON 怎么选？——要自己控制字节和类型就用 c.Data，要序列化成结构就用 c.JSON。"
+      "notes": "常见追问：c.String 的第二个参数是 printf 格式串吗？——是，用户数据要作为参数传进去，别拼进格式串，否则会输出 %!s(MISSING)。追问：还有哪些渲染方法？——c.YAML、c.XML、c.JSONP、c.PureJSON（不转义 HTML 字符）。追问：c.Data 和 c.JSON 怎么选？——要自己控制字节和类型就用 c.Data，要序列化成结构就用 c.JSON。常见错误回答：c.JSON 的参数顺序是数据在前状态码在后——第一个参数才是 HTTP 状态码。"
     },
     {
       "title": "c.JSON 为什么会自动带上 Content-Type？",
@@ -28,7 +28,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\t// 默认：render.JSON 写 application/json; charset=utf-8\n\tr.GET(\"/default\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\"hello\": \"gin\"})\n\t})\n\n\t// 自己先设 Content-Type：Gin 发现已经有值就不再覆盖\n\tr.GET(\"/custom\", func(c *gin.Context) {\n\t\tc.Header(\"Content-Type\", \"application/vnd.api+json\")\n\t\tc.JSON(http.StatusOK, gin.H{\"hello\": \"gin\"})\n\t})\n\n\t// 手工拼 JSON 字符串：不会自动带 Content-Type\n\tr.GET(\"/raw\", func(c *gin.Context) {\n\t\tc.Data(http.StatusOK, \"application/json\", []byte(`{\"hello\":\"gin\"}`))\n\t})\n\n\tfor _, path := range []string{\"/default\", \"/custom\", \"/raw\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-8s type=%q body=%s\\n\", path, w.Header().Get(\"Content-Type\"), w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：Content-Type 里为什么带 charset=utf-8？——JSON 规范规定默认就是 UTF-8，Gin 直接写死。追问：想返回自己的 media type 怎么办？——渲染前 c.Header(\"Content-Type\", \"application/vnd.api+json\")，Gin 会保留你的值。追问：c.JSON 序列化失败怎么办？——错误会被挂到 c.Errors 并 Abort，响应体为空。"
+      "notes": "常见追问：Content-Type 里为什么带 charset=utf-8？——JSON 规范规定默认就是 UTF-8，Gin 直接写死。追问：想返回自己的 media type 怎么办？——渲染前 c.Header(\"Content-Type\", \"application/vnd.api+json\")，Gin 会保留你的值。追问：c.JSON 序列化失败怎么办？——错误会被挂到 c.Errors 并 Abort，响应体为空。常见错误回答：c.JSON 的 Content-Type 要手动 Set——render 会自动写成 application/json; charset=utf-8。"
     },
     {
       "title": "怎么返回自定义状态码？",
@@ -42,7 +42,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\t// 直接把状态码交给渲染函数\n\tr.GET(\"/teapot\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusTeapot, gin.H{\"msg\": \"我是个茶壶\"})\n\t})\n\n\t// 先设状态码再写 body，状态码依然生效\n\tr.GET(\"/created\", func(c *gin.Context) {\n\t\tc.Status(http.StatusCreated)\n\t\tc.Writer.WriteString(\"已创建\")\n\t})\n\n\t// body 已经写出之后再改状态码：Gin 会忽略\n\tr.GET(\"/late\", func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"body first\")\n\t\tc.Status(http.StatusNotFound)\n\t})\n\n\tfor _, path := range []string{\"/teapot\", \"/created\", \"/late\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-8s status=%d body=%q\\n\", path, w.Code, w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：c.Status 和 c.Writer.WriteHeader 有什么区别？——Gin 的 WriteHeader 只记录状态码不立即发送，真正的发送是 WriteHeaderNow。追问：能不能一律返回 200 再用 body 表示错误？——能跑但会让前端、网关和监控分不出失败，尽量让状态码和语义对齐。追问：怎么自定义状态码常量？——自己定义 const，比如 const CodeUserNotFound = 40401。"
+      "notes": "常见追问：c.Status 和 c.Writer.WriteHeader 有什么区别？——Gin 的 WriteHeader 只记录状态码不立即发送，真正的发送是 WriteHeaderNow。追问：能不能一律返回 200 再用 body 表示错误？——能跑但会让前端、网关和监控分不出失败，尽量让状态码和语义对齐。追问：怎么自定义状态码常量？——自己定义 const，比如 const CodeUserNotFound = 40401。常见错误回答：c.Status 会立刻写响应——它只改状态码，还要再写 body。"
     },
     {
       "title": "204 No Content 怎么写？",
@@ -56,7 +56,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\t// 标准的 204：只有状态码，没有 body\n\tr.DELETE(\"/cache\", func(c *gin.Context) {\n\t\tc.Status(http.StatusNoContent)\n\t})\n\n\t// c.JSON(204, ...) 的 body 会被 Gin 拦掉，但会留下 Content-Type\n\tr.GET(\"/json204\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusNoContent, gin.H{\"ok\": true})\n\t})\n\n\tcases := []struct {\n\t\tmethod string\n\t\tpath   string\n\t}{\n\t\t{http.MethodDelete, \"/cache\"},\n\t\t{http.MethodGet, \"/json204\"},\n\t}\n\tfor _, cs := range cases {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(cs.method, cs.path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-9s status=%d type=%q body=%q\\n\",\n\t\t\tcs.path, w.Code, w.Header().Get(\"Content-Type\"), w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：304 Not Modified 呢？——同样不允许有 body，Gin 也拦掉了。追问：202 Accepted 是什么？——表示请求已受理但还没完成，常用于异步任务。追问：状态码 200 和 204 客户端处理有区别吗？——多数 HTTP 库不区分，但语义不同，204 明确表示无内容。"
+      "notes": "常见追问：304 Not Modified 呢？——同样不允许有 body，Gin 也拦掉了。追问：202 Accepted 是什么？——表示请求已受理但还没完成，常用于异步任务。追问：状态码 200 和 204 客户端处理有区别吗？——多数 HTTP 库不区分，但语义不同，204 明确表示无内容。常见错误回答：204 也可以带 body——204 按规范不能有响应体，写 body 本身就不符合语义。"
     },
     {
       "title": "怎么设计一个统一的响应格式？",
@@ -70,7 +70,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 统一响应体：code 是业务码，0 表示成功\ntype Response struct {\n\tCode      int    `json:\"code\"`\n\tMessage   string `json:\"message\"`\n\tData      any    `json:\"data,omitempty\"`\n\tRequestID string `json:\"request_id,omitempty\"`\n}\n\n// 成功响应\nfunc Success(c *gin.Context, data any) {\n\tc.JSON(http.StatusOK, Response{\n\t\tCode:      0,\n\t\tMessage:   \"ok\",\n\t\tData:      data,\n\t\tRequestID: c.GetString(\"request_id\"),\n\t})\n}\n\n// 失败响应：Abort 保证后面的 handler 不再执行\nfunc Fail(c *gin.Context, status int, code int, message string) {\n\tc.AbortWithStatusJSON(status, Response{\n\t\tCode:      code,\n\t\tMessage:   message,\n\t\tRequestID: c.GetString(\"request_id\"),\n\t})\n}\n\n// 请求 ID 中间件：统一塞进响应头和响应体\nfunc RequestID() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tid := fmt.Sprintf(\"req-%d\", time.Now().UnixNano())\n\t\tc.Set(\"request_id\", id)\n\t\tc.Header(\"X-Request-Id\", id)\n\t\tc.Next()\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(RequestID())\n\n\tr.GET(\"/users/:id\", func(c *gin.Context) {\n\t\tif c.Param(\"id\") != \"1\" {\n\t\t\tFail(c, http.StatusNotFound, 40400, \"用户不存在\")\n\t\t\treturn\n\t\t}\n\t\tSuccess(c, gin.H{\"id\": 1, \"name\": \"forty\"})\n\t})\n\n\tfor _, path := range []string{\"/users/1\", \"/users/2\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-9s status=%d trace=%s body=%s\\n\",\n\t\t\tpath, w.Code, w.Header().Get(\"X-Request-Id\"), w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：code 字段和 HTTP 状态码重复吗？——不重复，HTTP 状态码给网关、监控看，业务码给前端判断具体分支。追问：data 为空时省略还是返回 null？——用 omitempty 或者固定 null，两端约定好即可。追问：这套结构要能扩展吗？——把 code 规划成分段区间（用户 1xxxx、订单 2xxxx），写进接口文档。"
+      "notes": "常见追问：code 字段和 HTTP 状态码重复吗？——不重复，HTTP 状态码给网关、监控看，业务码给前端判断具体分支。追问：data 为空时省略还是返回 null？——用 omitempty 或者固定 null，两端约定好即可。追问：这套结构要能扩展吗？——把 code 规划成分段区间（用户 1xxxx、订单 2xxxx），写进接口文档。常见错误回答：统一响应格式就是把所有接口都包一层 data——错误码和 HTTP 状态码的映射也要定清楚。"
     },
     {
       "title": "业务错误怎么返回给前端？",
@@ -85,7 +85,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// BizError 是业务错误：Code 给前端用，Err 只进日志\ntype BizError struct {\n\tCode int\n\tMsg  string\n\tErr  error\n}\n\nfunc (e *BizError) Error() string {\n\treturn fmt.Sprintf(\"biz error %d: %v\", e.Code, e.Err)\n}\n\n// 业务层返回 BizError\nfunc loadUser(id string) (gin.H, error) {\n\tif id != \"1\" {\n\t\treturn nil, &BizError{\n\t\t\tCode: 10001,\n\t\t\tMsg:  \"用户不存在\",\n\t\t\tErr:  errors.New(\"db: sql: no rows in result set\"),\n\t\t}\n\t}\n\treturn gin.H{\"id\": id, \"name\": \"forty\"}, nil\n}\n\n// 统一错误处理中间件：handler 只负责 c.Error(err)\nfunc ErrorHandler() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tc.Next()\n\t\tif len(c.Errors) == 0 || c.Writer.Written() {\n\t\t\treturn\n\t\t}\n\t\terr := c.Errors.Last().Err\n\t\tvar biz *BizError\n\t\tif errors.As(err, &biz) {\n\t\t\t// 内部错误只进日志，不返回给用户\n\t\t\tfmt.Printf(\"internal error: %v\\n\", biz.Err)\n\t\t\tc.AbortWithStatusJSON(http.StatusBadRequest, gin.H{\n\t\t\t\t\"code\":    biz.Code,\n\t\t\t\t\"message\": biz.Msg,\n\t\t\t})\n\t\t\treturn\n\t\t}\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\n\t\t\t\"code\":    50000,\n\t\t\t\"message\": \"服务器内部错误\",\n\t\t})\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(ErrorHandler())\n\n\tr.GET(\"/users/:id\", func(c *gin.Context) {\n\t\tuser, err := loadUser(c.Param(\"id\"))\n\t\tif err != nil {\n\t\t\t_ = c.Error(err) // 挂到 c.Errors，交给错误中间件统一输出\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, user)\n\t})\n\n\tfor _, path := range []string{\"/users/1\", \"/users/2\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-9s status=%d body=%s\\n\", path, w.Code, w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：为什么用 c.Error 而不是自己维护一个 error 变量？——c.Error 把错误挂到请求上下文，还能记录调用栈，交给中间件统一处理，测试也好断言。追问：错误码怎么规划？——按模块分段并写进文档，前端按码做分支而不是解析文案。追问：中间件里能不能直接 return 错误？——可以，但那样每个 handler 都要写一遍错误分支，handler 里就只留成功路径。"
+      "notes": "常见追问：为什么用 c.Error 而不是自己维护一个 error 变量？——c.Error 把错误挂到请求上下文，还能记录调用栈，交给中间件统一处理，测试也好断言。追问：错误码怎么规划？——按模块分段并写进文档，前端按码做分支而不是解析文案。追问：中间件里能不能直接 return 错误？——可以，但那样每个 handler 都要写一遍错误分支，handler 里就只留成功路径。常见错误回答：业务错误一律返回 200——HTTP 状态码和业务码要各司其职，全 200 会让网关和监控失灵。"
     },
     {
       "title": "handler 里 panic 了会怎样？gin.Recovery 做了什么？",
@@ -100,22 +100,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\t// gin.Recovery() 默认把堆栈打到 stderr；这里换成 io.Discard，只看它的响应行为\n\tr.Use(gin.RecoveryWithWriter(io.Discard))\n\n\tr.GET(\"/panic\", func(c *gin.Context) {\n\t\tpanic(\"boom\")\n\t})\n\tr.GET(\"/ok\", func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"fine\")\n\t})\n\n\tfor _, path := range []string{\"/panic\", \"/ok\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-7s status=%d body=%q\\n\", path, w.Code, w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：生产环境为什么还要自己写 Recovery？——默认版本把栈打到 stderr 且返回空 body，接不上统一响应格式；自定义版本能返回统一 JSON 并把栈送进日志系统。追问：panic 和 error 怎么选？——可预期的失败用 error 返回，只有「不该发生」的错误才 panic。追问：panic 会影响其他请求吗？——net/http 每个请求一个 goroutine，panic 不 recover 会杀掉那个 goroutine 并让连接断开，但进程本身通常不退出。"
-    },
-    {
-      "title": "怎么写一个自定义的 Recovery 中间件？",
-      "description": "既要兜住 panic，又要返回统一 JSON 错误体的两种写法。",
-      "answer": [
-        "最省事的是 gin.CustomRecovery(handle)：复用 Gin 的 recover 和栈打印，只把「出错之后怎么回响应」换成你自己的。",
-        "handle 的签名是 func(c *gin.Context, err any)，在里面 c.AbortWithStatusJSON(500, 统一错误体) 就行。",
-        "也可以完全自己写：defer 里 recover()，recover 有返回值说明发生了 panic，打日志后写响应并 c.Abort()。",
-        "自定义版本要把堆栈送进日志系统（debug.Stack() 或 runtime.Callers），绝不能塞进 HTTP 响应。",
-        "这个中间件必须待在链的最外层（最先注册），否则兜不住后面 handler 抛出的 panic。",
-        "gin.RecoveryWithWriter(io.Discard, handle) 可以连 stderr 输出一起关掉。"
-      ],
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"runtime/debug\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 写法一：用 Gin 自带的 CustomRecovery，只替换「出错之后怎么回响应」\nfunc customRecovery() gin.HandlerFunc {\n\treturn gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, err any) {\n\t\tfmt.Printf(\"[panic] %v\\n%s\\n\", err, debug.Stack())\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\n\t\t\t\"code\":    50000,\n\t\t\t\"message\": \"服务器内部错误\",\n\t\t})\n\t})\n}\n\n// 写法二：自己写一个功能等价的中间件\nfunc myRecovery() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tdefer func() {\n\t\t\tif rec := recover(); rec != nil {\n\t\t\t\tfmt.Printf(\"[panic] %v\\n%s\\n\", rec, debug.Stack())\n\t\t\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\n\t\t\t\t\t\"code\":    50000,\n\t\t\t\t\t\"message\": \"服务器内部错误\",\n\t\t\t\t})\n\t\t\t}\n\t\t}()\n\t\tc.Next()\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/custom\", customRecovery(), func(c *gin.Context) { panic(\"custom boom\") })\n\tr.GET(\"/mine\", myRecovery(), func(c *gin.Context) { panic(\"my boom\") })\n\n\tfor _, path := range []string{\"/custom\", \"/mine\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-7s status=%d body=%s\\n\", path, w.Code, w.Body.String())\n\t}\n}",
-      "lang": "go",
-      "notes": "常见追问：recover 之后还要 c.Next() 吗？——不要，链路已经断了，直接写响应并 Abort。追问：怎么区分是我自己抛的 panic 还是框架抛的？——按 panic 的值类型判断，自己抛的用统一的 error 类型包装。追问：自己写会不会漏掉 Gin 的细节？——会，比如连接已断时不该再写 500，用 CustomRecovery 就不会有这个问题。"
+      "notes": "常见追问：生产环境为什么还要自己写 Recovery？——默认版本把栈打到 stderr 且返回空 body，接不上统一响应格式；自定义版本能返回统一 JSON 并把栈送进日志系统。追问：panic 和 error 怎么选？——可预期的失败用 error 返回，只有「不该发生」的错误才 panic。追问：panic 会影响其他请求吗？——net/http 每个请求一个 goroutine，panic 不 recover 会杀掉那个 goroutine 并让连接断开，但进程本身通常不退出。常见错误回答：Recovery 会把堆栈返回给客户端——它只写 500 空 body，堆栈打到 stderr。"
     },
     {
       "title": "c.AbortWithStatusJSON 和 c.AbortWithStatus 有什么区别？",
@@ -129,7 +114,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 需要登录：返回 JSON body\nfunc requireLogin() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif c.GetHeader(\"X-Token\") == \"\" {\n\t\t\tc.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{\n\t\t\t\t\"code\":    40100,\n\t\t\t\t\"message\": \"未登录\",\n\t\t\t})\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}\n}\n\n// 需要管理员：只有状态码，没有 body\nfunc requireAdmin() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif c.GetHeader(\"X-Admin\") == \"\" {\n\t\t\tc.AbortWithStatus(http.StatusForbidden)\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/profile\", requireLogin(), func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"profile\")\n\t})\n\tr.GET(\"/admin\", requireAdmin(), func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"admin panel\")\n\t})\n\n\tcases := []struct {\n\t\tpath  string\n\t\ttoken string\n\t}{\n\t\t{\"/profile\", \"\"},\n\t\t{\"/profile\", \"secret\"},\n\t\t{\"/admin\", \"\"},\n\t}\n\tfor _, cs := range cases {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, cs.path, nil)\n\t\tif cs.token != \"\" {\n\t\t\treq.Header.Set(\"X-Token\", cs.token)\n\t\t}\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-9s status=%d body=%q\\n\", cs.path, w.Code, w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：只写 c.JSON(401, ...) 不 Abort 会怎样？——后面的 handler 照样执行，body 被追加成两份内容，必须 Abort。追问：Abort 之后还能写响应吗？——能写但没意义，状态码和 body 已经发出去了。追问：AbortWithStatus 会写 Content-Type 吗？——不会，body 为空也就没有内容类型。"
+      "notes": "常见追问：只写 c.JSON(401, ...) 不 Abort 会怎样？——后面的 handler 照样执行，body 被追加成两份内容，必须 Abort。追问：Abort 之后还能写响应吗？——能写但没意义，状态码和 body 已经发出去了。追问：AbortWithStatus 会写 Content-Type 吗？——不会，body 为空也就没有内容类型。常见错误回答：c.AbortWithStatusJSON 和 c.AbortWithStatus 没有区别——前者会写 JSON body，后者只设状态码并 Abort。"
     },
     {
       "title": "文件下载和文件流怎么实现？",
@@ -144,7 +129,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"bytes\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\t\"path/filepath\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 造一个临时文件\n\tdir, err := os.MkdirTemp(\"\", \"gin-file\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer os.RemoveAll(dir)\n\tpath := filepath.Join(dir, \"report.txt\")\n\tcontent := []byte(\"季度报告：营收增长 20%\\n\")\n\tif err := os.WriteFile(path, content, 0o600); err != nil {\n\t\tpanic(err)\n\t}\n\n\tr := gin.New()\n\t// 下载：带 Content-Disposition，浏览器当成附件保存\n\tr.GET(\"/download\", func(c *gin.Context) {\n\t\tc.FileAttachment(path, \"report.txt\")\n\t})\n\t// 内联：直接显示文件内容\n\tr.GET(\"/inline\", func(c *gin.Context) {\n\t\tc.File(path)\n\t})\n\t// 文件流：内容来自 io.Reader，适合大文件或动态生成\n\tr.GET(\"/stream\", func(c *gin.Context) {\n\t\tc.DataFromReader(http.StatusOK, int64(len(content)), \"text/plain; charset=utf-8\", bytes.NewReader(content), nil)\n\t})\n\n\tfor _, p := range []string{\"/download\", \"/inline\", \"/stream\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, p, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-9s status=%d type=%-30q disposition=%q body=%q\\n\",\n\t\t\tp, w.Code, w.Header().Get(\"Content-Type\"), w.Header().Get(\"Content-Disposition\"), w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：怎么防止用户用 ../ 读到别的文件？——不要用请求参数拼路径，先查数据库拿真实路径，或做白名单校验。追问：下载接口要不要鉴权？——要，中间件在 handler 之前执行，鉴权同样覆盖下载接口。追问：文件名是中文怎么办？——FileAttachment 对非 ASCII 文件名会改用 filename*=UTF-8'' 的写法。"
+      "notes": "常见追问：怎么防止用户用 ../ 读到别的文件？——不要用请求参数拼路径，先查数据库拿真实路径，或做白名单校验。追问：下载接口要不要鉴权？——要，中间件在 handler 之前执行，鉴权同样覆盖下载接口。追问：文件名是中文怎么办？——FileAttachment 对非 ASCII 文件名会改用 filename*=UTF-8'' 的写法。常见错误回答：c.File 会把整个文件读进内存——它走流式发送，大文件也不会整块进堆。"
     },
     {
       "title": "c.Stream 怎么用？",
@@ -159,7 +144,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// httptest.ResponseRecorder 没有实现 http.CloseNotifier，\n// 而 Gin 的 c.Stream 依赖它，所以自己包一层\ntype streamRecorder struct {\n\t*httptest.ResponseRecorder\n\tclosed chan bool\n}\n\nfunc (s *streamRecorder) CloseNotify() <-chan bool {\n\treturn s.closed\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/stream\", func(c *gin.Context) {\n\t\ti := 0\n\t\t// step 返回 false 表示没有更多数据了，Stream 随之结束\n\t\tc.Stream(func(w io.Writer) bool {\n\t\t\ti++\n\t\t\tif _, err := fmt.Fprintf(w, \"chunk-%d\\n\", i); err != nil {\n\t\t\t\treturn false\n\t\t\t}\n\t\t\treturn i < 3\n\t\t})\n\t})\n\n\tw := &streamRecorder{ResponseRecorder: httptest.NewRecorder(), closed: make(chan bool)}\n\treq := httptest.NewRequest(http.MethodGet, \"/stream\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Printf(\"status=%d flushed=%v body=%q\\n\", w.Code, w.Flushed, w.Body.String())\n}",
       "lang": "go",
-      "notes": "常见追问：SSE 用 c.Stream 还是 c.SSEvent？——c.SSEvent 写完一条事件不刷新，c.Stream 每步都 flush。追问：怎么知道客户端断了？——靠 c.Stream 的返回值，或者监听 c.Request.Context().Done()。追问：为什么要自己设 Content-Type？——Stream 只负责写字节，不管内容类型。"
+      "notes": "常见追问：SSE 用 c.Stream 还是 c.SSEvent？——c.SSEvent 写完一条事件不刷新，c.Stream 每步都 flush。追问：怎么知道客户端断了？——靠 c.Stream 的返回值，或者监听 c.Request.Context().Done()。追问：为什么要自己设 Content-Type？——Stream 只负责写字节，不管内容类型。常见错误回答：c.Stream 适合普通 JSON 响应——它用于流式输出，普通响应用 c.JSON 更简单。"
     },
     {
       "title": "怎么设置响应头？",
@@ -174,7 +159,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\t// 响应头要在写 body 之前设置\n\tr.GET(\"/headers\", func(c *gin.Context) {\n\t\tc.Header(\"X-Custom\", \"v1\")                      // c.Header 就是 Header().Set\n\t\tc.Writer.Header().Set(\"X-Powered-By\", \"gopher\") // 也可以直接用标准库写法\n\t\tc.SetCookie(\"sid\", \"abc123\", 3600, \"/\", \"\", false, true)\n\t\tc.JSON(http.StatusOK, gin.H{\"ok\": true})\n\t})\n\n\t// body 已经写出之后再设头：客户端收不到\n\tr.GET(\"/late\", func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"body first\")\n\t\tc.Header(\"X-Late\", \"too late\")\n\t})\n\n\tfor _, path := range []string{\"/headers\", \"/late\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tres := w.Result()\n\t\tfmt.Printf(\"%-8s custom=%q powered=%q late=%q cookie=%q\\n\",\n\t\t\tpath, res.Header.Get(\"X-Custom\"), res.Header.Get(\"X-Powered-By\"),\n\t\t\tres.Header.Get(\"X-Late\"), res.Header.Get(\"Set-Cookie\"))\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：c.Header 传空字符串会怎样？——Gin 当成删除这个头，走 Header().Del。追问：能改已经发出的 Content-Type 吗？——不能，必须在渲染之前设置。追问：响应头名大小写敏感吗？——HTTP 头名不区分大小写，但 Go 的 Header() 会统一规范化成 Content-Type 这种形式。"
+      "notes": "常见追问：c.Header 传空字符串会怎样？——Gin 当成删除这个头，走 Header().Del。追问：能改已经发出的 Content-Type 吗？——不能，必须在渲染之前设置。追问：响应头名大小写敏感吗？——HTTP 头名不区分大小写，但 Go 的 Header() 会统一规范化成 Content-Type 这种形式。常见错误回答：响应头可以在写 body 之后再改——一旦写出 body，header 就已经发送了。"
     },
     {
       "title": "为什么不该把内部错误暴露给用户？",
@@ -187,7 +172,7 @@
         "正确做法：内部错误只进日志（带上 request_id 便于排查），返回给客户端的是统一错误码加通用提示。",
         "排查时靠 request_id 关联日志，而不是把错误原文发给前端。"
       ],
-      "notes": "常见追问：开发环境要不要返回详细错误？——可以，但只在 debug 模式下开，生产环境必须屏蔽。追问：怎么防止有人图省事直接返回 err.Error()？——在 code review 里卡住，并且用统一错误中间件兜底，不让 handler 自己拼错误响应。追问：错误提示文案应该谁定？——产品和前端一起定业务码和文案，映射表写进接口文档。"
+      "notes": "常见追问：开发环境要不要返回详细错误？——可以，但只在 debug 模式下开，生产环境必须屏蔽。追问：怎么防止有人图省事直接返回 err.Error()？——在 code review 里卡住，并且用统一错误中间件兜底，不让 handler 自己拼错误响应。追问：错误提示文案应该谁定？——产品和前端一起定业务码和文案，映射表写进接口文档。常见错误回答：把 err.Error() 直接返回给用户——会泄露表名、路径等内部信息，应返回通用提示并记日志。"
     },
     {
       "title": "404 和 405 怎么处理？NoRoute 和 NoMethod 有什么区别？",
@@ -202,7 +187,7 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\t// 必须打开这个开关，NoMethod 才会生效，否则方法不对也返回 404\n\tr.HandleMethodNotAllowed = true\n\n\tr.NoRoute(func(c *gin.Context) {\n\t\tc.JSON(http.StatusNotFound, gin.H{\"code\": 40400, \"message\": \"资源不存在\"})\n\t})\n\tr.NoMethod(func(c *gin.Context) {\n\t\tc.JSON(http.StatusMethodNotAllowed, gin.H{\"code\": 40500, \"message\": \"请求方法不允许\"})\n\t})\n\n\tr.GET(\"/users\", func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"users\")\n\t})\n\n\tcases := []struct {\n\t\tmethod string\n\t\tpath   string\n\t}{\n\t\t{http.MethodGet, \"/users\"},\n\t\t{http.MethodGet, \"/not-exist\"},\n\t\t{http.MethodPost, \"/users\"},\n\t}\n\tfor _, cs := range cases {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(cs.method, cs.path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-6s %-11s status=%d allow=%q body=%s\\n\",\n\t\t\tcs.method, cs.path, w.Code, w.Header().Get(\"Allow\"), w.Body.String())\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：怎么给 NoRoute 挂中间件？——r.NoRoute(mw1, mw2, handler)，参数是变体的。追问：前端怎么区分 404 和 405？——看状态码或 body 里的业务码，语义不同：404 是路径不存在，405 是路径存在但方法不对。追问：静态资源找不到也走 NoRoute 吗？——是，如果单独挂了 StaticFS，文件不存在时通常由文件服务器自己返回 404。"
+      "notes": "常见追问：怎么给 NoRoute 挂中间件？——r.NoRoute(mw1, mw2, handler)，参数是变体的。追问：前端怎么区分 404 和 405？——看状态码或 body 里的业务码，语义不同：404 是路径不存在，405 是路径存在但方法不对。追问：静态资源找不到也走 NoRoute 吗？——是，如果单独挂了 StaticFS，文件不存在时通常由文件服务器自己返回 404。常见错误回答：NoRoute 能同时处理 405——405 要用 NoMethod，两者是分开的处理器。"
     }
   ]
 }

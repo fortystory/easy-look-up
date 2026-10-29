@@ -13,9 +13,9 @@
         "init() 和包级变量初始化都在 main goroutine 里串行执行；init 里 go 出去的 goroutine 谁先跑不保证",
         "init() 里可以启动 goroutine，但不能假设 main 已经开始执行，也不能从 init 里读 main 的返回值"
       ],
-      "notes": "常见追问：init() 能返回错误吗？init() 里 panic 会怎样？——init 不能返回错误，只能 panic；init 里 panic 会让程序在 main 之前就崩掉。常见错误回答：「init 一定先于包级变量初始化」，顺序反了。",
       "code": "package main\n\nimport \"fmt\"\n\nvar order = []string{\"包级变量\"}\n\nfunc init() {\n\torder = append(order, \"init\")\n}\n\nfunc main() {\n\torder = append(order, \"main\")\n\tfmt.Println(order)\n}",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：init() 能返回错误吗？init() 里 panic 会怎样？——init 不能返回错误，只能 panic；init 里 panic 会让程序在 main 之前就崩掉。常见错误回答：「init 一定先于包级变量初始化」，顺序反了。"
     },
     {
       "title": "goroutine 有哪些状态？它的生命周期是怎样的？",
@@ -74,7 +74,7 @@
       "description": "Go 1.14 之前的抢占方式，也是解释「为什么我的程序有时候整个卡住」的经典答案。",
       "answer": [
         "协作式抢占指：运行时要抢走一个 G，必须等它自己跑到「安全点」主动让出",
-        "安全点由编译器插入，位置包括函数调用、循环回边、栈增长检查、内存分配等",
+        "安全点由编译器插入，典型位置是函数入口的栈增长检查、函数调用、channel 操作和阻塞系统调用；纯计算的循环体里没有安全点",
         "抢占标志由 sysmon 设置，G 在下一个安全点检查到标志才切换出去",
         "所以一个纯计算的死循环（没有函数调用）永远走不到安全点，这个 G 会一直霸占它的 P",
         "Go 1.14 之前这样的死循环能让同 P 上的其它 goroutine 全部饿死，表现为程序毫无反应",
@@ -93,9 +93,9 @@
         "限制：cgo 调用、正在执行的系统调用、运行时内部的临界区不能被异步打断",
         "信号机制不可用的平台（如 js/wasm）退化成协作式抢占，写代码时不能假设死循环一定被打断"
       ],
-      "notes": "常见追问：异步抢占等于操作系统的抢占吗？——不等于，OS 线程仍被 Go 完全占有，信号只是打断 Go 代码的手段。常见错误回答：「Go 1.14 之后靠时间片抢占」——Go 没有时间片，是 sysmon 定时检查加信号。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\tgo func() {\n\t\tx := 0\n\t\tfor i := 0; i < 200000000; i++ {\n\t\t\tx += i\n\t\t}\n\t\tfmt.Println(\"计算结束\", x)\n\t}()\n\ttime.Sleep(50 * time.Millisecond)\n\tfmt.Println(\"主 goroutine 没被计算循环卡住\")\n}",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：异步抢占等于操作系统的抢占吗？——不等于，OS 线程仍被 Go 完全占有，信号只是打断 Go 代码的手段。常见错误回答：「Go 1.14 之后靠时间片抢占」——Go 没有时间片，是 sysmon 定时检查加信号。"
     },
     {
       "title": "goroutine 的栈有多大？栈是怎么增长的？",
@@ -134,9 +134,9 @@
         "看位置用 runtime.Stack(buf, true) 打印所有 goroutine 的栈，或用 pprof 的 goroutine profile（/debug/pprof/goroutine?debug=2）看每个 goroutine 卡在哪一行",
         "防和测：给 goroutine 配 context 超时、defer cancel()、defer ticker.Stop()；单测里用 uber-go/goleak 断言没有残留"
       ],
-      "notes": "常见追问：pprof 的 goroutine profile 怎么用来查泄露？——它直接给出每个 goroutine 的阻塞点和等待原因，是定位泄露最直接的手段。常见错误回答：「goroutine 泄露就是内存泄漏」——goroutine 泄露会连带造成内存泄露，根因是 goroutine 卡住。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n\t\"time\"\n)\n\nfunc main() {\n\tfmt.Println(\"启动前:\", runtime.NumGoroutine())\n\tch := make(chan int)\n\tgo func() {\n\t\t<-ch // 永远等不到值，这个 goroutine 就泄漏了\n\t}()\n\ttime.Sleep(100 * time.Millisecond)\n\tfmt.Println(\"启动后:\", runtime.NumGoroutine())\n}",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：pprof 的 goroutine profile 怎么用来查泄露？——它直接给出每个 goroutine 的阻塞点和等待原因，是定位泄露最直接的手段。常见错误回答：「goroutine 泄露就是内存泄漏」——goroutine 泄露会连带造成内存泄露，根因是 goroutine 卡住。"
     },
     {
       "title": "Go 在什么情况下会创建新的 M（OS 线程）？",
@@ -160,26 +160,26 @@
         "设置方式：启动时用环境变量 GOMAXPROCS=n，或运行时调 runtime.GOMAXPROCS(n)；runtime.GOMAXPROCS(0) 只是查询当前值",
         "它不是 CPU 配额：设成 1 只是不能并行，不会限制单个 goroutine 能占多少 CPU",
         "阻塞在系统调用的 goroutine 会把 P 让出去，所以 syscall 密集的程序即使 GOMAXPROCS=1 也可能用满多核",
-        "调参方向：IO 密集适当调大以掩盖等待，CPU 密集一般贴着核数或留一两个核给 GC 和其它进程"
+        "调参方向：默认按逻辑核数配置即可；IO 阻塞会自动让出 P，调大掩盖不了等待，CPU 密集时一般贴着核数或留一两个核给 GC"
       ],
-      "notes": "常见追问：调小 GOMAXPROCS 会立刻杀掉正在跑的 goroutine 吗？——不会，它在下一个调度点才生效，属于软限制。常见错误回答：「GOMAXPROCS 越大 CPU 占用越高」——IO 密集时调大提升的是并发吞吐，不是 CPU 占用。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n)\n\nfunc main() {\n\tfmt.Println(\"逻辑核数:\", runtime.NumCPU())\n\tfmt.Println(\"GOMAXPROCS:\", runtime.GOMAXPROCS(0))\n}",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：调小 GOMAXPROCS 会立刻杀掉正在跑的 goroutine 吗？——不会，它在下一个调度点才生效，属于软限制。常见错误回答：「GOMAXPROCS 越大性能越好」——IO 阻塞会自动让出 P，调大掩盖不了等待，还可能增加调度和 GC 开销。"
     },
     {
       "title": "goroutine 阻塞的时候，P 是交给别人还是继续占着 M？",
       "description": "这一问直接决定了对 Go 调度器的理解是否到位，答案要区分两类阻塞。",
       "answer": [
         "分两种阻塞：阻塞在 channel、锁、select、网络 I/O 上属于用户态阻塞",
-        "用户态阻塞时 goroutine 进入 waiting 状态，把 M 让出来给 P 上的下一个 G 用，P 始终绑在这个 M 上",
+        "用户态阻塞时 goroutine 进入 waiting 状态，M 继续执行 P 上队列里的下一个 G，M 本身不释放，P 也始终绑在它上面",
         "所以 Go 的协程阻塞不会浪费 OS 线程，这也是 Go 比「线程池加阻塞 IO」高效的根本原因",
         "阻塞在系统调用里则不同：goroutine 进入 syscall 状态，M 陷在内核里，P 必须通过 handoff 交给别的 M",
         "如果一时没有 M 接手，这个 P 就变成空闲态，并行度下降——这就是系统调用昂贵的代价",
         "Go 1.14 之后 sysmon 会盯着：某个 M 在系统调用里超过 10ms，就把它的 P 抢回来交给别的 M"
       ],
-      "notes": "常见追问：阻塞在 channel 上和阻塞在 syscall 上有什么本质区别？——前者不占 M，后者占 M 还要让出 P。常见错误回答：「goroutine 阻塞会占住一个线程」——只有系统调用才会。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\tch := make(chan int)\n\tgo func() {\n\t\t<-ch // 永久阻塞，不占用 OS 线程\n\t}()\n\ttime.Sleep(50 * time.Millisecond)\n\tfmt.Println(\"主 goroutine 照样往下走\")\n}",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：阻塞在 channel 上和阻塞在 syscall 上有什么本质区别？——前者不占 M，后者占 M 还要让出 P。常见错误回答：「goroutine 阻塞会占住一个线程」——只有系统调用才会。"
     },
     {
       "title": "“all goroutines are asleep - deadlock!” 是怎么判定出来的？",
@@ -192,9 +192,9 @@
         "反过来，只要还有定时器或系统调用悬着，运行时就不判死锁——程序会一直挂着，看起来像卡死却没有报错",
         "这个检查是全局的：单个 goroutine 永久阻塞而别的 goroutine 还在跑，不会触发这个 fatal error"
       ],
-      "notes": "常见追问：main 返回时所有 goroutine 都阻塞，会报死锁吗？——不会，main 返回就是正常退出，运行时直接结束进程。常见错误回答：「死锁检测能发现所有死锁」——它只覆盖「全员睡着」这一种。",
       "code": "ch := make(chan int)\n<-ch // 所有 goroutine 都在等，运行时判定死锁并结束进程\nfmt.Println(\"执行不到这里\")",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：main 返回时所有 goroutine 都阻塞，会报死锁吗？——不会，main 返回就是正常退出，运行时直接结束进程。常见错误回答：「死锁检测能发现所有死锁」——它只覆盖「全员睡着」这一种。"
     },
     {
       "title": "goroutine 和操作系统线程是什么关系？",
@@ -207,9 +207,24 @@
         "goroutine 阻塞在 channel 或锁上时完全不占 OS 线程；阻塞在系统调用里才会占住 M 并连带影响 P",
         "Go 1.2 之前还是「一个 goroutine 对应一个线程」的老模型，2013 年重写调度器之后才变成现在这样"
       ],
-      "notes": "常见追问：goroutine 是协程吗？——是 Go 实现的协程，但和用户自己写的非抢占式协程不同，Go 的 goroutine 是可抢占的。常见错误回答：「goroutine 就是轻量级线程」——它不绑定线程，栈和调度都由运行时管。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n\t\"sync\"\n)\n\nfunc main() {\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 1000; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\truntime.Gosched() // 主动把 CPU 让给别的 goroutine\n\t\t}()\n\t}\n\twg.Wait()\n\tfmt.Println(\"跑完了\", runtime.NumGoroutine(), \"个 goroutine\")\n}",
-      "lang": "go"
+      "lang": "go",
+      "notes": "常见追问：goroutine 是协程吗？——是 Go 实现的协程，但和用户自己写的非抢占式协程不同，Go 的 goroutine 是可抢占的。常见错误回答：「goroutine 就是轻量级线程」——它不绑定线程，栈和调度都由运行时管。"
+    },
+    {
+      "title": "线上怎么观测 Go 运行时？runtime/metrics 和 GODEBUG 各看什么？",
+      "description": "长期指标走 runtime/metrics 接监控，临时排查用 GODEBUG 打开 trace 输出，两者定位的问题不同。",
+      "answer": [
+        "runtime/metrics 是 Go 1.16 起的稳定指标 API，名字形如 /gc/heap/allocs:bytes、/sched/goroutines:goroutines，一次 metrics.Read 填一批 Sample，开销远小于反复调 runtime.ReadMemStats",
+        "值有三种 kind：Uint64、Float64、Float64Histogram（延迟分布）；Go 1.18 起有 /cpu/classes/*系列，能拆出 GC、用户代码、idle 各花了多少 CPU 秒",
+        "接监控的做法：起一个 10–15 秒的 ticker，读一份启动时构造好的 Sample 列表，再转成监控系统的指标，Sample 列表只构造一次",
+        "GODEBUG=gctrace=1 每完成一轮 GC 打一行：GC 序号、启动以来秒数、GC 占总 CPU 百分比、各阶段耗时和堆大小",
+        "GODEBUG=schedtrace=1000 每 1000 毫秒打一次调度器摘要（G/M/P 数量、runqueue 长度、GC 状态），加 scheddetail=1 输出每个 P 的明细",
+        "GODEBUG 是排查开关不是常开配置：trace 输出本身有开销，线上用 metrics 做长期观测、pprof 做定点分析，需要时再临时打开"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime/metrics\"\n)\n\nfunc main() {\n\tsamples := []metrics.Sample{\n\t\t{Name: \"/sched/goroutines:goroutines\"},\n\t\t{Name: \"/gc/heap/allocs:bytes\"},\n\t}\n\tmetrics.Read(samples)\n\tfor _, s := range samples {\n\t\tfmt.Printf(\"%s = %d\\n\", s.Name, s.Value.Uint64())\n\t}\n}",
+      "lang": "go",
+      "notes": "常见追问：runtime/metrics 和 expvar、pprof 有什么区别？——expvar 是导出变量的老接口，pprof 是采样式剖析，metrics 是稳定的数值指标，适合直接进监控。追问：为什么不用 runtime.ReadMemStats？——它会 stop the world，高频调用有代价。常见错误回答：业务代码里 os.Setenv(\"GODEBUG\", ...) 之后立即生效——GODEBUG 在进程启动时读一次，运行中改环境变量没用；「gctrace 输出不影响性能」——每轮 GC 都打印，GC 频繁时输出本身就是负担。"
     }
   ]
 }

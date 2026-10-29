@@ -7,7 +7,7 @@
       "description": "泛型函数在函数名后面的方括号里声明类型参数，写一次就能处理多种类型，不用为 []int 和 []string 各写一遍。",
       "code": "package main\n\nimport \"fmt\"\n\nfunc Map[T any, U any](s []T, f func(T) U) []U {\n\tout := make([]U, 0, len(s))\n\tfor _, v := range s {\n\t\tout = append(out, f(v))\n\t}\n\treturn out\n}\n\nfunc main() {\n\tfmt.Println(Map([]int{1, 2, 3}, func(i int) string { return fmt.Sprint(i * 2) }))\n\tfmt.Println(Map([]string{\"a\", \"bb\"}, func(s string) int { return len(s) }))\n}",
       "lang": "go",
-      "notes": "泛型只在编译期起作用，没有运行时开销，但编译会慢一点。类型参数用 T、U、K、V 这种大写单字母是惯例，看到就知道它是类型而不是变量。"
+      "notes": "泛型主要在编译期处理，通常没有 interface{} 的装箱开销，但实现会按 GC shape 生成代码并用字典，不要把它当成绝对零成本。类型参数用 T、U、K、V 这种大写单字母是惯例，看到就知道它是类型而不是变量。"
     },
     {
       "title": "类型参数声明 [T any]",
@@ -21,14 +21,14 @@
       "description": "约束就是类型参数的取值范围。any 表示任何类型都行；comparable 要求类型能用 == 比较，int、string、指针都行，切片和 map 不行。",
       "code": "func Index[T comparable](s []T, v T) int {\n\tfor i, x := range s {\n\t\tif x == v {\n\t\t\treturn i\n\t\t}\n\t}\n\treturn -1\n}",
       "lang": "go",
-      "notes": "想在泛型函数里写 ==、< 这类比较运算符，约束里必须有 comparable，否则编译报错。"
+      "notes": "comparable 只保证 == 和 != 能用，不包含 <、> 这类排序比较。要按大小比较，约束用 cmp.Ordered，或自己写 ~int | ~string 这样的类型集。"
     },
     {
       "title": "约束接口：类型集",
       "description": "约束本身是个接口，里面写类型集：用 | 列出允许的类型。写出来就能复用，比如定义一个只接受整数的约束。",
       "code": "type Integer interface {\n\t~int | ~int64\n}\n\nfunc Sum[T Integer](s []T) T {\n\tvar total T\n\tfor _, v := range s {\n\t\ttotal += v\n\t}\n\treturn total\n}",
       "lang": "go",
-      "notes": "约束接口不能同时写方法和类型集，要么有方法、要么有类型集。x/exp/constraints 里的 Integer 就是这么定义的。"
+      "notes": "约束接口可以同时写方法和类型集：类型集限定底层类型，方法再进一步限制。带类型集的接口只能当约束用，不能当普通值类型。x/exp/constraints 里的 Integer 就是这么定义的。"
     },
     {
       "title": "~：底层类型也算数",
@@ -49,7 +49,7 @@
       "description": "泛型类型也能像普通类型一样写方法，接收者上要把类型参数原样写出来，方法的参数和返回值里都能用类型参数。",
       "code": "type Pair[K comparable, V any] struct {\n\tKey K\n\tVal V\n}\n\nfunc (p Pair[K, V]) Get() V {\n\treturn p.Val\n}",
       "lang": "go",
-      "notes": "接收者要写全类型参数（Pair[K, V]），漏写成 Pair 会报 cannot use generic type Pair[K comparable, V any] without instantiation。Go 1.27 起方法还能带自己的类型参数，1.18～1.26 则会报 method must have no type parameters。"
+      "notes": "接收者要写全类型参数（Pair[K, V]），漏写成 Pair 会报 cannot use generic type Pair[K comparable, V any] without instantiation。"
     },
     {
       "title": "不能给具体类型加方法",
@@ -72,21 +72,7 @@
       "description": "把最常用的三个集合操作写成泛型函数，一份代码处理任何切片，不用为 []int、[]string 各写一遍。",
       "code": "package main\n\nimport \"fmt\"\n\nfunc Map[T any, U any](s []T, f func(T) U) []U {\n\tout := make([]U, 0, len(s))\n\tfor _, v := range s {\n\t\tout = append(out, f(v))\n\t}\n\treturn out\n}\n\nfunc Filter[T any](s []T, keep func(T) bool) []T {\n\tout := make([]T, 0, len(s))\n\tfor _, v := range s {\n\t\tif keep(v) {\n\t\t\tout = append(out, v)\n\t\t}\n\t}\n\treturn out\n}\n\nfunc Reduce[T any, U any](s []T, initVal U, f func(U, T) U) U {\n\tacc := initVal\n\tfor _, v := range s {\n\t\tacc = f(acc, v)\n\t}\n\treturn acc\n}\n\nfunc main() {\n\tnums := []int{1, 2, 3, 4}\n\tfmt.Println(Map(nums, func(i int) string { return fmt.Sprint(i * i) }))\n\tfmt.Println(Filter(nums, func(i int) bool { return i%2 == 0 }))\n\tfmt.Println(Reduce(nums, 0, func(sum, i int) int { return sum + i }))\n}",
       "lang": "go",
-      "notes": "Go 1.23 起标准库 slices 里已经有 Map、Filter、Collect 了，写业务代码直接用现成的，这里自己写是为了理解原理。"
-    },
-    {
-      "title": "标准库：slices 包",
-      "description": "Go 1.21 起标准库有了 slices 包，专门放操作切片的泛型函数，Sort、Contains、Index 这些不用再自己写。",
-      "code": "nums := []int{3, 1, 2}\nslices.Sort(nums)\nfmt.Println(nums, slices.Contains(nums, 2), slices.Index(nums, 3))",
-      "lang": "go",
-      "notes": "slices.Sort 会原地改切片，要保留原顺序得先用 slices.Clone 复制一份。元素类型由切片自己推断，不用手写。"
-    },
-    {
-      "title": "标准库：maps 与 cmp 包",
-      "description": "maps 包管 map 的泛型操作，cmp 包提供泛型的比较函数，排序和比较这类代码不用自己造轮子。",
-      "code": "m := map[string]int{\"b\": 2, \"a\": 1}\nkeys := slices.Sorted(maps.Keys(m))\nfmt.Println(keys)\nfmt.Println(cmp.Compare(1, 2), cmp.Less(2, 1))",
-      "lang": "go",
-      "notes": "maps.Keys 在 Go 1.23 之前返回切片，之后返回迭代器，要配 slices.Sorted 或 slices.Collect 用。cmp.Ordered 要求类型能用 < 比较。"
+      "notes": "标准库 slices 没有 Map、Filter、Reduce，只有 Collect、Sorted、Contains、Index 这类函数；要 Map/Filter 得自己写，或者用第三方库。"
     },
     {
       "title": "泛型的类型推断",
@@ -101,6 +87,20 @@
       "code": "package main\n\nimport \"fmt\"\n\n// 泛型：元素类型必须一致，但具体类型可以换\nfunc Sum[T ~int | ~float64](s []T) T {\n\tvar total T\n\tfor _, v := range s {\n\t\ttotal += v\n\t}\n\treturn total\n}\n\n// 接口：行为一致即可，具体类型可以各不相同\ntype Shape interface {\n\tArea() float64\n}\n\ntype Rect struct {\n\tW, H float64\n}\n\nfunc (r Rect) Area() float64 { return r.W * r.H }\n\nfunc main() {\n\tfmt.Println(Sum([]int{1, 2, 3}))\n\tfmt.Println(Sum([]float64{1.5, 2.5}))\n\n\tshapes := []Shape{Rect{W: 2, H: 3}, Rect{W: 1, H: 1}}\n\tfor _, s := range shapes {\n\t\tfmt.Println(s.Area())\n\t}\n}",
       "lang": "go",
       "notes": "一句话：数据形状一样、类型可能变，用泛型；行为一样、类型不同，用接口。泛型函数的参数也可以是接口类型，两者不冲突。"
+    },
+    {
+      "title": "方法级类型参数（Go 1.27+）",
+      "description": "Go 1.27 起方法可以声明自己的类型参数，比如给泛型容器加一个 Map；之前只能把类型参数写在接收者上。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Stack[T any] struct{ items []T }\n\nfunc (s *Stack[T]) Map[U any](f func(T) U) []U {\n\tout := make([]U, 0, len(s.items))\n\tfor _, v := range s.items {\n\t\tout = append(out, f(v))\n\t}\n\treturn out\n}\n\nfunc main() {\n\ts := &Stack[int]{items: []int{1, 2}}\n\tfmt.Println(s.Map(func(v int) string { return fmt.Sprint(v * 2) }))\n}",
+      "lang": "go",
+      "notes": "Go 1.18～1.26 会在方法声明处报 method must have no type parameters；接口方法仍然不能带类型参数。调用时 U 通常由传入的函数推断。"
+    },
+    {
+      "title": "类型集并集与 ~ 的配合",
+      "description": "并集里每一支都要单独写 ~：写 ~int | ~string 时，自定义的 int 和 string 类型都能用；漏写 ~ 的那一支只认类型本身。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype MyInt int\ntype MyString string\n\ntype Scalar interface {\n\t~int | ~string\n}\n\nfunc Show[T Scalar](v T) {\n\tfmt.Println(v)\n}\n\nfunc main() {\n\tShow(MyInt(1))\n\tShow(MyString(\"a\"))\n}",
+      "lang": "go",
+      "notes": "~T 表示「底层类型是 T」。并集的成员不能是类型参数或带方法的接口，comparable 也不能直接放进并集；需要比较就另写一个约束或用 cmp.Ordered。"
     },
     {
       "title": "组合示例：把这一组用起来",

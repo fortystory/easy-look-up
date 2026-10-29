@@ -4,6 +4,7 @@
   "entries": [
     {
       "title": "秒杀系统怎么设计？",
+      "description": "秒杀系统的整体设计，考分层和削峰。",
       "answer": [
         "先定目标：商品只有 1000 件却可能有 100 万请求，绝大部分请求必须在最外层就被挡掉，核心链路只处理通过筛选的少量请求",
         "分层削峰：前端按钮置灰加倒计时、页面静态化走 CDN、网关按用户/IP 做令牌桶限流、后端只接收放行后的请求",
@@ -12,10 +13,11 @@
         "热点 key 要隔离：同一个商品的请求全打到同一个 Redis key 上是单点，秒杀前把库存拆成 N 个子 key，请求随机路由到其中一个",
         "全链路要有兜底：MQ 堆积时降级为返回排队号让用户轮询，失败订单能对账补单，Redis 与 DB 定期核对库存"
       ],
-      "notes": "常见追问：为什么不用数据库的悲观锁直接扣库存？——上万 QPS 会把同一行锁排成长队，锁等待和连接数一起打满，秒杀必须靠缓存把流量挡在 DB 之外。常见追问：MQ 里的消息丢了怎么办？——生产端开确认与重试，落库失败的进死信队列，再由对账任务补单。常见追问：怎么做到「先到先得」？——以 Redis 原子扣减的先后顺序作为抢购顺序，DB 只记录结果不参与排序。"
+      "notes": "常见追问：为什么不用数据库的悲观锁直接扣库存？——上万 QPS 会把同一行锁排成长队，锁等待和连接数一起打满，秒杀必须靠缓存把流量挡在 DB 之外。常见追问：MQ 里的消息丢了怎么办？——生产端开确认与重试，落库失败的进死信队列，再由对账任务补单。常见追问：怎么做到「先到先得」？——以 Redis 原子扣减的先后顺序作为抢购顺序，DB 只记录结果不参与排序。常见错误回答：秒杀就是把接口做快——核心是限流、库存扣减和削峰，不是单接口性能。"
     },
     {
       "title": "秒杀场景下怎么防止库存超卖？",
+      "description": "库存超卖问题，考原子扣减和锁的边界。",
       "answer": [
         "超卖的根因是「读库存 → 判断 → 写库存」三步不是原子的：两个并发请求都读到 stock=1，各减 1 写成 0，结果卖出去 2 件",
         "Redis 侧用原子操作：DECRBY 扣减后看返回值，扣成负数就 INCRBY 回补并返回售罄；把判断和扣减写进 Lua 脚本，整个脚本在 Redis 里原子执行",
@@ -26,10 +28,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\nfunc main() {\n\tvar mu sync.Mutex\n\tstock := 10\n\n\t// 判断库存和扣减必须在同一个临界区里完成\n\tbuy := func() bool {\n\t\tmu.Lock()\n\t\tdefer mu.Unlock()\n\t\tif stock <= 0 {\n\t\t\treturn false\n\t\t}\n\t\tstock--\n\t\treturn true\n\t}\n\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 100; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tbuy()\n\t\t}()\n\t}\n\twg.Wait()\n\tfmt.Println(\"剩余库存\", stock) // 不会变成负数\n}",
       "lang": "go",
-      "notes": "常见追问：Redis 扣了 DB 没写成功，库存不就少了？——会，所以要有「MQ 重试 + 死信 + 定时对账补偿」的闭环，只扣不减必然亏库存。常见追问：Redis 扣减和 DB 扣减谁说了算？——以 Redis 的原子扣减决定能不能抢到，DB 只是最终记账，两边靠对账保持一致。"
+      "notes": "常见追问：Redis 扣了 DB 没写成功，库存不就少了？——会，所以要有「MQ 重试 + 死信 + 定时对账补偿」的闭环，只扣不减必然亏库存。常见追问：Redis 扣减和 DB 扣减谁说了算？——以 Redis 的原子扣减决定能不能抢到，DB 只是最终记账，两边靠对账保持一致。常见错误回答：先查库存再扣减就够了——并发下 check-then-act 会超卖，要用原子扣减或乐观锁。"
     },
     {
       "title": "怎么防止用户重复下单（重复提交）？",
+      "description": "重复提交的防护，考服务端幂等。",
       "answer": [
         "重复下单有三个来源：用户手抖连点、客户端超时重试、MQ 消息重复消费，三者要用不同手段挡",
         "前端置灰和防抖只能减少不能杜绝，真正的防线必须在服务端",
@@ -38,10 +41,11 @@
         "数据库兜底：订单表对业务唯一键建唯一索引，重复插入触发冲突时把冲突当成「已下单」返回，而不是返回 500",
         "幂等键的选择很关键：按「用户 + 商品 + 活动」而不是纯 requestId，否则用户换个请求 ID 照样能重复下单"
       ],
-      "notes": "常见追问：SETNX 之后服务崩了怎么办？——「处理中」标记会挡住后续所有请求，所以这个状态必须设较短超时（比如 30 秒）并在超时后允许重入，或者用状态机区分处理中与成功。常见追问：消息重复消费怎么防？——消费端同样要幂等，靠唯一索引或状态判断，而不是靠 MQ 保证不重复。"
+      "notes": "常见追问：SETNX 之后服务崩了怎么办？——「处理中」标记会挡住后续所有请求，所以这个状态必须设较短超时（比如 30 秒）并在超时后允许重入，或者用状态机区分处理中与成功。常见追问：消息重复消费怎么防？——消费端同样要幂等，靠唯一索引或状态判断，而不是靠 MQ 保证不重复。常见错误回答：前端按钮置灰就能防重——刷新、重试、多端都能绕过，必须服务端幂等。"
     },
     {
       "title": "秒杀中的一致性和可用性怎么取舍？",
+      "description": "秒杀场景下 CAP 的取舍。",
       "answer": [
         "秒杀天然接受「最终一致」：只要不超卖、同一用户不重复下单，订单晚几百毫秒落库用户无感，强一致反而会把系统拖垮",
         "可用性优先的做法：库存扣减放 Redis，Redis 不可用时降级为「排队/稍后重试」或直接返回售罄，绝不能把流量透传到 DB",
@@ -50,10 +54,11 @@
         "资金和库存要分开处理：库存可以最终一致，支付必须有强一致（幂等 + 对账 + 补偿），两者不能用同一套方案",
         "关键是明确「什么可以丢、什么不能丢」：售罄提示偶尔错一次可以接受，扣了钱没发货不行；每条降级路径都要有对账兜底"
       ],
-      "notes": "常见追问：这算 CAP 里的哪种牺牲？——严格说 CAP 讨论的是网络分区故障下的一致性与可用性二选一，秒杀更多是「一致性与峰值吞吐」的工程取舍，面试里最好主动纠正这一点。常见追问：怎么证明没有超卖？——唯一索引、条件更新、三方定时对账三者对上才算。"
+      "notes": "常见追问：这算 CAP 里的哪种牺牲？——严格说 CAP 讨论的是网络分区故障下的一致性与可用性二选一，秒杀更多是「一致性与峰值吞吐」的工程取舍，面试里最好主动纠正这一点。常见追问：怎么证明没有超卖？——唯一索引、条件更新、三方定时对账三者对上才算。常见错误回答：秒杀必须强一致——通常是最终一致加超卖兜底，强一致会把流量挡在门外。"
     },
     {
       "title": "Feed 流怎么做？推模式、拉模式和混合模式有什么区别？",
+      "description": "Feed 流推拉模式的选择。",
       "answer": [
         "推模式（写扩散）：发布内容时把内容写进每个粉丝的收件箱，读时直接取自己的收件箱——读快，但百万粉丝就要写百万条，写放大严重",
         "拉模式（读扩散）：只存「我关注的人发了什么」，读时拉取这些人的最新内容再合并——写轻量，但每次刷新要合并几十上百路，读放大且延迟高",
@@ -62,10 +67,11 @@
         "读扩散合并时要处理去重和排序：按时间倒序归并各路结果，同一条内容按内容 ID 去重",
         "推模式还要处理内容失效：原文被删或权限变更时，读者收件箱里那条也要作废，通常在读时二次校验状态"
       ],
-      "notes": "常见追问：为什么大 V 一定要走拉？——写扩散成本与粉丝数成正比，百万级粉丝会把写入打爆，反过来拉模式对被关注者很友好。常见追问：推拉切换的一致性怎么保证？——切换阈值要带滞回，否则同一个用户会在同一时刻既被推又被拉，出现重复内容。"
+      "notes": "常见追问：为什么大 V 一定要走拉？——写扩散成本与粉丝数成正比，百万级粉丝会把写入打爆，反过来拉模式对被关注者很友好。常见追问：推拉切换的一致性怎么保证？——切换阈值要带滞回，否则同一个用户会在同一时刻既被推又被拉，出现重复内容。常见错误回答：大 V 也走推模式——粉丝多时写扩散会打爆存储和队列，要推拉结合。"
     },
     {
       "title": "为什么 limit 10000,10000 这么慢？深分页怎么优化？",
+      "description": "深分页为什么慢、怎么优化。",
       "answer": [
         "OFFSET 10000 的语义是「先扫出前 10000 行全部扔掉，再取后面 10 行」，实际扫描量是 10010 行而不是 10 行",
         "没走索引时更糟：OFFSET 让优化器放弃「按索引顺序扫描并提前终止」，可能退化成全表扫描再排序（Using filesort）",
@@ -76,10 +82,11 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tids := make([]int, 0, 100000)\n\tfor i := 1; i <= 100000; i++ {\n\t\tids = append(ids, i)\n\t}\n\n\t// 游标分页：带上上一页的最后一个 ID，只扫当前需要的行\n\tpageSize, lastID := 10, 0\n\tpage := make([]int, 0, pageSize)\n\tfor _, id := range ids {\n\t\tif id <= lastID {\n\t\t\tcontinue // 跳过已经翻过的部分\n\t\t}\n\t\tpage = append(page, id)\n\t\tlastID = id\n\t\tif len(page) == pageSize {\n\t\t\tbreak\n\t\t}\n\t}\n\tfmt.Println(page) // [1 2 3 4 5 6 7 8 9 10]\n}",
       "lang": "go",
-      "notes": "常见追问：游标分页的代价是什么？——不能任意跳页（没法直接到第 500 页），排序键必须唯一，或者额外加一个唯一列做 tiebreaker。常见追问：count(*) 为什么也慢？——它要全表扫描统计行数，大表上要改用估算值、采样或单独缓存。"
+      "notes": "常见追问：游标分页的代价是什么？——不能任意跳页（没法直接到第 500 页），排序键必须唯一，或者额外加一个唯一列做 tiebreaker。常见追问：count(*) 为什么也慢？——它要全表扫描统计行数，大表上要改用估算值、采样或单独缓存。常见错误回答：limit 加 offset 就能优化深分页——偏移越大扫的行越多，要用游标（seek）分页。"
     },
     {
       "title": "海量计数怎么做？",
+      "description": "海量计数的分片和聚合。",
       "answer": [
         "典型场景是文章浏览量、视频播放量、评论数：写极多读也多，所有更新打在同一行上会变成热点锁竞争",
         "主方案是计数放 Redis：INCRBY 累加，定时（比如每分钟）把增量批量落库到 DB，读的时候用「DB 基线 + Redis 增量」或者直接读 Redis",
@@ -90,10 +97,11 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tconst shards = 10\n\tcounts := make([]int64, shards)\n\n\t// 写：随机选一片累加，把热点 key 摊开\n\tfor i := 0; i < 1000; i++ {\n\t\tcounts[i%shards]++\n\t}\n\n\t// 读：把所有分片求和\n\tvar total int64\n\tfor _, c := range counts {\n\t\ttotal += c\n\t}\n\tfmt.Println(total) // 1000\n}",
       "lang": "go",
-      "notes": "常见追问：Redis 挂了计数怎么办？——展示型数据降级为只读 DB 基线，强一致的数据本来就不该放 Redis。常见追问：分片计数求和不准怎么办？——求和是最终一致的，误差上限就是一个落库周期内的增量。常见追问：能不能用 HyperLogLog？——适合「去重后的量级估算」，但拿不到精确值，也没法做差量合并。"
+      "notes": "常见追问：Redis 挂了计数怎么办？——展示型数据降级为只读 DB 基线，强一致的数据本来就不该放 Redis。常见追问：分片计数求和不准怎么办？——求和是最终一致的，误差上限就是一个落库周期内的增量。常见追问：能不能用 HyperLogLog？——适合「去重后的量级估算」，但拿不到精确值，也没法做差量合并。常见错误回答：每次点赞都 UPDATE count=count+1——高并发下同一行会成为热点，要分片或异步聚合。"
     },
     {
       "title": "为什么并发场景下不推荐直接用 math/rand 的全局随机源？",
+      "description": "随机源在并发下的坑。",
       "answer": [
         "历史原因：Go 1.20 之前包级函数 rand.Intn 走的是包级 globalRand，它的 Source 是带 mutex 的 lockedSource，所有 goroutine 抢同一把锁，高并发下锁竞争明显",
         "Go 1.20 起情况变了：包级函数改用 runtime 的 per-thread 快速随机源，不再走全局锁，并且默认随机播种；rand.Seed 在 1.20 弃用，Go 1.24 起默认变成空操作",
@@ -104,10 +112,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"math/rand\"\n\t\"sync\"\n)\n\nfunc main() {\n\t// 方式一：共享同一个 *Rand，所有调用都要加锁保护\n\tshared := rand.New(rand.NewSource(42))\n\tvar mu sync.Mutex\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 10; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tmu.Lock()\n\t\t\tdefer mu.Unlock()\n\t\t\t_ = shared.Intn(100)\n\t\t}()\n\t}\n\twg.Wait()\n\n\t// 方式二：每个 goroutine 一个独立 Rand，互不共享就没有锁\n\tlocal := rand.New(rand.NewSource(7))\n\tfmt.Println(local.Intn(100), shared.Intn(100))\n}",
       "lang": "go",
-      "notes": "常见追问：加密场景该用哪个？——用 crypto/rand，math/rand 的输出是可预测的，不能用于密码和 token。常见追问：rand.New(rand.NewSource(1)) 每次结果都一样？——是，同 seed 必然同序列，这正是测试要的效果；生产环境不要固定 seed。"
+      "notes": "常见追问：加密场景该用哪个？——用 crypto/rand，math/rand 的输出是可预测的，不能用于密码和 token。常见追问：rand.New(rand.NewSource(1)) 每次结果都一样？——是，同 seed 必然同序列，这正是测试要的效果；生产环境不要固定 seed。常见错误回答：全局随机源并发安全就等于高并发下没问题——安全只代表不 data race，锁竞争和可预测序列仍是问题。"
     },
     {
       "title": "数据量大到内存放不下时怎么排序？",
+      "description": "内存放不下时的外部排序。",
       "answer": [
         "判据是数据总量超过可用内存：标准库的 sort 只解决内存里的问题，外部排序需要自己实现或用现成库",
         "外部排序分两阶段：第一阶段分块读入内存（每块能装多满装多满），块内用 sort.Slice 排好序写成有序的「顺串」文件（run）",
@@ -118,10 +127,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\n// 两路归并：把两个有序片段合成一个有序片段\nfunc merge(a, b []int) []int {\n\tout := make([]int, 0, len(a)+len(b))\n\ti, j := 0, 0\n\tfor i < len(a) && j < len(b) {\n\t\tif a[i] <= b[j] {\n\t\t\tout = append(out, a[i])\n\t\t\ti++\n\t\t} else {\n\t\t\tout = append(out, b[j])\n\t\t\tj++\n\t\t}\n\t}\n\tout = append(out, a[i:]...)\n\treturn append(out, b[j:]...)\n}\n\nfunc main() {\n\tdata := []int{5, 3, 9, 1, 7, 2, 8, 4}\n\tchunk := 3\n\n\t// 第一阶段：分块读入内存并各自排序，得到多个有序顺串\n\tvar runs [][]int\n\tfor i := 0; i < len(data); i += chunk {\n\t\tend := i + chunk\n\t\tif end > len(data) {\n\t\t\tend = len(data)\n\t\t}\n\t\tblock := append([]int(nil), data[i:end]...)\n\t\tsort.Ints(block)\n\t\truns = append(runs, block)\n\t}\n\n\t// 第二阶段：多路归并成最终结果\n\tresult := runs[0]\n\tfor _, r := range runs[1:] {\n\t\tresult = merge(result, r)\n\t}\n\tfmt.Println(result) // [1 2 3 4 5 7 8 9]\n}",
       "lang": "go",
-      "notes": "常见追问：为什么用堆而不是每次线性找最小？——k 路归并每输出一个元素要比较 k 次，最小堆把这一步从 O(k) 降到 O(log k)。常见追问：桶排序或基数排序什么时候更合适？——数据是整数且值域可控时基数排序能做到 O(n)，但通用外部排序场景堆归并更稳妥。"
+      "notes": "常见追问：为什么用堆而不是每次线性找最小？——k 路归并每输出一个元素要比较 k 次，最小堆把这一步从 O(k) 降到 O(log k)。常见追问：桶排序或基数排序什么时候更合适？——数据是整数且值域可控时基数排序能做到 O(n)，但通用外部排序场景堆归并更稳妥。常见错误回答：数据放不下就加内存——单机内存有上限，正确做法是分块排序后多路归并。"
     },
     {
       "title": "分布式环境下怎么生成全局唯一的 ID？发号器模式是什么？",
+      "description": "全局唯一 ID 的发号器方案。",
       "answer": [
         "发号器模式：单独起一个（或一组）ID 发号器服务，业务方不自己造 ID，而是向发号器要一段 ID 回来用",
         "号段模式（segment）：发号器在 DB 里维护一张表存 max_id 和 step（比如一次发 1000 个），取号时只读一次 DB，然后把整个号段缓存进内存，发完再取下一段，把「每次写 DB」变成「每 1000 次写一次 DB」",
@@ -132,10 +142,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n\t\"time\"\n)\n\n// 简化版 Snowflake：时间戳 + 机器位 + 序列号\nconst (\n\tworkerIDBits = 5\n\tseqBits      = 12\n\tmaxWorkerID  = -1 ^ (-1 << workerIDBits)\n\tmaxSeq       = -1 ^ (-1 << seqBits)\n)\n\ntype snowflake struct {\n\tmu        sync.Mutex\n\tworkerID  int64\n\tlastStamp int64\n\tseq       int64\n}\n\nfunc (s *snowflake) next() int64 {\n\ts.mu.Lock()\n\tdefer s.mu.Unlock()\n\tnow := time.Now().UnixMilli()\n\tif now == s.lastStamp {\n\t\ts.seq = (s.seq + 1) & maxSeq\n\t\tif s.seq == 0 {\n\t\t\t// 同一毫秒的序列用完了，等下一毫秒\n\t\t\tfor now <= s.lastStamp {\n\t\t\t\tnow = time.Now().UnixMilli()\n\t\t\t}\n\t\t}\n\t} else {\n\t\ts.seq = 0\n\t}\n\ts.lastStamp = now\n\treturn (now << (workerIDBits + seqBits)) | (s.workerID << seqBits) | s.seq\n}\n\nfunc main() {\n\tg := &snowflake{workerID: 1}\n\ta := g.next()\n\tb := g.next()\n\tfmt.Println(a < b) // 趋势递增\n}",
       "lang": "go",
-      "notes": "常见追问：Snowflake 怎么保证不重复？——同一毫秒内靠序列号自增，序列用完就等下一毫秒；不同机器的机器位不同，保证不同节点不会生成相同 ID。常见追问：时钟回拨怎么办？——回拨幅度小于几毫秒就等时钟追平，超过阈值应该拒绝发号并告警，而不是硬发。常见追问：为什么号段模式更适合 MySQL 主键？——ID 单调递增，写入是顺序追加，减少随机 IO 和页分裂。"
+      "notes": "常见追问：Snowflake 怎么保证不重复？——同一毫秒内靠序列号自增，序列用完就等下一毫秒；不同机器的机器位不同，保证不同节点不会生成相同 ID。常见追问：时钟回拨怎么办？——回拨幅度小于几毫秒就等时钟追平，超过阈值应该拒绝发号并告警，而不是硬发。常见追问：为什么号段模式更适合 MySQL 主键？——ID 单调递增，写入是顺序追加，减少随机 IO 和页分裂。常见错误回答：UUID 能代替发号器——UUID 无序、占空间，做主键会放大索引写开销。"
     },
     {
       "title": "排行榜怎么实现？",
+      "description": "排行榜的数据结构和同分处理。",
       "answer": [
         "Redis ZSet 是首选：member 是用户 ID、score 是分数，ZADD 建榜、ZINCRBY 累分、ZREVRANGE key 0 99 WITHSCORES 取前 100、ZREVRANK 取个人名次、ZCOUNT 和 ZRANGEBYSCORE 取区间",
         "同分时用 member 编码做 tiebreaker：把「分数 + 时间戳或 ID」编成一个字符串当 member，既保证同分顺序稳定可控，又能让 ZSet 按字典序兜底排序",
@@ -146,10 +157,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\ntype rank struct {\n\tUserID string\n\tScore  int64\n}\n\nfunc main() {\n\t// 用 map + 排序模拟 Redis ZSet 的两个核心操作\n\tscores := map[string]int64{\n\t\t\"u1\": 100,\n\t\t\"u2\": 300,\n\t\t\"u3\": 200,\n\t}\n\n\t// ZINCRBY：给某个成员加分\n\tscores[\"u1\"] += 50\n\n\t// ZREVRANGE：按分数倒序取前 N 名\n\tall := make([]rank, 0, len(scores))\n\tfor id, s := range scores {\n\t\tall = append(all, rank{UserID: id, Score: s})\n\t}\n\tsort.Slice(all, func(i, j int) bool {\n\t\tif all[i].Score == all[j].Score {\n\t\t\treturn all[i].UserID < all[j].UserID // 同分时用 member 字典序兜底\n\t\t}\n\t\treturn all[i].Score > all[j].Score\n\t})\n\tfmt.Println(all[:2]) // Top 2\n}",
       "lang": "go",
-      "notes": "常见追问：Redis ZSet 是怎么实现的？——跳表加哈希表，插入和查找 O(log n)，范围查询 O(log n + M)。常见追问：并发更新同一个成员的分安全吗？——Redis 单线程执行命令，天然串行；分库分表场景下同 key 的更新也要路由到同一分片。"
+      "notes": "常见追问：Redis ZSet 是怎么实现的？——跳表加哈希表，插入和查找 O(log n)，范围查询 O(log n + M)。常见追问：并发更新同一个成员的分安全吗？——Redis 单线程执行命令，天然串行；分库分表场景下同 key 的更新也要路由到同一分片。常见错误回答：用数据库 ORDER BY 查排行榜——数据量大时每次排序都很贵，用 Redis ZSet。"
     },
     {
       "title": "多实例部署的定时任务怎么保证只执行一次？分布式锁、选主、分片怎么选？",
+      "description": "多实例定时任务的去重方案。",
       "answer": [
         "最直接的做法是分布式锁：执行前抢一把带 TTL 的锁（Redis SET NX EX 或 etcd），拿到锁才执行，执行中续租，结束后释放",
         "锁必须带过期时间并支持续租（看门狗），否则实例崩溃后锁挂死、任务永远不再执行；释放锁要用唯一 token 比对后再删（Lua 脚本），不能直接 DEL",
@@ -158,10 +170,11 @@
         "无论哪种方案，执行逻辑本身必须幂等：定时任务经常遇到「上一次没跑完下一次又到了」，用状态表加执行记录去重",
         "还要处理漏执行：单机 cron 进程重启会错过触发点，所以要记录上次执行时间、必要时补跑，并对长任务做分段续跑"
       ],
-      "notes": "常见追问：锁续租失败怎么办？——认为锁已丢失，当前实例必须中止任务，否则会双跑；实现上把「锁丢失」当取消信号通过 context 传给任务。常见追问：为什么不用 XXL-JOB 这种调度中心？——分布式 cron 就是为了不引外部依赖；规模上来后调度中心确实更合适。"
+      "notes": "常见追问：锁续租失败怎么办？——认为锁已丢失，当前实例必须中止任务，否则会双跑；实现上把「锁丢失」当取消信号通过 context 传给任务。常见追问：为什么不用 XXL-JOB 这种调度中心？——分布式 cron 就是为了不引外部依赖；规模上来后调度中心确实更合适。常见错误回答：多实例部署靠 cron 各跑各的——会重复执行，要分布式锁、选主或分片。"
     },
     {
       "title": "日志采集和异步写入怎么做？",
+      "description": "日志采集链路和异步写入。",
       "answer": [
         "目标是把写日志的耗时从业务链路里摘掉：业务线程只把日志塞进 channel 就返回，真正写盘交给专门的 goroutine 批量做",
         "channel 必须有界：无界 channel 会把内存吃光；有界时写满要定策略——阻塞业务、丢弃低级别日志，或落到本地文件兜底",
@@ -172,10 +185,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n)\n\nfunc main() {\n\t// 有界 channel：业务线程只负责投递，不等落盘\n\tch := make(chan string, 1024)\n\tvar wg sync.WaitGroup\n\n\t// 单独的 goroutine 攒批写盘\n\twg.Add(1)\n\tgo func() {\n\t\tdefer wg.Done()\n\t\tbuf := make([]string, 0, 64)\n\t\tfor msg := range ch {\n\t\t\tbuf = append(buf, msg)\n\t\t\tif len(buf) >= cap(buf) {\n\t\t\t\tfmt.Println(\"批量写入\", buf)\n\t\t\t\tbuf = buf[:0]\n\t\t\t}\n\t\t}\n\t\tif len(buf) > 0 {\n\t\t\tfmt.Println(\"批量写入\", buf)\n\t\t}\n\t}()\n\n\tfor i := 0; i < 100; i++ {\n\t\tch <- fmt.Sprintf(\"log-%d\", i)\n\t}\n\tclose(ch)\n\twg.Wait()\n}",
       "lang": "go",
-      "notes": "常见追问：异步写日志会不会打乱顺序？——多 goroutine 并发写时顺序不保证，要顺序就给每条日志带序号或 trace id，排查时按序号还原。常见追问：怎么防止日志把磁盘写满？——限速、采样、滚动清理、磁盘水位监控。"
+      "notes": "常见追问：异步写日志会不会打乱顺序？——多 goroutine 并发写时顺序不保证，要顺序就给每条日志带序号或 trace id，排查时按序号还原。常见追问：怎么防止日志把磁盘写满？——限速、采样、滚动清理、磁盘水位监控。常见错误回答：日志同步写文件最可靠——高并发下会拖慢请求，通常异步批量写并设置丢弃策略。"
     },
     {
       "title": "消息乱序怎么保证顺序消费？",
+      "description": "消息顺序消费的保证方式。",
       "answer": [
         "先说清乱序从哪来：生产端并发发送、多分区或多队列并行消费、失败重试被延后投递、消费端线程池并发处理",
         "MQ 层的标准做法是按业务键分区或分队列：Kafka 按 key 的 hash 路由到同一分区，RocketMQ 落到同一队列，保证同一业务键的消息在同一条通道上",
@@ -186,7 +200,7 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\ntype message struct {\n\tVersion int64\n\tPayload string\n}\n\nfunc main() {\n\t// 消费端收到乱序的消息，用版本号丢弃过期消息\n\tmsgs := []message{\n\t\t{Version: 3, Payload: \"余额更新到 30\"},\n\t\t{Version: 1, Payload: \"余额更新到 10\"},\n\t\t{Version: 2, Payload: \"余额更新到 20\"},\n\t}\n\n\tvar last int64\n\tfor _, m := range msgs {\n\t\tif m.Version <= last {\n\t\t\tfmt.Println(\"丢弃过期消息\", m.Payload)\n\t\t\tcontinue\n\t\t}\n\t\tlast = m.Version\n\t\tfmt.Println(\"处理\", m.Payload)\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：Exactly-once 能保证吗？——端到端 exactly-once 很难，实践里多是 at-least-once 投递加幂等消费。常见追问：顺序消费吞吐上不去怎么办？——按 key 分区并行，不同 key 之间不需要顺序，只要控制住「需要有序的实体数量」即可。"
+      "notes": "常见追问：Exactly-once 能保证吗？——端到端 exactly-once 很难，实践里多是 at-least-once 投递加幂等消费。常见追问：顺序消费吞吐上不去怎么办？——按 key 分区并行，不同 key 之间不需要顺序，只要控制住「需要有序的实体数量」即可。常见错误回答：一个 topic 就能保证全局有序——只有单分区有序，跨 key 仍会乱序。"
     }
   ]
 }

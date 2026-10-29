@@ -8,7 +8,7 @@
       "answer": [
         "慢查询日志记录执行时间超过 long_query_time 的语句，默认阈值 10 秒，线上通常调到 1 秒甚至 0.1 秒",
         "动态开启：SET GLOBAL slow_query_log = ON; SET GLOBAL long_query_time = 1;，全局变量对新连接生效，老连接还是旧值",
-        "永久生效写进配置文件：[mysqld] slow_query_log = ON、long_query_time = 1、slow_query_log_file = /var/log/mysql/slow.log、log_output = FILE；MySQL 8.0 起 slow_query_log 默认就是 ON、log_output 默认 FILE，5.7 及以前默认 OFF",
+        "永久生效写进 [mysqld]：slow_query_log=ON、long_query_time=1、slow_query_log_file 指定路径；log_output 默认 FILE，slow_query_log 5.7 及以前默认 OFF、8.0 起 ON",
         "log_output = TABLE 时日志写进 mysql.slow_log 表，方便用 SQL 聚合，但表有容量上限，要定期清理",
         "想抓「没走索引」的语句必须单独开 log_queries_not_using_indexes = ON，否则它们不会出现在慢日志里",
         "用 min_examined_row_limit 设门槛（比如 1000），扫描行数少于它的语句不记录，避免日志被小查询刷屏"
@@ -111,7 +111,7 @@
       "description": "要同时答出「语义上的类型」和「执行算法上的类型」，后者才是优化的抓手。",
       "answer": [
         "按语义分：INNER JOIN（只取两边都匹配的）、LEFT / RIGHT JOIN（保留一边全部）、CROSS JOIN（笛卡尔积）、NATURAL JOIN（按同名列自动关联，容易出意外）",
-        "按执行方式分：Nested Loop（驱动表每行去被驱动表查一遍）、Index Nested Loop（被驱动表关联列有索引时走索引查找）、Block Nested Loop（被驱动表无索引，把驱动表放进 join buffer 批量匹配）、Hash Join（MySQL 8.0.18 引入、8.0.20 起默认开启，用于没有索引的等值连接）",
+        "按执行方式分：Nested Loop（驱动表每行查被驱动表）、Index Nested Loop（关联列有索引）、Block Nested Loop（无索引用 join buffer 批量匹配）、Hash Join（8.0.18 引入、8.0.20 默认开启）",
         "第一步是保证被驱动表（ON 后面的表）在关联列上有索引，否则退化成 Block Nested Loop，代价接近两边行数相乘",
         "第二步是让驱动表足够小，优化器一般会自动选；需要时用 STRAIGHT_JOIN 强制连接顺序",
         "关联列两边的类型和字符集必须一致，否则隐式转换让被驱动表的索引失效",
@@ -138,7 +138,7 @@
       "answer": [
         "用 LOAD DATA INFILE（服务端文件）或 LOAD DATA LOCAL INFILE（客户端文件）导入，比逐条 INSERT 快得多，MySQL 8.0.32 起还支持并行导入",
         "手工控制事务：每几千行提交一次，不要每行一个事务，更不要开着 autocommit 让它一条条自动提交",
-        "导入期间调参数：unique_checks = 0、foreign_key_checks = 0 跳过校验，innodb_flush_log_at_trx_commit = 2、sync_binlog = 0 减少刷盘，session 级 sql_log_bin = 0 可以不写 binlog（从库会缺数据，慎用）",
+        "导入期间可临时放宽：unique_checks=0、foreign_key_checks=0、innodb_flush_log_at_trx_commit=2、sync_binlog=0；sql_log_bin=0 会让从库缺数据，慎用",
         "导入前先删掉二级索引和唯一索引（主键保留），导完再建，索引维护是批量导入最大的开销项",
         "先 TRUNCATE 再插入比重建表空间快；导入顺序按主键递增排列，避免随机插入造成页分裂",
         "超大文件可以切成多块并行导入不同数据段，或用 pt-archiver、gh-ost 这类工具做在线迁移"
@@ -172,17 +172,17 @@
       "notes": "常见追问：为什么常量侧转换不影响索引？——因为索引列存储的值没变，比较的仍然是原值。常见追问：JOIN 时两边类型不一致会怎样？——被驱动表的关联列被转换，它的索引失效，JOIN 退化成大范围扫描。常见错误回答：说「用函数包一下就能用上索引」，函数作用在列上一样失效。"
     },
     {
-      "title": "SQL 注入怎么防？预编译和字符串拼接有什么区别？",
-      "description": "这题不只是背「用预编译」，要能讲清为什么预编译从机制上就安全，以及哪些场景预编译救不了。",
+      "title": "MySQL 的预编译（Prepared Statement）在数据库侧做了什么，为什么能防注入？",
+      "description": "从数据库协议和服务端执行流程讲预编译，别只停留在「用参数化」这一句。",
       "answer": [
-        "字符串拼接把用户输入直接塞进 SQL 文本，参数和语句结构混在一起，输入里的引号或注释符就能改变语句语义，这就是注入的根源",
-        "预编译（Prepared Statement / 参数化查询）把 SQL 模板和参数分开：模板先交给数据库解析，参数只作为值传进去，永远不会被当成 SQL 语法执行",
-        "所以预编译是根治手段，不依赖任何过滤规则；靠屏蔽 select、union、drop 这些关键字的黑名单方式很容易被编码、变形绕过",
-        "ORM 同样有风险：MyBatis 里 #{} 是预编译占位符，${} 是直接字符串拼接，属于高危写法；拼 SQL 的原生查询接口也要警惕",
-        "动态表名、动态列名没法用占位符，只能用白名单映射：把用户传的值映射到预先定义好的表名或列名上，匹配不上直接报错",
-        "纵深防御：应用账号用最小权限（只给必需的库和操作）、错误信息不把 SQL 回显给用户、必要时前置参数格式校验和 WAF"
+        "客户端模拟的预编译只是把值转义后拼进 SQL 文本；服务端预编译才是把 SQL 模板发给 MySQL 解析一次，后续只传参数",
+        "服务端流程：PREPARE 解析并保存 SQL 模板，EXECUTE 时带上参数执行，DEALLOCATE PREPARE 释放；协议上走 COM_STMT_PREPARE 和 COM_STMT_EXECUTE 二进制协议",
+        "安全作用：参数和 SQL 结构在协议层分开，参数值不会被重新解析成语法，输入里的引号只当数据，不依赖关键字黑名单",
+        "性能作用：同一模板反复执行能省掉重复解析；但多一次 PREPARE 往返，短查询用文本协议可能反而更快",
+        "局限：表名、列名、排序方向不能参数化，只能白名单映射；IN 列表要按元素个数动态拼占位符",
+        "工程实践：连接池配合服务端预编译要控制 max_prepared_stmt_count；ORM 的 #{} 或 ? 是参数化，${} 是字符串拼接，两者别混"
       ],
-      "notes": "常见追问：光做参数化就够了吗？——SQL 注入这一层够了，但权限最小化和错误信息处理仍要配套。常见追问：ORDER BY 里的字段名怎么防注入？——用白名单映射，占位符不支持这种位置。常见错误回答：说「过滤掉关键字就安全了」。"
+      "notes": "常见追问：服务端预编译和驱动层参数化有什么区别？——驱动层可能只在客户端转义，服务端预编译走二进制协议、模板只解析一次；「为什么表名不能占位」——占位符只覆盖值的位置，标识符必须白名单；「预编译一定更快吗」——不一定，多一次 PREPARE 往返，短查询用文本协议可能更划算。常见错误回答：「用了 ORM 就不会有注入」——raw SQL 和 ${} 拼接照样注入。"
     },
     {
       "title": "怎么防止「一条慢 SQL 拖垮整个库」？",
@@ -196,6 +196,32 @@
         "监控兜底：慢日志与 performance_schema 采集告警、活跃连接数、主从延迟、锁等待都要设阈值，超阈值就告警甚至降级"
       ],
       "notes": "常见追问：一条没走索引的 UPDATE 把整张表锁了怎么办？——靠 max_execution_time 或锁等待超时兜底，再用 pt-kill 杀掉。常见追问：只靠限流够吗？——不够，还要有超时和 kill 机制兜底突发。常见错误回答：以为「加个索引」就解决了，索引解决不了流量突增和偶发重查询。"
+    },
+    {
+      "title": "Online DDL 的 INSTANT、INPLACE、COPY 三种算法有什么区别？它们和 MDL 是什么关系？",
+      "description": "Online DDL 不等于不锁表，这题要把三种算法的代价和 MDL 的阻塞点一起讲清。",
+      "answer": [
+        "INSTANT 只改数据字典，不碰表数据、不重建表；MySQL 8.0.12 起 ADD COLUMN 默认走 INSTANT，8.0.29 起支持任意位置加列和 DROP COLUMN",
+        "INPLACE 不走 COPY 那种临时表全量拷贝，但可能要扫描原表构建索引，或在原地重建（如 ADD PRIMARY KEY）时搬数据；多数操作可以配 LOCK=NONE 允许并发 DML，8.0 加二级索引就是典型 INPLACE",
+        "COPY 是兜底：建临时表、逐行拷贝、重建索引，期间阻塞 DML，大表可能跑几小时，还要额外磁盘空间",
+        "三种算法都绕不开 MDL：初始化阶段拿共享可升级 MDL，提交表定义时升级为排他 MDL，必须等所有持有该表 MDL 的事务结束",
+        "长事务或长 SELECT 持有共享 MDL 会卡住 DDL，DDL 排他的 MDL 请求又会挡住后面所有查询，形成 MDL 等待队列",
+        "显式写 ALGORITHM 不支持会直接报错、不会自动降级；实操按 INSTANT → INPLACE + LOCK=NONE → COPY 评估，用 performance_schema.metadata_locks 或 sys.schema_table_lock_waits 查谁在挡"
+      ],
+      "notes": "常见追问：为什么加索引是 INPLACE 还会卡住业务？——加索引本身允许并发 DML，但提交表定义时要短暂排他 MDL，长事务会把这段等待放大。常见追问：Online DDL 会不会锁表？——会，只是把锁持有时间缩短，不是完全无锁。常见错误回答：「INSTANT 能用于所有 ALTER TABLE」——加索引、改列类型都不支持 INSTANT。"
+    },
+    {
+      "title": "优化器统计信息是怎么收集的？MySQL 8.0 的直方图什么时候该建？",
+      "description": "统计信息决定优化器估多少行，直方图补的是索引统计覆盖不到的列分布。",
+      "answer": [
+        "优化器靠统计信息估算选择率和行数；InnoDB 从 5.6.6 起默认开启持久化统计（innodb_stats_persistent=ON），数据存在 mysql.innodb_table_stats 和 mysql.innodb_index_stats",
+        "索引统计靠采样：innodb_stats_persistent_sample_pages 默认 20 页，采样越多越准、ANALYZE TABLE 越慢；innodb_stats_auto_recalc 默认 ON，表数据变化约 10% 时自动重算",
+        "自动重算对分布倾斜的列不够用，需要手动 ANALYZE TABLE；它只更新索引统计，不更新直方图",
+        "MySQL 8.0 的直方图是列级统计：ANALYZE TABLE t UPDATE HISTOGRAM ON col WITH 100 BUCKETS，默认 100 桶、范围 1–1024，结果存在 information_schema.COLUMN_STATISTICS",
+        "直方图适合没索引或索引选择率差、又经常出现在 WHERE 里的倾斜列，等值、范围和 IN 都能用；单列唯一索引覆盖的列不支持建直方图",
+        "直方图不会自动更新，数据分布变化后要重新执行 UPDATE HISTOGRAM，否则优化器一直拿旧分布估算"
+      ],
+      "notes": "常见追问：直方图和索引统计有什么区别？——索引统计描述索引列的基数，直方图描述列值的分布，能给没索引的列用。常见追问：为什么加了直方图执行计划还是没变？——直方图只影响选择率估算，索引不可用、查询写法或成本模型仍可能让优化器选全表扫描。常见错误回答：「ANALYZE TABLE 会把直方图一起刷新」——普通 ANALYZE TABLE 不动直方图。"
     }
   ]
 }

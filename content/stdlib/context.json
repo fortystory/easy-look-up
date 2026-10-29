@@ -1,0 +1,90 @@
+{
+  "id": "context",
+  "title": "上下文 context",
+  "entries": [
+    {
+      "title": "context.Background 与 context.TODO：根 context",
+      "description": "需要一条不会被取消、没有截止时间的起点 context 时用它，main、初始化和测试里都从 Background 开始。",
+      "code": "ctx := context.Background() // 根 context，不会超时也不会被取消\ntodo := context.TODO()      // 语义是“还没想好这里该用哪个 context”\nfmt.Println(ctx.Err(), todo.Err())",
+      "lang": "go",
+      "notes": "两者行为完全一样，区别只在语义。不要把 Background 存进结构体或当全局单例到处传，而是由调用方一路往下传。"
+    },
+    {
+      "title": "context.WithCancel：手动发出取消信号",
+      "description": "想让一组 goroutine 在收到信号后停下来时用它，cancel 就是那个信号开关。",
+      "code": "ctx, cancel := context.WithCancel(context.Background())\ngo func() {\n\t<-ctx.Done()\n\tfmt.Println(\"收到取消:\", ctx.Err())\n}()\ncancel()\ntime.Sleep(50 * time.Millisecond) // 等 goroutine 打印",
+      "lang": "go",
+      "notes": "cancel 必须调用（一般 defer cancel()），否则子 context 要等父 context 结束才释放；cancel 可以重复调用，多调没有副作用。"
+    },
+    {
+      "title": "context.WithTimeout：给一次调用设超时",
+      "description": "调用下游接口或执行耗时任务时需要兜底时间，超时就主动放弃，避免一直等下去。",
+      "code": "ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)\ndefer cancel()\nselect {\ncase <-ctx.Done():\n\tfmt.Println(\"超时:\", ctx.Err())\ncase <-time.After(time.Second):\n\tfmt.Println(\"任务完成\")\n}",
+      "lang": "go",
+      "notes": "超时后 ctx.Err() 是 context.DeadlineExceeded；即便任务提前结束也要调 cancel，否则定时器资源要等到超时才释放。"
+    },
+    {
+      "title": "context.WithDeadline：指定一个截止时刻",
+      "description": "已经有明确的截止时间（比如上游请求要求在某时刻前返回）时用它，比用时长推算更直观。",
+      "code": "deadline := time.Now().Add(100 * time.Millisecond)\nctx, cancel := context.WithDeadline(context.Background(), deadline)\ndefer cancel()\n<-ctx.Done()\nfmt.Println(\"到达截止时间:\", ctx.Err())",
+      "lang": "go",
+      "notes": "传入的时间已经过期时，返回的 ctx 立刻就是 Done 状态；父 context 的截止时间更早时，子 context 会跟着提前结束。"
+    },
+    {
+      "title": "context.WithValue：往下游传请求级数据",
+      "description": "traceID、登录用户这类贯穿一次请求的数据，不想一层层加函数参数时用它带下去。",
+      "code": "type traceKey struct{} // 自定义 key 类型，避免和别的包撞 key\n\nctx := context.WithValue(context.Background(), traceKey{}, \"trace-1\")\nif v := ctx.Value(traceKey{}); v != nil {\n\tfmt.Println(\"traceID:\", v.(string))\n}",
+      "lang": "go",
+      "notes": "key 用自定义类型，不要用 string（go vet 会报 basic type as key）；WithValue 只放请求级元数据，不要拿它传业务参数或可选参数。"
+    },
+    {
+      "title": "ctx.Done() 配合 select：让循环能被取消",
+      "description": "长时间跑的循环或后台任务要能被取消时，每轮用 select 检查 Done，而不是死等。",
+      "code": "ctx, cancel := context.WithCancel(context.Background())\nfor i := 0; i < 5; i++ {\n\tselect {\n\tcase <-ctx.Done():\n\t\tfmt.Println(\"提前退出:\", ctx.Err())\n\t\treturn\n\tdefault:\n\t\tfmt.Println(\"处理\", i)\n\t}\n\tif i == 2 {\n\t\tcancel()\n\t}\n}",
+      "lang": "go",
+      "notes": "select 里加 default 表示“没取消就继续干活”；不加 default 会阻塞在 Done 上，后面的逻辑永远轮不到。"
+    },
+    {
+      "title": "取消信号会向下传播",
+      "description": "想一次取消整棵调用树（父任务取消，所有子任务跟着停）时，靠的就是 context 的父子关系。",
+      "code": "parent, cancelParent := context.WithCancel(context.Background())\nchild, cancelChild := context.WithCancel(parent)\ndefer cancelChild()\ncancelParent()\n<-child.Done()\nfmt.Println(\"父取消，子跟着结束:\", child.Err())",
+      "lang": "go",
+      "notes": "取消只会向下传播：父 context 取消，所有子 context 立刻 Done；子取消不影响父。所以要把同一个 ctx 一路往下传，而不是每个函数各建一个。"
+    },
+    {
+      "title": "context 作为函数的第一个参数",
+      "description": "写会被取消、会超时的函数时，把 ctx 放第一个参数传进来，让调用方决定何时放弃。",
+      "code": "func fetch(ctx context.Context, id int) error {\n\tselect {\n\tcase <-ctx.Done():\n\t\treturn ctx.Err() // 把取消原因原样往上传\n\tcase <-time.After(time.Second):\n\t\treturn nil\n\t}\n}",
+      "lang": "go",
+      "notes": "约定把 ctx 放在第一个参数并命名为 ctx，不要塞进结构体；被调函数不要自己造 context.Background()，否则上游的取消传不进来。"
+    },
+    {
+      "title": "用 ctx.Err() 判断是超时还是主动取消",
+      "description": "任务中断后要记录或返回原因时，别把所有失败都当成超时，用 ctx.Err() 区分两种取消来源。",
+      "code": "ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)\ndefer cancel()\n<-ctx.Done()\nif errors.Is(ctx.Err(), context.DeadlineExceeded) {\n\tfmt.Println(\"是超时，不是主动取消\")\n}",
+      "lang": "go",
+      "notes": "context.Canceled 表示被主动取消，context.DeadlineExceeded 表示超时；直接用 == 比较通常也可以，但用 errors.Is 在 err 被包装后仍然成立。"
+    },
+    {
+      "title": "context.WithCancelCause：带上取消原因",
+      "description": "取消方和被取消方都要知道“为什么取消”时用它，普通 WithCancel 只能得到一个笼统的 Canceled。",
+      "code": "ctx, cancel := context.WithCancelCause(context.Background())\ncancel(errors.New(\"用户主动退出\"))\nfmt.Println(ctx.Err())          // 永远只是 context.Canceled\nfmt.Println(context.Cause(ctx)) // 具体原因",
+      "lang": "go",
+      "notes": "Go 1.21 起才有。ctx.Err() 只告诉你被取消，具体原因要用 context.Cause(ctx) 取；WithTimeoutCause、WithDeadlineCause 同理。"
+    },
+    {
+      "title": "context.AfterFunc：context 结束时执行清理",
+      "description": "需要在请求被取消时顺手关连接、删临时文件、记录日志，用它注册回调比另起一个 goroutine 等 Done 更省事。",
+      "code": "ctx, cancel := context.WithCancel(context.Background())\nstop := context.AfterFunc(ctx, func() {\n\tfmt.Println(\"context 结束，清理资源\")\n})\ncancel()\ntime.Sleep(50 * time.Millisecond)\nfmt.Println(\"stop 返回:\", stop()) // 回调已执行，stop 返回 false",
+      "lang": "go",
+      "notes": "Go 1.21 起才有。回调在单独的 goroutine 里执行，cancel 返回时不一定已经跑完；stop 返回 false 说明回调已经执行或正在执行。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把超时控制、取消传播、请求级数据和取消原因串起来，看一次带超时的任务是怎么收尾的。",
+      "code": "package main\n\nimport (\n\t\"context\"\n\t\"errors\"\n\t\"fmt\"\n\t\"time\"\n)\n\ntype traceKey struct{}\n\nfunc worker(ctx context.Context, name string) string {\n\tselect {\n\tcase <-ctx.Done():\n\t\treturn name + \" 取消: \" + ctx.Err().Error()\n\tcase <-time.After(30 * time.Millisecond):\n\t\treturn name + \" 完成, trace=\" + ctx.Value(traceKey{}).(string)\n\t}\n}\n\nfunc main() {\n\tctx, cancel := context.WithTimeout(context.Background(), time.Second)\n\tdefer cancel()\n\tctx = context.WithValue(ctx, traceKey{}, \"req-1\")\n\tfmt.Println(worker(ctx, \"任务A\"))\n\n\tchild, cancelChild := context.WithCancelCause(ctx)\n\tcancelChild(errors.New(\"用户退出\"))\n\tfmt.Println(\"取消原因:\", context.Cause(child))\n\tfmt.Println(\"是超时吗:\", errors.Is(child.Err(), context.DeadlineExceeded))\n}",
+      "lang": "go",
+      "notes": "组合示例里 worker 依赖调用方在 ctx 上放了 trace；真忘放时 `ctx.Value(...).(string)` 会 panic，真实代码里先判断 nil 再断言。"
+    }
+  ]
+}

@@ -17,11 +17,11 @@
       "notes": "别再手动 c.Header(\"Content-Type\", \"application/json\")，c.JSON 已经做了。"
     },
     {
-      "title": "c.JSON 的状态码写法",
-      "description": "c.JSON 的第一个参数就是 HTTP 状态码，用 net/http 里的常量写，别手写数字。第二个参数才是要序列化的数据。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusCreated, gin.H{\"id\": 1}) // 201 Created\n\t})\n\tr.GET(\"/users/1\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusNotFound, gin.H{\"error\": \"用户不存在\"}) // 404 Not Found\n\t})\n\n\t// 常用状态码：\n\t// 200 OK 成功\n\t// 201 Created 创建成功\n\t// 204 No Content 成功但没有响应体\n\t// 400 Bad Request 参数格式不对\n\t// 401 Unauthorized 没登录或令牌无效\n\t// 403 Forbidden 登录了但没权限\n\t// 404 Not Found 资源不存在\n\t// 409 Conflict 与当前状态冲突，比如重复提交\n\t// 422 Unprocessable Entity 格式对但语义不合法\n\t// 500 Internal Server Error 服务端自己出错\n\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "title": "c.PureJSON：不转义 HTML 的 JSON",
+      "description": "返回的 JSON 里有 <、>、& 且不希望被转义成 \\u003c 这类序列时用 PureJSON；默认的 c.JSON 会做 HTML 转义。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tdata := gin.H{\"html\": \"<b>你好</b>\", \"url\": \"/a?b=1&c=2\"}\n\n\tr.GET(\"/json\", func(c *gin.Context) { c.JSON(http.StatusOK, data) })\n\tr.GET(\"/pure\", func(c *gin.Context) { c.PureJSON(http.StatusOK, data) })\n\n\t// c.JSON 把 < > & 转义成 \\u003c 这类序列\n\treq := httptest.NewRequest(http.MethodGet, \"/json\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"JSON:\", w.Body.String())\n\n\treq2 := httptest.NewRequest(http.MethodGet, \"/pure\", nil)\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req2)\n\tfmt.Println(\"PureJSON:\", w2.Body.String())\n}",
       "lang": "go",
-      "notes": "两个参数写反了编译不过：c.JSON(data, http.StatusOK) 是错的。"
+      "notes": "c.JSON 为防 XSS 会把 <、>、& 转义，PureJSON 用 json.Encoder 关掉了这个转义，响应末尾还会多一个换行。它只改变转义方式，不提供安全防护，前端用 innerHTML 渲染时仍要自己转义。"
     },
     {
       "title": "自定义 JSON 结构体",
@@ -49,7 +49,7 @@
       "description": "返回网页时用它。模板要先注册到引擎上（SetHTMLTemplate 或 LoadHTMLGlob），c.HTML 的第二个参数是模板名。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"html/template\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\ttpl := template.Must(template.New(\"index.html\").Parse(\"<h1>你好，{{.}}</h1>\"))\n\tr.SetHTMLTemplate(tpl)\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"index.html\", \"Gin\")\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Body.String())\n}",
       "lang": "go",
-      "notes": "模板名没注册会 panic：html/template: \"index.html\" is undefined。"
+      "notes": "已经注册了模板、但模板名不存在时不会 panic：错误写进 c.Errors 并 Abort，状态码保持传入值。连模板渲染器都没注册时，c.HTML 才会因为 HTMLRender 为 nil 而 panic。"
     },
     {
       "title": "c.Redirect：重定向",
@@ -64,6 +64,13 @@
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/data\", func(c *gin.Context) {\n\t\t// 自己指定 Content-Type，返回原始字节\n\t\tc.Data(http.StatusOK, \"text/plain; charset=utf-8\", []byte(\"原始字节\"))\n\t})\n\tr.GET(\"/file\", func(c *gin.Context) {\n\t\tc.File(\"demo.txt\")\n\t})\n\n\t// 先造一个文件给 c.File 用\n\t_ = os.WriteFile(\"demo.txt\", []byte(\"文件内容\"), 0o644)\n\n\treq := httptest.NewRequest(http.MethodGet, \"/data\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n\n\treq2 := httptest.NewRequest(http.MethodGet, \"/file\", nil)\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req2)\n\tfmt.Println(w2.Code, w2.Body.String())\n}",
       "lang": "go",
       "notes": "c.File 的路径相对于进程的工作目录，文件不存在会返回 404；它还会按扩展名猜 Content-Type。"
+    },
+    {
+      "title": "c.FileAttachment：指定下载文件名",
+      "description": "把服务器上的文件发给客户端、并让浏览器按指定文件名保存时用它；第二个参数是下载时显示的名字，不是磁盘路径。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tf, err := os.CreateTemp(\"\", \"demo-*.txt\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer os.Remove(f.Name())\n\t_, _ = f.WriteString(\"文件内容\")\n\t_ = f.Close()\n\n\tr := gin.New()\n\tr.GET(\"/download\", func(c *gin.Context) {\n\t\t// 第二个参数是客户端保存时看到的文件名\n\t\tc.FileAttachment(f.Name(), \"报表.txt\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/download\", nil))\n\tfmt.Println(w.Code)\n\tfmt.Println(w.Header().Get(\"Content-Disposition\"))\n\tfmt.Println(w.Header().Get(\"Content-Type\"))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "中文等非 ASCII 文件名会写成 RFC 5987 的 filename*=UTF-8''...，老客户端可能不认；ASCII 文件名才是 filename=\"...\"。它底层是 http.ServeFile，会自己设 Content-Type、Content-Length、Last-Modified 并处理 Range，别再手动设这些头；文件不存在时返回 404。"
     },
     {
       "title": "c.Header：设置响应头",

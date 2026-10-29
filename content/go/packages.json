@@ -63,7 +63,7 @@
       "description": "每个模块根目录都有一个 go.mod，第一行 module 是模块路径，go 指令声明这个模块需要的最低 Go 版本。",
       "code": "// go.mod 的内容：\n//\n// module example.com/myapp                      模块路径，别的模块 import 你时用它\n// go 1.21                                       语言版本下限\n//\n// require github.com/gin-gonic/gin v1.10.0       依赖清单",
       "lang": "go",
-      "notes": "module 路径一般就是仓库地址（github.com/xxx/yyy）。go 指令写的是这份代码允许使用的最低 Go 版本：写高了就用不了更新的语法，写低了而依赖要求更高版本时，go 命令会提示你升级 go.mod。"
+      "notes": "module 路径一般就是仓库地址（github.com/xxx/yyy）。go 指令是这份代码要求的最低 Go 版本：写高才能用新特性，写低了而依赖要求更高版本时，go 命令会提示你升级 go.mod。"
     },
     {
       "title": "go.mod 与 go.sum 各管什么",
@@ -99,6 +99,20 @@
       "code": "// go build ./...      编译当前模块的所有包\n// go run .            运行当前目录的 main 包\n// go test ./...       跑所有测试\n// go install ./cmd/x  把命令装到 $GOPATH/bin\n// go vet ./...        静态检查：可疑写法、printf 参数对不上\n// gofmt -l .          列出格式不规范的文件，gofmt -w . 就地改",
       "lang": "go",
       "notes": "gofmt -l 只报告不改，-w 才写入；提交前跑一遍 gofmt -w .。go vet 只报可疑写法，不管编译错误。go run 每次都重新编译，别拿它跑循环。"
+    },
+    {
+      "title": "go mod init 与依赖升级",
+      "description": "新建模块、或把依赖升到新版本时用这几个命令：go mod init 生成 go.mod，go get 改版本，go mod tidy 收尾。",
+      "code": "// 新建模块，模块路径写仓库地址\n// go mod init github.com/you/myapp\n//\n// 升级依赖\n// go get github.com/gin-gonic/gin@latest     拉到最新版\n// go get github.com/gin-gonic/gin@v1.10.0   固定到指定版本\n// go get -u ./...                           升级本模块用到的所有依赖",
+      "lang": "go",
+      "notes": "go get -u 只升 minor/patch，不跨 major（v2 要换导入路径）。升级前看 CHANGELOG，升级后跑 go mod tidy 和测试。模块路径一旦发布就不要改，否则所有 import 都会失效。"
+    },
+    {
+      "title": "循环导入",
+      "description": "两个包互相 import 时编译直接失败。拆包时要保证依赖是单向的，别让 a 和 b 互相引用。",
+      "code": "// package a 里 import \"example.com/myapp/b\"\n// package b 里 import \"example.com/myapp/a\"\n//\n// go build 直接报错：\n// import cycle not allowed",
+      "lang": "go",
+      "notes": "循环导入是包级的，同包内函数互相调用不算。常见解法：把公共类型抽到第三个包；让使用方定义接口、实现方反过来依赖接口；实在拆不开就合并成一个包。"
     },
     {
       "title": "组合示例：把这一组用起来",

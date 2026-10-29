@@ -1,0 +1,90 @@
+{
+  "id": "json",
+  "title": "JSON 编解码",
+  "entries": [
+    {
+      "title": "json.Marshal：结构体转 JSON",
+      "description": "要把结构体发给前端、写进文件或放进消息队列时，先 Marshal 成字节切片。",
+      "code": "type User struct {\n\tName string\n\tAge  int\n}\nb, err := json.Marshal(User{Name: \"张三\", Age: 18})\nfmt.Println(string(b), err)",
+      "lang": "go",
+      "notes": "只有导出的字段（大写开头）才会被编码，小写字段静默丢掉；Marshal 返回的 error 只在字段类型不支持（chan、func）时才会出现。"
+    },
+    {
+      "title": "json.Unmarshal：JSON 转结构体",
+      "description": "收到请求体或读配置文件时，把 JSON 字节解析到结构体，再用字段做业务逻辑。",
+      "code": "type User struct {\n\tName string `json:\"name\"`\n\tAge  int    `json:\"age\"`\n}\nvar u User\nerr := json.Unmarshal([]byte(`{\"name\":\"张三\",\"age\":18}`), &u)\nfmt.Println(u, err)",
+      "lang": "go",
+      "notes": "第二个参数必须传指针，传值会返回 InvalidUnmarshalError；JSON 里没有的字段保持零值，不会报错。"
+    },
+    {
+      "title": "struct tag：改字段名、omitempty、忽略字段",
+      "description": "结构体字段名和接口约定不一致，或者空字段不想输出时，用 tag 控制编码结果。",
+      "code": "type User struct {\n\tName  string `json:\"name\"`\n\tEmail string `json:\"email,omitempty\"`\n\tPass  string `json:\"-\"`\n}\nb, _ := json.Marshal(User{Name: \"张三\", Pass: \"secret\"})\nfmt.Println(string(b))",
+      "lang": "go",
+      "notes": "`json:\"-\"` 才是完全不输出，omitempty 只对零值（空串、0、nil）生效；带 `-` 的字段反序列化时也读不到。"
+    },
+    {
+      "title": "嵌套结构体与切片",
+      "description": "接口返回的数据通常是对象套数组，直接在结构体里嵌套定义就能一次编解码整棵树。",
+      "code": "type Addr struct {\n\tCity string `json:\"city\"`\n}\ntype User struct {\n\tName string   `json:\"name\"`\n\tTags []string `json:\"tags\"`\n\tAddr Addr     `json:\"addr\"`\n}\nb, _ := json.Marshal(User{Name: \"张三\", Tags: []string{\"go\"}, Addr: Addr{City: \"杭州\"}})\nfmt.Println(string(b))",
+      "lang": "go",
+      "notes": "嵌套结构体会递归编码；字段是 nil 切片时输出 null，想让它输出 [] 得先初始化成空切片。"
+    },
+    {
+      "title": "map 的编解码",
+      "description": "字段名不固定、事先定义不了结构体时，用 map[string]T 接 JSON 更灵活。",
+      "code": "b, _ := json.Marshal(map[string]int{\"b\": 2, \"a\": 1})\nfmt.Println(string(b))\nvar m map[string]int\nerr := json.Unmarshal([]byte(`{\"x\":10}`), &m)\nfmt.Println(m, err)",
+      "lang": "go",
+      "notes": "map 的 key 只能是字符串（或实现了 encoding.TextMarshaler 的类型）；Marshal 会按 key 字典序输出，Unmarshal 到 nil map 时会自动 make。"
+    },
+    {
+      "title": "Decoder：从流里连续解码",
+      "description": "从连接、文件或日志里读连续多个 JSON 值时用 Decoder，比先 ReadAll 再 Unmarshal 省内存。",
+      "code": "r := strings.NewReader(`{\"name\":\"张三\"}{\"name\":\"李四\"}`)\ndec := json.NewDecoder(r)\nfor dec.More() {\n\tvar m map[string]string\n\tif err := dec.Decode(&m); err != nil {\n\t\tfmt.Println(\"解码失败:\", err)\n\t\tbreak\n\t}\n\tfmt.Println(m[\"name\"])\n}",
+      "lang": "go",
+      "notes": "读到结尾再 Decode 会返回 io.EOF，用 More() 判断可以避开这个错误；Decoder 还有 DisallowUnknownFields、UseNumber 这些开关。"
+    },
+    {
+      "title": "Encoder：流式写出并控制转义",
+      "description": "直接写 http.ResponseWriter 或文件时用 Encoder，省一次中间字节切片，还能关掉 HTML 转义。",
+      "code": "var buf bytes.Buffer\nenc := json.NewEncoder(&buf)\nenc.SetEscapeHTML(false) // 不把 < > & 转成 \\u003c 等\nenc.SetIndent(\"\", \"  \")\n_ = enc.Encode(\"<b>你好</b>\")\nfmt.Print(buf.String())",
+      "lang": "go",
+      "notes": "Encode 会在末尾自动加换行，和 Marshal 不一样；默认把 < > & 转义成 \\u003c 等，防止 JSON 直接嵌进 HTML 时被注入，输出给人看时可以关掉。"
+    },
+    {
+      "title": "json.RawMessage：先不解析，之后再解",
+      "description": "消息体的结构取决于 type 字段时，先把 data 原样留着，等读到 type 再决定解析成哪个结构体。",
+      "code": "type Event struct {\n\tType string          `json:\"type\"`\n\tData json.RawMessage `json:\"data\"`\n}\nvar e Event\n_ = json.Unmarshal([]byte(`{\"type\":\"click\",\"data\":{\"x\":1}}`), &e)\nfmt.Println(e.Type, string(e.Data))",
+      "lang": "go",
+      "notes": "RawMessage 只保存原始字节、不做解析；它引用的就是入参切片的内存，入参被复用时数据会变，需要保留先 copy 一份。"
+    },
+    {
+      "title": "未知字段：默认忽略与 DisallowUnknownFields",
+      "description": "联调时想确认字段名有没有拼错，或者接口要求严格校验时，打开 DisallowUnknownFields。",
+      "code": "dec := json.NewDecoder(strings.NewReader(`{\"name\":\"张三\",\"extra\":1}`))\ndec.DisallowUnknownFields()\nvar u struct {\n\tName string `json:\"name\"`\n}\nerr := dec.Decode(&u)\nfmt.Println(err)",
+      "lang": "go",
+      "notes": "默认多余字段静默忽略；严格模式会把上游新增的字段当错误，对外接口慎用，通常只在内部配置或测试里开。"
+    },
+    {
+      "title": "数字精度：UseNumber 避免 float64",
+      "description": "解析订单号、雪花 ID 这类大整数时，默认转成 float64 会丢精度，用 UseNumber 保住原样。",
+      "code": "dec := json.NewDecoder(strings.NewReader(`{\"id\":9007199254740993}`))\ndec.UseNumber()\nvar v map[string]any\n_ = dec.Decode(&v)\nn, _ := v[\"id\"].(json.Number).Int64()\nfmt.Println(n)",
+      "lang": "go",
+      "notes": "默认解析到 interface{} 时数字都是 float64，超过 2^53 的整数会丢精度；json.Number 本质是字符串，需要计算时再转 Int64/Float64。"
+    },
+    {
+      "title": "自定义 MarshalJSON：控制输出格式",
+      "description": "默认编码不满足接口约定（要加派生字段、要换格式）时，给类型实现 MarshalJSON。",
+      "code": "type User struct {\n\tName string `json:\"name\"`\n}\n\nfunc (u User) MarshalJSON() ([]byte, error) {\n\ttype alias User // 别名没有 MarshalJSON 方法，不会递归\n\treturn json.Marshal(struct {\n\t\talias\n\t\tLevel string `json:\"level\"`\n\t}{alias(u), \"vip\"})\n}",
+      "lang": "go",
+      "notes": "在 MarshalJSON 里直接 json.Marshal(u) 会无限递归直到栈溢出，先转成没有该方法的别名类型；UnmarshalJSON 同理，别在方法里解析回自身类型。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把结构体编解码、tag、流式解码、UseNumber 和 Encoder 串成一次完整的数据处理。",
+      "code": "package main\n\nimport (\n\t\"bytes\"\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"strings\"\n)\n\ntype User struct {\n\tName  string          `json:\"name\"`\n\tEmail string          `json:\"email,omitempty\"`\n\tTags  []string        `json:\"tags\"`\n\tExtra json.RawMessage `json:\"extra,omitempty\"`\n}\n\nfunc main() {\n\t// 结构体转 JSON，空 Email 被 omitempty 省掉\n\tb, err := json.Marshal(User{Name: \"张三\", Tags: []string{\"go\", \"json\"}})\n\tfmt.Println(\"Marshal:\", string(b), err)\n\n\t// JSON 转回结构体\n\tvar u User\n\tif err := json.Unmarshal(b, &u); err != nil {\n\t\tfmt.Println(\"Unmarshal 失败:\", err)\n\t\treturn\n\t}\n\tfmt.Println(\"Name:\", u.Name, \"Email 为空:\", u.Email == \"\")\n\n\t// 流式解码，数字用 json.Number 保精度\n\tdec := json.NewDecoder(strings.NewReader(`{\"n\":1}{\"n\":2}`))\n\tdec.UseNumber()\n\tfor dec.More() {\n\t\tvar v map[string]any\n\t\t_ = dec.Decode(&v)\n\t\tfmt.Println(\"number:\", v[\"n\"])\n\t}\n\n\t// Encoder 关闭 HTML 转义后写进 buffer\n\tvar buf bytes.Buffer\n\tenc := json.NewEncoder(&buf)\n\tenc.SetEscapeHTML(false)\n\t_ = enc.Encode(\"<b>ok</b>\")\n\tfmt.Print(\"Encoder:\", buf.String())\n}",
+      "lang": "go",
+      "notes": "组合示例里 b 是 Marshal 产出的字节切片，直接 Unmarshal 回结构体是常见往返写法；真实接口里字段对不上时要靠 tag 对齐。"
+    }
+  ]
+}

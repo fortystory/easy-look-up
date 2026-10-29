@@ -49,7 +49,7 @@
       "description": "循环里拼字符串时用 Builder，它内部用 []byte 缓冲，最后 String() 时才拼一次，比反复 s += x 快得多。",
       "code": "var b strings.Builder\nb.WriteString(\"Hello\")\nb.WriteString(\", \")\nb.WriteString(\"World\")\nfmt.Println(b.String())\nfmt.Println(b.Len())",
       "lang": "go",
-      "notes": "Builder 不能复制：值拷贝会让两个 Builder 共享同一个底层 buffer，内容会串，要传就传 *strings.Builder。WriteString 返回的 error 永远是 nil，不用管。"
+      "notes": "Builder 不能复制：复制一个非零的 Builder 再调用方法会直接 panic（strings: illegal use of non-zero Builder copied by value），要传就传 *strings.Builder。WriteString 返回的 error 永远是 nil，不用管。"
     },
     {
       "title": "strings.NewReader：把字符串当 io.Reader 用",

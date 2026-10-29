@@ -38,32 +38,32 @@
       "notes": "LoadHTMLFiles 里同样是 template.Must，路径写错会 panic（no such file or directory）。"
     },
     {
-      "title": "自定义 404 r.NoRoute",
-      "description": "没有任何路由匹配上时走 NoRoute，在那里统一返回 JSON 错误，前端就不用去解析 gin 默认的纯文本 404。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\tr.NoRoute(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusNotFound, gin.H{\n\t\t\t\"error\": \"资源不存在\",\n\t\t\t\"path\":  c.Request.URL.Path,\n\t\t})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/nope\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
-      "lang": "go",
-      "notes": "gin 默认的 404 响应体是空的，只有状态码，前端拿不到任何错误信息。"
-    },
-    {
-      "title": "自定义 405 r.NoMethod",
-      "description": "路径存在但方法不对（只支持 GET 的接口收到 POST）时走 NoMethod，返回 405 和统一的错误体。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\t// 默认是关着的，不打开的话 NoMethod 永远不会触发\n\tr.HandleMethodNotAllowed = true\n\tr.GET(\"/users\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\tr.NoMethod(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusMethodNotAllowed, gin.H{\"error\": \"方法不被允许\"})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodPost, \"/users\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
-      "lang": "go",
-      "notes": "必须先打开 r.HandleMethodNotAllowed = true，默认是关的；关着的话 NoMethod 根本不触发，方法不对也只回 404。"
-    },
-    {
-      "title": "路由冲突会 panic",
-      "description": "gin 的路由树不允许同一层里通配段和普通段并存。Static 挂 /static 时占的是 /static/*filepath，同级再注册 /static/:name 就会在注册时 panic。",
+      "title": "/static/*filepath 与同级参数路由冲突",
+      "description": "Static 挂载时占的是 /static/*filepath 通配路由，同一层再注册 /static/:name 就会在注册阶段 panic。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\t// 注册路由时的 panic 由这里接住\n\tdefer func() {\n\t\tif rec := recover(); rec != nil {\n\t\t\tfmt.Println(\"路由冲突 panic:\", rec)\n\t\t}\n\t}()\n\n\tr := gin.New()\n\tr.GET(\"/static/:name\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\t// Static 注册的是 /static/*filepath，和上面的 :name 在同一层，冲突\n\tr.Static(\"/static\", \"./static\")\n\tfmt.Println(\"没有冲突\")\n}",
       "lang": "go",
       "notes": "顺序换过来也一样 panic（conflicts with existing wildcard）。这类问题只在启动时暴露，进程直接退出，不会变成 500。"
     },
     {
       "title": "目录不存在时的两种结果",
-      "description": "静态目录不存在不会 panic，只是请求时返回 404；模板目录不存在（glob 匹配不到文件）才是启动时直接 panic。",
+      "description": "静态目录不存在不会 panic，请求时才 404（并交给 NoRoute）；模板目录不存在（glob 匹配不到文件）才是启动时直接 panic。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 静态目录不存在：注册时不 panic，请求时返回 404\n\tr := gin.New()\n\tr.Static(\"/static\", \"./missing\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/static/a.txt\", nil))\n\tfmt.Println(\"静态目录不存在 ->\", w.Code)\n\n\t// 模板目录不存在：加载时直接 panic\n\tdefer func() {\n\t\tif rec := recover(); rec != nil {\n\t\t\tfmt.Println(\"模板目录不存在 panic:\", rec)\n\t\t}\n\t}()\n\tr2 := gin.New()\n\tr2.LoadHTMLGlob(\"./templates/*.html\")\n\tfmt.Println(\"不会走到这里\")\n}",
       "lang": "go",
-      "notes": "静态目录缺失时的 404 是 gin 静态处理器写的空响应，不会走你的 NoRoute JSON，排查时容易以为 NoRoute 没生效。"
+      "notes": "静态目录缺失时注册能过，请求返回 404 并交给 NoRoute；没挂 NoRoute 时才是默认的 404 page not found。模板 glob 匹配不到文件则在加载时报 pattern matches no files。"
+    },
+    {
+      "title": "静态文件的 404 也会走 NoRoute",
+      "description": "Static/StaticFS 找不到文件时会切到 NoRoute，所以自定义 404 对静态资源同样生效；注册先后不影响。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.StaticFS(\"/assets\", http.FS(os.DirFS(\"./missing\")))\n\tr.NoRoute(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(404, gin.H{\"error\": \"资源不存在\"})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/assets/app.js\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "文件不存在时静态处理器先把状态码写成 404，再把处理链换成 NoRoute。NoRoute 要用 AbortWithStatusJSON 写完整响应；注册在 StaticFS 之前或之后，结果都一样。"
+    },
+    {
+      "title": "静态目录挂在 / 上会和所有路由冲突",
+      "description": "r.Static(\"/\", 目录) 注册的是 /*filepath，会和任何其它路由冲突，注册阶段 panic；静态资源要挂在专用前缀下。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tfmt.Println(\"注册 panic:\", r)\n\t\t}\n\t}()\n\n\tr := gin.New()\n\tr.Static(\"/\", \"./static\")\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n}",
+      "lang": "go",
+      "notes": "报错是 '/ping' in new path '/ping' conflicts with existing wildcard '/*filepath'；先注册 /ping 再 Static(\"/\") 也会 panic。根路径静态服务要用中间件或 NoRoute 兜底，不要直接挂 /。"
     },
     {
       "title": "返回 JSON 错误 c.AbortWithStatusJSON",

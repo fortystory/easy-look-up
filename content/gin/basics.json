@@ -7,7 +7,7 @@
       "description": "Default() 直接返回一个装好 Logger 日志和 Recovery 异常恢复的引擎，开箱即用；New() 返回的是干净引擎，中间件要自己挂。",
       "code": "package main\n\nimport \"github.com/gin-gonic/gin\"\n\nfunc main() {\n\tr := gin.Default() // 自带 Logger 和 Recovery\n\tr.GET(\"/\", func(c *gin.Context) { c.String(200, \"ok\") })\n\n\t// gin.New() 返回一个不带任何中间件的引擎\n\tclean := gin.New()\n\tclean.Use(gin.Logger(), gin.Recovery()) // 想恢复默认行为就自己挂\n\tclean.GET(\"/\", func(c *gin.Context) { c.String(200, \"ok\") })\n}",
       "lang": "go",
-      "notes": "Default 里的 Recovery 能兜住 handler 里的 panic，返回 500 而不是让整个服务崩掉。用 New() 又不挂 Recovery，panic 会直接带崩进程。"
+      "notes": "Default 里的 Recovery 能兜住 handler 里的 panic，返回 500 并继续服务。用 New() 又不挂 Recovery 时，panic 会被 net/http 在最外层接住：这个请求的连接断掉，进程不退出。"
     },
     {
       "title": "注册路由：r.GET / r.POST / r.Any / r.Handle",
@@ -66,25 +66,18 @@
       "notes": "FullPath 是注册时的模板 /user/:id，不是实际请求的 /user/42。HandlerName 对匿名函数返回的是 main.main.func1 这种名字。"
     },
     {
-      "title": "引擎中间件：r.Use",
-      "description": "Use 挂上去的中间件对之后注册的所有路由生效，在 handler 前后加日志、统一加响应头都靠它。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"开始:\", c.Request.URL.Path)\n\t\tc.Next() // 把控制权交给后面的 handler\n\t\tfmt.Println(\"结束:\", c.Request.URL.Path)\n\t})\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/ping\", nil))\n\tfmt.Println(w.Body.String())\n}",
-      "lang": "go",
-      "notes": "gin 在注册路由时就把当时的中间件抄进这条路由，所以 Use 要写在注册路由之前；写在后面只对之后的路由生效。c.Next 之后的代码在 handler 执行完之后才跑。"
-    },
-    {
-      "title": "路由组里的中间件",
-      "description": "组里 Use 的中间件只管这个组和它的子组，给一组路由统一加鉴权、日志用它最合适。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tapi := r.Group(\"/api\")\n\tapi.Use(func(c *gin.Context) {\n\t\tc.Header(\"X-API\", \"v1\")\n\t\tc.Next()\n\t})\n\tapi.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/ping\", nil))\n\tfmt.Println(w.Header().Get(\"X-API\"))\n}",
-      "lang": "go",
-      "notes": "组中间件和引擎中间件会一起执行，顺序是先引擎后组。中间件里忘了写 c.Next，链子就断在那儿，后面的 handler 不会跑。"
-    },
-    {
       "title": "启动服务：gin.SetMode 与 r.Run",
       "description": "上线前用 SetMode 切到 Release 关掉调试输出，再用 Run 监听端口启动 HTTP 服务。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode) // 关掉 [GIN-debug] 调试输出\n\tr := gin.Default()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\t// Run 会阻塞当前 goroutine，放到后台跑\n\tgo func() {\n\t\tif err := r.Run(\":8080\"); err != nil {\n\t\t\tfmt.Println(\"服务退出:\", err)\n\t\t}\n\t}()\n\ttime.Sleep(200 * time.Millisecond)\n}",
       "lang": "go",
       "notes": "Run 里的地址写 :8080 表示监听所有网卡的 8080 端口，写 127.0.0.1:8080 只监听本机。SetMode 只影响 [GIN-debug] 那类调试输出，访问日志是 Logger 中间件打的，要关得自己换 LoggerWithConfig 的 Output。"
+    },
+    {
+      "title": "SetTrustedProxies 与 c.ClientIP",
+      "description": "前面挡了 Nginx 这类反向代理、要取真实客户端 IP 时用 c.ClientIP；它只有直连对端是受信代理时才读转发头，所以要先用 SetTrustedProxies 声明代理网段。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 只信任本机反向代理\n\tr := gin.New()\n\tif err := r.SetTrustedProxies([]string{\"127.0.0.1\"}); err != nil {\n\t\tpanic(err)\n\t}\n\tr.GET(\"/ip\", func(c *gin.Context) { c.String(200, c.ClientIP()) })\n\n\t// 直连对端是受信代理，才采信 X-Forwarded-For\n\tproxyReq := httptest.NewRequest(\"GET\", \"/ip\", nil)\n\tproxyReq.RemoteAddr = \"127.0.0.1:1234\"\n\tproxyReq.Header.Set(\"X-Forwarded-For\", \"203.0.113.9\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, proxyReq)\n\tfmt.Println(\"经代理:\", w.Body.String())\n\n\t// 不设置 SetTrustedProxies 时默认信任所有代理，头里的值可以伪造\n\tloose := gin.New()\n\tloose.GET(\"/ip\", func(c *gin.Context) { c.String(200, c.ClientIP()) })\n\tspoofReq := httptest.NewRequest(\"GET\", \"/ip\", nil)\n\tspoofReq.RemoteAddr = \"198.51.100.7:5678\"\n\tspoofReq.Header.Set(\"X-Forwarded-For\", \"203.0.113.9\")\n\tw2 := httptest.NewRecorder()\n\tloose.ServeHTTP(w2, spoofReq)\n\tfmt.Println(\"默认信任全部:\", w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "gin v1.12.0 默认把 0.0.0.0/0 和 ::/0 都当受信代理，等于信任所有来源，X-Forwarded-For 里的值可以直接伪造 ClientIP。上线前用 SetTrustedProxies 填真实代理网段；传 nil 表示不信任任何代理，ClientIP 只取连接对端地址。调试模式下用「信任全部代理」的配置启动 Run，gin 会打一条 WARNING。"
     },
     {
       "title": "自定义 404 与 405：r.NoRoute 与 r.NoMethod",

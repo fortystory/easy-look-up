@@ -28,7 +28,7 @@
       "description": "嵌入结构体的字段被提升到外层，可以直接访问，不用一层层写 u.Base.ID。",
       "code": "type Base struct {\n\tID int\n}\ntype User struct {\n\tBase\n}\nu := User{Base: Base{ID: 7}}\nfmt.Println(u.ID)",
       "lang": "go",
-      "notes": "提升只穿透一层：外层嵌 A、A 又嵌 B 时，B 的字段不会提到最外层，得写 u.A.BID。两层都有同名字段时，以最外层的为准。"
+      "notes": "提升可以跨多级：外层嵌 A、A 又嵌 B，B 的字段照样能提到最外层。只有同名字段或方法造成遮蔽、或者同一层出现歧义时，才需要写 u.A.B.ID 这样的全路径。"
     },
     {
       "title": "方法提升",
@@ -63,7 +63,7 @@
       "description": "方法写成指针接收者时，值的类型 T 不再满足接口，只有 &T 满足。把 T 直接赋给接口会编译失败。",
       "code": "package main\n\nimport \"fmt\"\n\ntype T struct{}\n\nfunc (t *T) Name() string {\n\treturn \"t\"\n}\n\ntype Namer interface {\n\tName() string\n}\n\nfunc main() {\n\tvar n Namer = T{}\n\tfmt.Println(n.Name())\n}",
       "lang": "go",
-      "notes": "报错是「cannot use T{} ... T does not implement Namer (missing method Name)」。方法明明写了，但 T 的方法集里没有指针接收者的方法。",
+      "notes": "报错是「cannot use T{} ... T does not implement Namer (method Name has pointer receiver)」。方法明明写了，但 T 的方法集里没有指针接收者的方法。",
       "expect_error": true
     },
     {

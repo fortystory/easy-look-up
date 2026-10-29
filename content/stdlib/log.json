@@ -1,0 +1,90 @@
+{
+  "id": "log",
+  "title": "日志 log 与 slog",
+  "entries": [
+    {
+      "title": "log.Println 与 log.Printf",
+      "description": "临时调试、命令行小工具里要打一行日志时，直接用包级函数，不必先建 Logger。",
+      "code": "log.Println(\"服务启动\", \"端口\", 8080)\nlog.Printf(\"用户 %s 登录失败: %v\", \"张三\", \"密码错误\")",
+      "lang": "go",
+      "notes": "标准 logger 默认写 stderr，不是 stdout；Printf 的格式串和参数对不上不会报错，只会打出 %!s(...) 之类的怪东西。"
+    },
+    {
+      "title": "log.SetFlags：时间戳与文件行号",
+      "description": "日志要能定位到是哪一行打的时候，把 Lshortfile 打开；线上服务一般还会保留日期和时间。",
+      "code": "log.SetFlags(log.LstdFlags | log.Lshortfile)\nlog.Println(\"带文件名和行号\")\nlog.SetFlags(0)\nlog.Println(\"只留消息\")",
+      "lang": "go",
+      "notes": "Lshortfile 显示的是调用 log.Println 的那一行，自己再封一层函数后看到的会是封装函数的位置；标志是全局的，SetFlags 影响所有用标准 logger 的代码。"
+    },
+    {
+      "title": "log.SetPrefix：统一日志前缀",
+      "description": "一整套日志想带统一标记（模块名、进程角色）时用 SetPrefix，比每条消息手写省事。",
+      "code": "log.SetPrefix(\"[order] \")\nlog.Println(\"创建订单\")\nlog.SetPrefix(\"\")\nlog.Println(\"前缀已清空\")",
+      "lang": "go",
+      "notes": "前缀末尾不会自动补空格，\"[order]\" 会和消息紧贴在一起；SetPrefix 同样是全局状态，别在并发流程里边跑边改。"
+    },
+    {
+      "title": "log.New：自定义前缀和输出",
+      "description": "需要单独控制前缀、标志和输出目标（比如审计日志单独一份）时，用 log.New 建独立的 Logger。",
+      "code": "logger := log.New(os.Stdout, \"[api] \", log.LstdFlags|log.Lmicroseconds)\nlogger.Println(\"请求完成\")\nlogger.Printf(\"状态码 %d，耗时 %v\", 200, \"12ms\")",
+      "lang": "go",
+      "notes": "log.New 只负责往 writer 写，不负责打开和关闭；传 *os.File 时关闭和刷盘要自己管。Logger 本身是并发安全的。"
+    },
+    {
+      "title": "log.Fatal 会直接退出进程",
+      "description": "启动阶段遇到无法恢复的错误（配置缺失、端口被占用）时，用 log.Fatal 打一条再退出。",
+      "code": "defer fmt.Println(\"defer 会执行\")\nlog.Fatal(\"配置缺失，直接退出\")",
+      "lang": "go",
+      "notes": "log.Fatal 等于 Print 加 os.Exit(1)，defer 不会执行；库代码里绝对不要用，测试里用会直接终止测试进程。"
+    },
+    {
+      "title": "slog.Info 与 slog.Error：结构化日志",
+      "description": "新项目直接用 slog 的“消息 + 键值对”写日志，采集系统能按字段检索，不用再拼字符串。",
+      "code": "package main\n\nimport \"log/slog\"\n\nfunc main() {\n\tslog.Info(\"用户登录\", \"user_id\", 42, \"ip\", \"10.0.0.7\")\n\tslog.Error(\"支付失败\", \"order_id\", \"A1024\", \"err\", \"余额不足\")\n}",
+      "lang": "go",
+      "notes": "键值对必须成对出现，落单的 key 会打出 !BADKEY；默认级别是 Info，slog.Debug 默认不输出。"
+    },
+    {
+      "title": "slog.NewJSONHandler：输出 JSON",
+      "description": "日志要交给 Loki、ES 这类系统采集时输出 JSON，每行一条，字段固定。",
+      "code": "package main\n\nimport (\n\t\"log/slog\"\n\t\"os\"\n)\n\nfunc main() {\n\tlogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))\n\tlogger.Info(\"订单创建\", \"order_id\", \"A1024\", \"amount\", 19.9)\n}",
+      "lang": "go",
+      "notes": "JSON 里 time、level、msg 是固定字段，业务字段直接跟在后面；默认 logger 写 stderr，这里显式写 stdout 只是为了演示。"
+    },
+    {
+      "title": "slog.With 与 slog.WithGroup",
+      "description": "同一个请求的多条日志要带相同的 request_id 时用 With 绑定；字段需要分层时用 WithGroup。",
+      "code": "package main\n\nimport (\n\t\"log/slog\"\n\t\"os\"\n)\n\nfunc main() {\n\tlogger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With(\"request_id\", \"req-7\")\n\tlogger.Info(\"开始处理\")\n\tlogger.WithGroup(\"db\").Info(\"查询完成\", \"rows\", 3)\n}",
+      "lang": "go",
+      "notes": "With 返回新的 Logger，原来的不受影响；WithGroup 只影响它之后加的字段，之前绑定的字段还在外层。"
+    },
+    {
+      "title": "slog.SetDefault 与 log 包的关系",
+      "description": "项目里混用了 log 和 slog，想把它们统一到同一个出口时，用 SetDefault 换掉全局 logger。",
+      "code": "package main\n\nimport (\n\t\"log\"\n\t\"log/slog\"\n\t\"os\"\n)\n\nfunc main() {\n\tslog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))\n\tlog.Println(\"这行也会变成 JSON\")\n}",
+      "lang": "go",
+      "notes": "SetDefault 会把 log 包的日期、行号标志清零，SetPrefix 的前缀还会拼进 msg；log 调用的级别由 SetLogLoggerLevel 控制，默认 Info。"
+    },
+    {
+      "title": "slog.LevelVar：运行时调级别",
+      "description": "线上想临时打开 Debug 日志又不想重启时，用 LevelVar 在运行时改级别。",
+      "code": "package main\n\nimport (\n\t\"log/slog\"\n\t\"os\"\n)\n\nfunc main() {\n\tlevel := new(slog.LevelVar)\n\tlogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))\n\tlogger.Debug(\"默认看不到\")\n\tlevel.Set(slog.LevelDebug)\n\tlogger.Debug(\"现在能看到了\")\n}",
+      "lang": "go",
+      "notes": "LevelVar 的读写是并发安全的，适合挂个管理接口动态改；HandlerOptions.Level 为 nil 时等价于 Info。"
+    },
+    {
+      "title": "log.SetOutput：把日志写进文件",
+      "description": "单机小工具要把日志落到文件时，用 SetOutput 重定向标准 logger 的输出。",
+      "code": "f, err := os.Create(\"app.log\")\nif err != nil {\n\tlog.Fatal(err)\n}\ndefer f.Close()\nlog.SetOutput(f)\nlog.Println(\"写入文件\")",
+      "lang": "go",
+      "notes": "SetOutput 改的是全局标准 logger，所有库的 log.Print 都会跟着变；测试或库代码里用完要还原成 os.Stderr。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把标准 log 的前缀与标志、独立 Logger、slog 的 JSON handler、With/Group、LevelVar 和 SetDefault 串起来。",
+      "code": "package main\n\nimport (\n\t\"log\"\n\t\"log/slog\"\n\t\"os\"\n)\n\nfunc main() {\n\t// 1. 标准 logger：统一前缀、加上文件行号\n\tlog.SetPrefix(\"[demo] \")\n\tlog.SetFlags(log.LstdFlags | log.Lshortfile)\n\tlog.Println(\"标准日志启动\")\n\n\t// 2. 独立 logger：自定义输出目标和时间精度\n\taudit := log.New(os.Stdout, \"[audit] \", log.Ltime|log.Lmicroseconds)\n\taudit.Println(\"审计日志：服务启动\")\n\n\t// 3. slog：JSON 输出 + 固定字段 + 分组\n\tlevel := new(slog.LevelVar)\n\thandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})\n\tlogger := slog.New(handler).With(\"service\", \"order\")\n\tlogger.Info(\"服务启动\", \"port\", 8080)\n\tlogger.WithGroup(\"db\").Info(\"连接成功\", \"rows\", 3)\n\n\t// 4. 运行时把级别降到 Debug\n\tlevel.Set(slog.LevelDebug)\n\tlogger.Debug(\"调试日志已打开\")\n\n\t// 5. 全局换成 slog 后，老 log 调用也会输出成 JSON\n\tslog.SetDefault(logger)\n\tlog.Println(\"这行由 slog 输出\")\n\n\tlogger.Error(\"演示错误日志\", \"err\", \"库存不足\")\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

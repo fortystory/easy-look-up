@@ -39,10 +39,10 @@
     },
     {
       "title": "c.Abort()：终止后续处理",
-      "description": "校验失败、不想让它走到后面的 handler 时，调 c.Abort() 把链掐断。后面的 handler 不再执行，客户端收到的是你在中间件里写的那份响应。",
+      "description": "校验失败、不想让它走到后面的 handler 时，调 c.Abort() 把链掐断。后面的 handler 不再执行，客户端收到的是你在中间件里写的那份响应；光写响应不 Abort，后面的 handler 会继续往同一个响应体里追加内容。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc guard(c *gin.Context) {\n\tc.String(403, \"禁止访问\")\n\tc.Abort() // 阻断后面的 handler\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(guard)\n\tr.GET(\"/secret\", func(c *gin.Context) {\n\t\tfmt.Println(\"不该执行到这里\")\n\t\tc.String(200, \"secret\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/secret\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
       "lang": "go",
-      "notes": "Abort 只把链的游标推到末尾，不会终止当前中间件函数：c.Abort() 之后的代码照样会跑，所以写完响应就 Abort 并 return，别再往里追加内容。"
+      "notes": "Abort 只把链的游标推到末尾，不会终止当前中间件函数：c.Abort() 之后的代码照样会跑，所以写完响应就 Abort 并 return，别再往里追加内容。gin 官方的 AbortWithStatus、AbortWithStatusJSON 是「写响应 + 中止」的组合函数，能省掉这两步。"
     },
     {
       "title": "中间件和 handler 之间传值：c.Set / c.Get",
@@ -80,18 +80,25 @@
       "notes": "认证失败要 Abort（gin 的 AbortWithStatusJSON 本身就带 Abort）并 return，否则后面的 handler 还会执行，401 的响应体会被追加成两段。"
     },
     {
+      "title": "gin.BasicAuth：HTTP Basic 认证",
+      "description": "内部工具、临时后台只想用一把用户名密码挡住访问时，直接挂 gin.BasicAuth，省掉手写解析 Authorization 头和 401 响应。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\t// 账号密码写死在代码里，只适合内部工具\n\tr.Use(gin.BasicAuth(gin.Accounts{\"admin\": \"123456\"}))\n\tr.GET(\"/admin\", func(c *gin.Context) {\n\t\tuser, _ := c.Get(gin.AuthUserKey)\n\t\tc.JSON(http.StatusOK, gin.H{\"user\": user})\n\t})\n\n\t// 没带凭据：401 + WWW-Authenticate\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/admin\", nil))\n\tfmt.Println(w.Code, w.Header().Get(\"WWW-Authenticate\"))\n\n\t// 带上正确凭据\n\treq := httptest.NewRequest(http.MethodGet, \"/admin\", nil)\n\treq.SetBasicAuth(\"admin\", \"123456\")\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req)\n\tfmt.Println(w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "Basic 认证只是 base64 编码，不是加密，必须配 HTTPS；账号密码硬编码在代码里，别用在对外产品上。认证通过后用户名存在 gin.AuthUserKey 里，用 c.Get(gin.AuthUserKey) 取。传空的 gin.Accounts 会 panic（Empty list of authorized credentials）。"
+    },
+    {
+      "title": "c.Copy()：goroutine 里用 Context 前必须复制",
+      "description": "handler 里要起 goroutine，且 goroutine 还要读参数、请求信息或 c.Keys 时，先把 Context 复制一份再传进去；原 Context 在请求结束后会被复用。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tdone := make(chan string, 1)\n\n\tr.GET(\"/async/:id\", func(c *gin.Context) {\n\t\tcc := c.Copy() // 交给 goroutine 前先复制\n\t\tgo func() {\n\t\t\ttime.Sleep(10 * time.Millisecond)\n\t\t\tdone <- cc.Param(\"id\") // 复制出来的 Params 仍然可用\n\t\t}()\n\t\tc.String(200, \"accepted\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/async/42\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n\tfmt.Println(\"goroutine 拿到:\", <-done)\n}",
+      "lang": "go",
+      "notes": "gin 的 Context 来自对象池，handler 返回后再读原 c，会和下一个请求共用同一块内存，-race 下能抓到数据竞争。Copy 出来的 Context 没有可用的 ResponseWriter，不能拿它写响应，结果用 channel 送回。Copy 之后再 c.Set 的键不会出现在副本里。"
+    },
+    {
       "title": "多个中间件的执行顺序",
       "description": "r.Use 可以一次传多个中间件，也可以分多次调用。进入请求时按注册顺序正序执行，退出时按相反顺序收尾——这就是洋葱模型。",
       "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc first(c *gin.Context) {\n\tfmt.Println(\"1 进入\")\n\tc.Next()\n\tfmt.Println(\"4 退出\")\n}\n\nfunc second(c *gin.Context) {\n\tfmt.Println(\"2 进入\")\n\tc.Next()\n\tfmt.Println(\"3 退出\")\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(first, second) // 分两次 r.Use(first); r.Use(second) 也一样\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tfmt.Println(\"handler\")\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
       "lang": "go",
       "notes": "顺序只跟注册顺序有关；组中间件排在它从父级继承来的中间件之后，因为 r.Group 会把当时的中间件链复制一份给新组。"
-    },
-    {
-      "title": "中间件里写响应后要 Abort",
-      "description": "中间件自己把响应写出去时，必须紧跟一句 c.Abort()。不 Abort 的话后面的 handler 照样会执行，响应体被追加成两段，状态码还停在中间件写的那个。",
-      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 错误写法：写了响应但没 Abort\n\tbad := gin.New()\n\tbad.Use(func(c *gin.Context) {\n\t\tc.String(401, \"未认证\")\n\t})\n\tbad.GET(\"/\", func(c *gin.Context) {\n\t\tc.String(200, \"secret\")\n\t})\n\tw1 := httptest.NewRecorder()\n\tbad.ServeHTTP(w1, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Printf(\"没 Abort: %d %q\\n\", w1.Code, w1.Body.String())\n\n\t// 正确写法：写完响应立刻 Abort\n\tgood := gin.New()\n\tgood.Use(func(c *gin.Context) {\n\t\tc.String(401, \"未认证\")\n\t\tc.Abort()\n\t})\n\tgood.GET(\"/\", func(c *gin.Context) {\n\t\tc.String(200, \"secret\")\n\t})\n\tw2 := httptest.NewRecorder()\n\tgood.ServeHTTP(w2, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Printf(\"有 Abort: %d %q\\n\", w2.Code, w2.Body.String())\n}",
-      "lang": "go",
-      "notes": "gin 官方提供了 AbortWithStatus、AbortWithStatusJSON 这类「写响应 + 中止」的组合函数，比手写 c.String 再 c.Abort() 更省事。"
     },
     {
       "title": "组合示例：把这一组用起来",

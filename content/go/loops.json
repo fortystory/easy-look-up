@@ -42,7 +42,7 @@
       "description": "遍历 map 时拿到键和值。只想用键写 for k := range m，只要值就写 _, v。",
       "code": "m := map[string]int{\"a\": 1, \"b\": 2}\nfor k, v := range m {\n\tfmt.Println(k, v)\n}",
       "lang": "go",
-      "notes": "遍历顺序是随机的，每次运行都可能不同，不要依赖它。遍历过程中往 map 里加新键，结果也不确定。"
+      "notes": "只要键写 for k := range m，只要值写 for _, v := range m。遍历过程中新增的键可能被遍历到，也可能被跳过。"
     },
     {
       "title": "range 遍历字符串",
@@ -56,7 +56,7 @@
       "description": "range 能直接遍历 channel，从里面取值直到 channel 被关闭。写管道读取循环时用它最省事。",
       "code": "ch := make(chan int, 3)\nch <- 1\nch <- 2\nclose(ch)\nfor v := range ch {\n\tfmt.Println(v)\n}",
       "lang": "go",
-      "notes": "channel 没 close 时这个循环不会结束。要拿到关闭状态写 for v, ok := range ch，close 之后 ok 是 false。"
+      "notes": "channel 没 close 时这个循环不会结束。想同时拿到关闭状态就写 v, ok := <-ch；close 之后 ok 是 false，循环要自己 break。"
     },
     {
       "title": "range 遍历整数（Go 1.22+）",

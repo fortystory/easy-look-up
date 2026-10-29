@@ -4,6 +4,7 @@
   "entries": [
     {
       "title": "Go 为什么没有继承，而是用嵌入（组合）代替？",
+      "description": "考的是 Go 的组合式设计：没有继承时，怎么复用代码、怎么表达多态。",
       "answer": [
         "Go 没有类和继承：结构体之间不存在 is-a 关系，子类型也不能覆写父类型的方法，所有类型都是平级的",
         "复用别人能力的方式是结构体嵌入——把别的类型写进自己的字段里，被嵌入类型的字段和方法会被提升（promote）到外层类型",
@@ -14,10 +15,11 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\ntype Logger struct{ prefix string }\n\nfunc (l Logger) Log(msg string) string { return l.prefix + msg }\n\ntype Service struct {\n\tLogger // 嵌入：Log 方法被提升到 Service\n}\n\nfunc (s Service) Log(msg string) string { return \"service:\" + msg } // 遮蔽提升上来的 Log\n\nfunc main() {\n\tsvc := Service{Logger: Logger{prefix: \"db \"}}\n\tfmt.Println(svc.Log(\"hi\"))\n\tfmt.Println(svc.Logger.Log(\"hi\"))\n}",
       "lang": "go",
-      "notes": "常见追问：嵌入和具名组合（named field）有什么区别？——嵌入是匿名字段，字段名就是类型名，方法自动提升；具名组合要写 s.inner.Log()。常见追问：被提升的方法满足接口时，谁算实现了接口？——按方法集规则，外层类型的方法集包含被嵌入类型里值接收者的方法，指针接收者的方法只进 *Outer 的方法集。"
+      "notes": "常见追问：嵌入和具名组合（named field）有什么区别？——嵌入是匿名字段，字段名就是类型名，方法自动提升；具名组合要写 s.inner.Log()。常见追问：被提升的方法满足接口时，谁算实现了接口？——按方法集规则，外层类型的方法集包含被嵌入类型里值接收者的方法，指针接收者的方法只进 *Outer 的方法集。常见错误回答：嵌入就是继承——嵌入只是字段提升，没有虚函数和子类覆盖。"
     },
     {
       "title": "Go 的接口隐式实现有什么好处？",
+      "description": "隐式实现带来的解耦效果，是 Go 接口设计最核心的卖点。",
       "answer": [
         "隐式实现指：只要一个类型的方法集覆盖了接口要求的全部方法，它就自动满足这个接口，不用写 implements 关键字，赋值时由编译器检查",
         "好处一是解耦依赖：定义接口的文件不需要 import 实现方，实现方也不需要 import 定义方，编译期的包依赖被切断了",
@@ -28,10 +30,11 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\n// Speaker 只描述「会说话」这一件事\ntype Speaker interface {\n\tSpeak() string\n}\n\n// Dog 没有 implements，方法集满足 Speaker 就自动实现\ntype Dog struct{}\n\nfunc (Dog) Speak() string { return \"汪汪\" }\n\nfunc main() {\n\tvar s Speaker = Dog{}\n\tfmt.Println(s.Speak())\n}",
       "lang": "go",
-      "notes": "常见追问：隐式实现的代价是什么？——接口值比具体类型多一层间接，断言失败会 panic，而且编译器只在赋值那一刻检查一次。常见追问：少写一个方法会怎样？——编译期报 missing method，不是运行时才发现。"
+      "notes": "常见追问：隐式实现的代价是什么？——接口值比具体类型多一层间接，断言失败会 panic，而且编译器只在赋值那一刻检查一次。常见追问：少写一个方法会怎样？——编译期报 missing method，不是运行时才发现。常见错误回答：实现接口要显式声明——Go 不需要 implements，方法集对得上就自动满足。"
     },
     {
       "title": "为什么说「接口应该定义在使用方」？",
+      "description": "依赖倒置在 Go 里的落地方式，常结合「怎么让代码好测」一起追问。",
       "answer": [
         "这句话的意思是：接口属于调用它的那个包，由需求方定义；实现方只负责让类型满足这个接口，不声明实现关系",
         "理由一是接口是需求方的最小契约：定义在使用方，才能保证接口只包含真正要用的方法，而不是实现方顺手暴露的一堆能力",
@@ -42,22 +45,24 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\n// 接口定义在使用方（main 这一侧）\ntype UserStore interface {\n\tGet(id int) string\n}\n\n// 提供方只管实现方法，不声明实现关系\ntype memoryStore struct{ users map[int]string }\n\nfunc (m memoryStore) Get(id int) string { return m.users[id] }\n\nfunc main() {\n\tvar store UserStore = memoryStore{users: map[int]string{1: \"tom\"}}\n\tfmt.Println(store.Get(1))\n}",
       "lang": "go",
-      "notes": "常见追问：是不是每个包都要定义一堆接口？——不是，接口按需定义，只在确实需要替换实现或者需要解耦依赖时才抽；常见的坏味道是「为了以后可能要换实现」提前定义一堆单方法接口。常见追问：接口该放在哪个文件？——放在使用它的包里的公共文件里，让所有使用方都能看到。"
+      "notes": "常见追问：是不是每个包都要定义一堆接口？——不是，接口按需定义，只在确实需要替换实现或者需要解耦依赖时才抽；常见的坏味道是「为了以后可能要换实现」提前定义一堆单方法接口。常见追问：接口该放在哪个文件？——放在使用它的包里的公共文件里，让所有使用方都能看到。常见错误回答：接口应该由实现方定义——那会把实现细节带进调用方，接口应该跟着使用方走。"
     },
     {
       "title": "Go 为什么不支持异常，而是用 error 返回值？",
+      "description": "错误处理的设计取舍，考的是显式返回、panic 和异常边界。",
       "answer": [
         "Go 没有 exception 机制，出错时函数把 error 作为普通返回值传出去，调用方必须显式处理",
         "好处一是错误路径在代码里看得见：函数签名上写着 error，每个调用点都摆着 if err != nil，不会漏掉",
         "好处二是没有隐藏的控制流：抛异常会跳过中间栈帧上的代码（收尾逻辑、释放资源容易漏掉），错误返回不会，谁调用谁负责",
-        "好处三是并发下可预测：panic 跨 goroutine 边界传播，某个 goroutine 里没人 recover 就会让整个进程退出，错误返回则老老实实回到调用方",
-        "设计取舍是「显式胜过一隐式」：把「这个函数可能失败」写进类型里，靠多写几行 if 换来可读性和可推理性",
+        "好处三是并发下可预测：panic 不会跨 goroutine 边界传播，某个 goroutine 里没人 recover 时，panic 只展开自己的栈，随后整个进程退出",
+        "设计取舍是「显式胜过隐式」：把「这个函数可能失败」写进类型里，靠多写几行 if 换来可读性和可推理性",
         "唯一的例外是 panic/recover，用于程序逻辑已经不成立的编程错误（数组越界、空指针解引用）和初始化阶段的致命配置错误"
       ],
-      "notes": "常见追问：那 panic/recover 到底算不算异常？——算半个：它能展开栈并被 defer 里的 recover 拦住，但只对当前 goroutine 有效，而且不该拿来当业务流程。常见追问：为什么不像 Rust 用 Result 泛型？——Go 选择把 error 放在返回值列表的最后一位，代码更短、可读性更强。"
+      "notes": "常见追问：那 panic/recover 到底算不算异常？——算半个：它能展开栈并被 defer 里的 recover 拦住，但只对当前 goroutine 有效，而且不该拿来当业务流程。常见追问：为什么不像 Rust 用 Result 泛型？——Go 选择把 error 放在返回值列表的最后一位，代码更短、可读性更强。常见错误回答：panic 可以跨 goroutine 传播——不会，未 recover 的 panic 只会展开自己的栈，然后整个进程退出。"
     },
     {
       "title": "哨兵错误和用 %w 包装出来的错误有什么区别？",
+      "description": "错误链的两种组织方式，以及 errors.Is / errors.As 该怎么配合。",
       "answer": [
         "哨兵错误是包级导出的变量：var ErrNotFound = errors.New(\"not found\")，代表「某一类失败」，调用方直接拿它比较",
         "错误包装是 fmt.Errorf(\"查询用户 %d 失败: %w\", id, ErrNotFound)：在错误文本里补上上下文，同时用 %w 把原错误挂进错误链",
@@ -68,10 +73,11 @@
       ],
       "code": "var ErrNotFound = errors.New(\"not found\")\n\nerr := fmt.Errorf(\"查询用户 %d 失败: %w\", 42, ErrNotFound)\nfmt.Println(errors.Is(err, ErrNotFound))\nfmt.Println(err)",
       "lang": "go",
-      "notes": "常见追问：%w 和 %v 的差别到底在哪？——%w 会把被包装的 error 接到 Unwrap 链上，errors.Is/As 能穿透；%v 只做文本格式化。常见追问：什么时候该定义哨兵值？——调用方需要区分「哪一类失败」并走不同分支时，比如「文件不存在」可以退化成默认值，「权限不足」必须报错。"
+      "notes": "常见追问：%w 和 %v 的差别到底在哪？——%w 会把被包装的 error 接到 Unwrap 链上，errors.Is/As 能穿透；%v 只做文本格式化。常见追问：什么时候该定义哨兵值？——调用方需要区分「哪一类失败」并走不同分支时，比如「文件不存在」可以退化成默认值，「权限不足」必须报错。常见错误回答：用了 %w 包装之后还能用 == 判断——包装后要用 errors.Is 比较。"
     },
     {
       "title": "什么场景下该定义自定义错误类型？",
+      "description": "什么时候需要结构化错误，而不是用 fmt.Errorf 拼一个字符串。",
       "answer": [
         "当错误需要携带结构化信息、而且调用方要按字段做判断时，就定义自己的类型，给它加一个 Error() string 方法就自动满足 error 接口",
         "典型场景：错误码、出错的字段名、HTTP 状态码、底层原始错误——这些用字符串表达只能靠解析文本，很脆弱",
@@ -82,10 +88,11 @@
       ],
       "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\ntype ValidationError struct {\n\tField string\n\tCode  int\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"字段 %s 校验失败，错误码 %d\", e.Field, e.Code)\n}\n\nfunc main() {\n\tvar err error = &ValidationError{Field: \"age\", Code: 400}\n\tvar ve *ValidationError\n\tif errors.As(err, &ve) {\n\t\tfmt.Println(ve.Field, ve.Code)\n\t}\n}",
       "lang": "go",
-      "notes": "常见追问：接收者该用值还是指针？——用指针接收者（*ValidationError），这样 errors.As(&target) 取到的就是同一个指针；用值接收者时 T 和 *T 都实现了 error，混用容易取不到目标类型。常见追问：Error() 方法应该写什么？——只写给人看的可读文本，机器要用的信息放字段里。"
+      "notes": "常见追问：接收者该用值还是指针？——用指针接收者（*ValidationError），这样 errors.As(&target) 取到的就是同一个指针；用值接收者时 T 和 *T 都实现了 error，混用容易取不到目标类型。常见追问：Error() 方法应该写什么？——只写给人看的可读文本，机器要用的信息放字段里。常见错误回答：自定义错误类型必须实现 Unwrap——只有需要接进错误链时才需要。"
     },
     {
       "title": "什么时候该返回 error，什么时候该 panic？",
+      "description": "可预期失败和编程错误的边界，是代码评审里最常争论的点。",
       "answer": [
         "判断标准只有一条：调用方能不能恢复？能不能对它做出有意义的处理？能恢复就返回 error",
         "该返回 error 的是预期内的失败：文件不存在、网络超时、参数不合法——调用方可能换个参数重试、走降级或者换一套兜底逻辑",
@@ -94,10 +101,11 @@
         "库代码不要用 panic 做流程控制，也不要在「返回 error」的路径上顺手 panic 业务错误——调用方按惯例只检查返回值，会漏掉",
         "决定 panic 就要写明理由；恢复只能靠 defer 里的 recover，而且 panic/recover 只能处理当前 goroutine 内的 panic"
       ],
-      "notes": "常见追问：recover 能把 panic 变回 error 吗？——可以，defer 里 recover() 后把 panic 的值包成 error 返回，但这是把不可恢复错误硬降级，通常不如让它崩掉。常见追问：HTTP 服务里 panic 了会怎样？——net/http 的 Server 会在每个连接的处理 goroutine 上 recover 并打日志，进程不会挂。"
+      "notes": "常见追问：recover 能把 panic 变回 error 吗？——可以，defer 里 recover() 后把 panic 的值包成 error 返回，但这是把不可恢复错误硬降级，通常不如让它崩掉。常见追问：HTTP 服务里 panic 了会怎样？——net/http 的 Server 会在每个连接的处理 goroutine 上 recover 并打日志，进程不会挂。常见错误回答：库函数遇到任何问题都应该 panic——库应该返回 error，把怎么处理交给调用方。"
     },
     {
       "title": "值接收者和指针接收者有什么区别？方法集规则是什么？",
+      "description": "方法集规则决定类型能不能满足接口，是高频细节题。",
       "answer": [
         "值接收者的方法在接收者的副本上执行，调用时 Go 会自动取地址或解引用，所以值和指针都能调用它",
         "指针接收者的方法能改到原对象，而且调用时不会复制整个结构体，结构体大的时候省一次拷贝",
@@ -108,22 +116,24 @@
       ],
       "code": "package main\n\nimport \"fmt\"\n\ntype Counter struct{ n int }\n\nfunc (c Counter) Get() int { return c.n }\n\nfunc (c *Counter) Add() { c.n++ }\n\ntype Getter interface {\n\tGet() int\n}\n\nfunc main() {\n\tc := &Counter{}\n\tc.Add()\n\tvar g Getter = c // 只有 *Counter 满足 Getter\n\tfmt.Println(g.Get())\n}",
       "lang": "go",
-      "notes": "常见追问：为什么混用接收者风格很危险？——一个类型上既有值接收者又有指针接收者时，只有指针能拿到全部方法，接口满足关系会变得难以推断。常见追问：结构体里有 mutex 能用值接收者吗？——不能，复制 mutex 会让锁失效，go vet 会报 copylocks。"
+      "notes": "常见追问：为什么混用接收者风格很危险？——一个类型上既有值接收者又有指针接收者时，只有指针能拿到全部方法，接口满足关系会变得难以推断。常见追问：结构体里有 mutex 能用值接收者吗？——不能，复制 mutex 会让锁失效，go vet 会报 copylocks。常见错误回答：指针接收者的方法，值类型也拥有——值类型的方法集只包含值接收者方法。"
     },
     {
       "title": "什么时候该用指针接收者？",
+      "description": "接收者选型的经验法则，常和接口实现、可比较性一起问。",
       "answer": [
         "方法要修改接收者的状态时必须用指针接收者——值接收者拿到的是副本，改了不影响原对象",
         "结构体比较大时用指针接收者，避免每次调用都复制整个结构体（含 slice、map、大数组的字段尤其明显）",
         "结构体里有 sync.Mutex、sync.Once 这类不可复制的字段时必须用指针接收者，否则复制会破坏锁语义",
         "类型语义上是一个「实体」（文件、连接、客户端、句柄）时用指针接收者，nil 还能表示「没有这个实体」，调用方可以先判 nil",
-        "小结构体、纯值语义（数学值、坐标、时间片段、配置快照）用值接收者，顺带让类型保持可比较、能直接当 map 的 key",
+        "小结构体、纯值语义（数学值、坐标、配置快照）用值接收者，调用处不用处理 nil，语义也更简单",
         "经验法则：字段超过两三个、需要改状态、含锁或不可复制字段，就用指针接收者；其余看语义，别机械地一律用指针"
       ],
-      "notes": "常见追问：nil 指针能当接收者吗？——可以，指针接收者的方法里可以判 receiver == nil 并优雅返回，这是「没有这个实体」的常见表达。常见追问：接口实现方该选哪个？——看接口契约：只读就用值接收者（实现方和调用方都轻松），要改状态就用指针。"
+      "notes": "常见追问：nil 指针能当接收者吗？——可以，指针接收者的方法里可以判 receiver == nil 并优雅返回，这是「没有这个实体」的常见表达。常见追问：接口实现方该选哪个？——看接口契约：只读就用值接收者（实现方和调用方都轻松），要改状态就用指针。常见错误回答：值接收者能让类型保持可比较——可比较性由字段决定，和接收者形式无关。"
     },
     {
       "title": "Go 的命名规范有哪些约定？",
+      "description": "Go 的命名与可见性约定，考的是工程习惯。",
       "answer": [
         "包名：小写、单数、不用下划线和连字符（bytes、http、json）；别带 stutter 前缀，不要写 http.HttpServer 这种重复",
         "可见性靠大小写区分：导出标识符大写开头（UserID、ErrNotFound），包内私有的用小写开头（userID），Go 没有 private 关键字",
@@ -132,10 +142,11 @@
         "分词用 mixedCaps 不用下划线：maxSize、readFile，不写 max_size、read_file",
         "接收者名统一用类型名首字母的小写缩写（p *Parser、c *Client），同一个类型所有方法保持一致；变量名短但作用域外要长（i、err 是惯例）"
       ],
-      "notes": "常见追问：常量要不要全大写？——不要，Go 风格是 mixedCaps（MaxSize、DefaultTimeout），全大写留给真正的编译期常量。常见追问：Golang 的 lint 工具管这些吗？——golint 已被 revive/staticcheck 取代，stylecheck 的 ST1003 会查命名。"
+      "notes": "常见追问：常量要不要全大写？——不要，Go 风格是 mixedCaps（MaxSize、DefaultTimeout），全大写留给真正的编译期常量。常见追问：Golang 的 lint 工具管这些吗？——golint 已被 revive/staticcheck 取代，stylecheck 的 ST1003 会查命名。常见错误回答：Go 用 private/public 关键字控制可见性——Go 只看首字母大小写。"
     },
     {
       "title": "错误信息应该以小写开头还是大写开头？",
+      "description": "错误信息风格的细节题，写库和做 code review 时都会碰到。",
       "answer": [
         "约定：错误信息用小写开头，结尾不加标点",
         "原因是错误信息经常被嵌进更大的句子或日志行里，小写开头拼进去才读得通（\"查询用户失败: %w\"），大写开头会像一句突然插进来的独立句子",
@@ -144,10 +155,11 @@
         "例外是缩写或专有名词本身大写的情况，比如 \"HTTP 请求失败\"；还有给人看的独立提示语不在这个约定范围内",
         "这条是 Go 社区的官方风格，golangci-lint 的 stylecheck（ST1005）会直接报出来"
       ],
-      "notes": "常见追问：这条约定有官方依据吗？——Go Code Review Comments 明确写了错误信息用小写、不带标点。常见追问：错误信息里要不要带上函数名或包名？——一般不要，调用栈和日志上下文已经带了，包名只会让文本变长。"
+      "notes": "常见追问：这条约定有官方依据吗？——Go Code Review Comments 明确写了错误信息用小写、不带标点。常见追问：错误信息里要不要带上函数名或包名？——一般不要，调用栈和日志上下文已经带了，包名只会让文本变长。常见错误回答：错误信息应该大写开头、句末加标点——Go 惯例是小写开头、不加标点，方便被包装。"
     },
     {
       "title": "Go 的「零值可用」原则是什么？有什么好处？",
+      "description": "零值可用的设计原则，常拿 sync.Mutex、bytes.Buffer 举例。",
       "answer": [
         "Go 的零值是「不初始化也能用」：数值类型是 0，string 是 \"\"，bool 是 false，指针、切片、map、chan、func、interface 都是 nil",
         "设计哲学是让每个类型天然有一个合理的初始状态，不必先调用构造函数才能安全使用，少一套「必须初始化」的纪律",
@@ -158,13 +170,14 @@
       ],
       "code": "type Counter struct {\n\tn int\n}\n\nvar c Counter // 零值就是可用的初始状态\nc.n++\nfmt.Println(c.n)",
       "lang": "go",
-      "notes": "常见追问：零值可用是编译器强制的吗？——不是强制约定，是设计惯例；sync.Mutex、bytes.Buffer 的零值可用是文档明确承诺的保证。常见追问：哪些类型的零值不能直接用？——nil map 不能写（会 panic）、nil 指针解引用会 panic、nil channel 会永久阻塞。"
+      "notes": "常见追问：零值可用是编译器强制的吗？——不是强制约定，是设计惯例；sync.Mutex、bytes.Buffer 的零值可用是文档明确承诺的保证。常见追问：哪些类型的零值不能直接用？——nil map 不能写（会 panic）、nil 指针解引用会 panic、nil channel 会永久阻塞。常见错误回答：所有类型的零值都能直接拿来用——map、chan、func 的零值是 nil，写入或调用会 panic。"
     },
     {
       "title": "泛型解决了什么问题？什么时候用泛型，什么时候用接口？",
+      "description": "泛型的适用边界，重点考它和接口的取舍、以及运行时怎么实现。",
       "answer": [
         "泛型（Go 1.18 起）解决的是「同一份算法要用在多个类型上，同时保住类型信息」的问题",
-        "和接口的区别在运行时：接口把具体类型擦掉装进 any，取出来要靠类型断言，还要装箱分配；泛型在编译期按具体类型展开，没有额外开销而且类型安全",
+        "和接口的区别在运行时：接口把具体类型擦掉装进 any，取出来要靠类型断言；泛型在编译期做类型检查，运行时按 GC shape 加字典复用代码，不是为每个类型展开一份",
         "该用泛型的是容器和算法类库：栈、队列、集合、set 的 map 实现、Result/Must 这类组合子，形状一样只是元素类型不同",
         "该用接口的是行为差异大的场景：每个实现的方法集都不一样，需要运行时多态，或者这个接口目前只有一个实现",
         "一句话经验法则：同一形状不同类型用泛型，不同形状不同行为用接口",
@@ -172,22 +185,23 @@
       ],
       "code": "func Map[T, U any](s []T, f func(T) U) []U {\n\tout := make([]U, 0, len(s))\n\tfor _, v := range s {\n\t\tout = append(out, f(v))\n\t}\n\treturn out\n}\n\nvar names = Map([]int{1, 2}, func(i int) string { return fmt.Sprint(i) })",
       "lang": "go",
-      "notes": "常见追问：泛型有没有运行时开销？——没有，编译器按具体类型生成代码，用 GC shape 分组做字典化，没有反射和装箱。常见追问：什么时候不该上泛型？——只有一个实现、行为还要分叉的时候，先用接口；泛型适合收敛重复，不是用来做多态的。"
+      "notes": "常见追问：泛型有没有运行时开销？——几乎可以忽略：编译器按 GC shape 分组生成代码，具体类型信息通过字典传入，避免反射和装箱，但不是每个类型完全单态化。常见追问：什么时候不该上泛型？——只有一个实现、行为还要分叉的时候，先用接口；泛型适合收敛重复，不是用来做多态的。常见错误回答：泛型是编译期完全单态化、零开销——Go 按 GC shape 生成代码并用字典传类型信息，不是每个类型展开一份。"
     },
     {
       "title": "Go 缺少哪些语言特性？分别要怎么绕过？",
+      "description": "考对 Go 设计取舍的理解，以及每种缺失怎么用现有机制绕过。",
       "answer": [
         "没有继承：用结构体嵌入加接口组合代替，需要多态就定义小接口，不要硬造继承树",
         "没有异常：函数返回 error，用 errors.Is 判断类别、errors.As 取具体类型，实在无法继续才 panic 加 recover",
         "没有运算符重载：只能写普通方法（Add、Equal、Less），或者像 fmt.Stringer、sort.Interface 那样用接口约定来替代",
-        "没有宏、没有包级可见性控制、也没有泛型之前的通用容器：靠小接口、代码生成工具、any 加类型断言这些手段补",
+        "没有宏、泛型之前也没有通用容器；包级可见性用首字母大小写控制，没有 public/private 关键字",
         "根本取舍是 Go 主动砍掉这些特性，换来可读性、编译速度和简单的类型系统——所以绕过方式通常也是「加一个小接口」或「加一个方法」",
         "遇到限制时先想想能不能换个设计：组合比继承更容易表达差异，接口比泛型更适合行为分叉，方法比运算符更容易读"
       ],
       "code": "type Point struct{ X, Y int }\n\n// Go 不支持运算符重载，只能写普通方法\nfunc (p Point) +(q Point) Point {\n\treturn Point{p.X + q.X, p.Y + q.Y}\n}",
       "lang": "go",
-      "expect_error": true,
-      "notes": "常见追问：真的不能重载运算符吗？——不能，编译器报 syntax error: unexpected +, expected name；Go 认为 + - 这类写法应该由语言本身定义语义，滥用会让代码难读。常见追问：Go 为什么故意不加这些特性？——为了让代码可预测、编译快、并发行为简单，宁可牺牲表达力。"
+      "notes": "常见追问：真的不能重载运算符吗？——不能，编译报错：syntax error: unexpected +, expected name；Go 认为 + - 这类写法应该由语言本身定义语义，滥用会让代码难读。常见追问：Go 为什么故意不加这些特性？——为了让代码可预测、编译快、并发行为简单，宁可牺牲表达力。常见错误回答：Go 没有包级可见性控制——首字母大小写就是可见性控制。",
+      "expect_error": true
     }
   ]
 }

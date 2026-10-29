@@ -69,14 +69,14 @@
     },
     {
       "title": "静态资源怎么配 HTTP 缓存？为什么说「内容哈希 + 长缓存」？",
-      "description": "这题考的是发布策略：缓存配不好，用户要么拿到旧版本要么每次都全量下载。",
+      "description": "只讲发布时怎么选缓存动作：哪些资源长缓存、哪些必须回源校验。",
       "answer": [
-        "内容哈希：文件名里带构建 hash，比如 main.a1b2c3.js；内容变了文件名就变，所以可以放心配一年长缓存，旧文件永远不会被误用",
-        "配置用 Cache-Control: public, max-age=31536000, immutable；immutable 表示用户按刷新也不重新校验",
-        "HTML 入口不能长缓存：用 Cache-Control: no-cache 配 ETag 或 Last-Modified，no-cache 的意思是「可以存但每次都要回源校验」而不是「不缓存」",
-        "回源校验走条件请求：客户端带 If-None-Match（ETag）或 If-Modified-Since，命中时服务端只回 304 和头，不传 body，省掉整个文件",
-        "发布用「原子替换」：HTML 指向新 hash 的资源，旧资源在源站和 CDN 上保留一段时间，避免正在打开旧页面的用户请求到已删除的文件",
-        "缓存是分层的：浏览器缓存、Service Worker Cache、CDN 边缘缓存、源站各存一份，要一起设计，不能只调其中一层"
+        "静态资源（JS/CSS/图片）用「内容哈希 + 长缓存」：文件名带构建 hash，配 Cache-Control: public, max-age=31536000, immutable；内容变了文件名就变，不怕缓存旧版本",
+        "HTML 入口单独配 no-cache 加 ETag/Last-Modified：每次回源校验，保证用户能拿到指向新 hash 资源的新页面",
+        "选择依据看三点：资源是否带内容哈希、是否入口 HTML、是否个性化；带 hash 的配长缓存，入口和接口配 no-cache，敏感数据配 no-store",
+        "发布用原子替换：新 HTML 指向新 hash 资源，旧资源在源站和 CDN 保留一段时间，避免打开旧页面的用户请求到已删除文件",
+        "分层配：CDN 用 s-maxage 控制缓存时长，浏览器用 max-age；HTML 短缓存、静态资源长缓存，两层别配成同一套",
+        "改缓存策略的优先级：先给静态资源加内容哈希，再处理 HTML 入口，最后才调 CDN 和浏览器参数；反过来做会先制造版本错配"
       ],
       "notes": "常见追问：no-cache 和 no-store 有什么区别？——no-cache 允许存但必须回源校验，no-store 是完全不落盘。常见追问：ETag 还是 Last-Modified？——ETag 更精确，Last-Modified 依赖秒级时间戳，改动频繁时容易误判。常见追问：Service Worker 缓存怎么和 HTTP 缓存配合？——SW 自己有一套版本化缓存策略，要明确以谁为准，否则会出现「SW 里是旧的、HTTP 缓存里是新的」这种诡异现象。常见错误回答：「给所有资源配同一套长缓存」——HTML 和静态资源必须分开配，否则用户会一直拿到旧页面。"
     },
@@ -113,7 +113,7 @@
         "preload 告诉浏览器「这个资源马上要用」，提高它的优先级；适合首屏关键 CSS、JS、字体和 LCP 图片，但同时预载太多会互相抢带宽，反而把 LCP 推后",
         "prefetch 是低优先级预取「用户接下来可能要用的」资源，比如下一个路由的 chunk；不抢占当前页面的带宽",
         "preconnect 提前完成 DNS/TCP/TLS 握手，给跨域第三方脚本用，能省掉几百毫秒的首包等待",
-        "prerender 在后台把整个页面渲染好，用户点进来几乎瞬开；Chrome 支持 link rel=\"prerender\"（同源），页面里用 document.prerendering 判断是否处于预渲染态并及时激活",
+        "prerender 在后台把整个页面渲染好，用户点进来几乎瞬开；Chrome 63 起移除了 link rel=prerender，改用 Speculation Rules，页面里用 document.prerendering 判断是否处于预渲染态",
         "prerender 成本高：占内存、占带宽，还可能触发埋点或广告脚本的副作用，所以只用在用户大概率会访问的链接上，比如邮件里点开的落地页",
         "Speculation Rules API 是更新的写法，用一段规则描述「哪些链接做预渲染、哪些做预取」，由浏览器自行判断和执行"
       ],

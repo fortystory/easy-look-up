@@ -42,14 +42,14 @@
       "description": "用 for range 遍历 map，k 是键、v 是值；只想要键就写 for k := range m。需要稳定顺序就把键先收集到切片里排序。",
       "code": "m := map[string]int{\"a\": 1, \"b\": 2, \"c\": 3}\nfor k, v := range m {\n\tfmt.Println(k, v)\n}",
       "lang": "go",
-      "notes": "Go 故意随机化 map 的遍历顺序，同一个 map 遍历两次顺序可能不同。遍历中 delete 某个键是安全的，但这个键本次遍历里可能还会被访问到。"
+      "notes": "Go 故意随机化 map 的遍历顺序，同一个 map 遍历两次顺序可能不同。遍历中 delete 是安全的：删掉还没遍历到的键，该键就不会再产出；新增的键是否被遍历到不确定。"
     },
     {
       "title": "键必须是 comparable 类型",
       "description": "map 的键必须能用 == 比较，也就是 comparable 类型。切片、map、函数都不能当键。",
       "code": "m := map[[]int]string{}\nfmt.Println(m)",
       "lang": "go",
-      "notes": "合法键类型：数值、字符串、布尔、指针、通道、接口，以及字段都可比较的 struct 和数组。",
+      "notes": "编译报错：invalid map key type []int。合法键类型：数值、字符串、布尔、指针、通道、接口，以及字段都可比较的 struct 和数组。",
       "expect_error": true
     },
     {

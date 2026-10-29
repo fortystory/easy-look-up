@@ -17,11 +17,11 @@
       "notes": "else 和 else if 可以省略，但只写 if 时后面的大括号不能省。"
     },
     {
-      "title": "else if 链：条件的顺序",
-      "description": "用 if 链时把更严格的条件写在前面。分支是「从上往下第一个命中就生效」，顺序错了再严的条件也走不到。",
-      "code": "score := 85\nif score >= 60 {\n\tfmt.Println(\"及格\")\n} else if score >= 90 {\n\tfmt.Println(\"优秀\")\n}",
+      "title": "提前 return 代替深层嵌套",
+      "description": "分支多的时候优先「不满足就提前 return」，而不是一层层 else 缩进；读起来扁平，也不容易漏分支。",
+      "code": "check := func(age int) string {\n\tif age < 0 {\n\t\treturn \"年龄不合法\"\n\t}\n\tif age < 18 {\n\t\treturn \"未成年\"\n\t}\n\treturn \"成年\"\n}\nfmt.Println(check(20))",
       "lang": "go",
-      "notes": "上面 85 分只会打印「及格」。把 score >= 90 挪到前面，两个分支就都能按预期生效。"
+      "notes": "Go 没有异常，错误也常这样处理：if err != nil { return err } 放在最前面。提前 return 之后主流程保持在外层缩进。"
     },
     {
       "title": "if 带初始化语句",
@@ -91,7 +91,7 @@
       "description": "同一个值跟多个常量比、或者分支要按类型分的时候用 switch；条件各不相干、逻辑各不相同的时候 if 链更好读。",
       "code": "code := 404\nif code == 400 {\n\tfmt.Println(\"客户端错误\")\n} else if code == 404 {\n\tfmt.Println(\"找不到\")\n} else {\n\tfmt.Println(\"其它\")\n}",
       "lang": "go",
-      "notes": "switch 的 case 里只能写可比较的值，写不了复杂表达式——复杂判断还是老老实实写 if 链。"
+      "notes": "case 后面跟的是表达式或条件，可以写复杂判断；同一个值跟一堆常量比时 switch 更整齐，条件互不相干时 if 链更直接。"
     },
     {
       "title": "组合示例：把这一组用起来",

@@ -35,7 +35,7 @@
       "description": "要拿到错误里带的字段（错误码、出错的字段名），先声明目标指针，再交给 errors.As：它会沿错误链找第一个类型对得上的错误并把值填进去。",
       "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\ntype ValidationError struct {\n\tField string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn \"字段 \" + e.Field + \" 不合法\"\n}\n\nfunc main() {\n\terr := fmt.Errorf(\"保存用户失败: %w\", &ValidationError{Field: \"age\"})\n\n\tvar ve *ValidationError\n\tif errors.As(err, &ve) {\n\t\tfmt.Println(\"出错的字段:\", ve.Field)\n\t}\n}",
       "lang": "go",
-      "notes": "第二个参数必须是「指针的指针」：ve 的类型是 *ValidationError，所以要传 &ve，直接传 ve 编译不过。目标类型没实现 error 接口也编译不过。链上有多个同类型错误时只取到最外层那个。"
+      "notes": "第二个参数必须是「指向实现 error 的类型的指针」：ve 的类型是 *ValidationError，所以要传 &ve（即 **ValidationError）。传错——不是指针、nil 指针、或指向的类型没实现 error——会在运行期 panic：errors: target must be a non-nil pointer 或 *target must be interface or implement error。Go 1.27 起也可以直接用 errors.AsType[*ValidationError](err) 拿 (值, ok)。"
     },
     {
       "title": "errors.Unwrap：拆开一层错误链",

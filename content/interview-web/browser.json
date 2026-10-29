@@ -59,7 +59,7 @@
       "description": "这题要能说出提升条件，也要知道提升是有代价的，不是越多越好。",
       "answer": [
         "合成层是浏览器单独为它分配一张纹理、独立绘制，再由 GPU 拼贴到屏幕上的那一层；层与层之间互不影响，改一层不必重画其它层",
-        "浏览器自动提升的常见情况：3D 变换（perspective、translateZ）、transform 不为 none、opacity 小于 1、position 为 fixed 或 sticky、video 和 canvas 元素、filter 与 backdrop-filter、mask、clip-path",
+        "浏览器自动提升的常见情况：3D 变换、transform 不为 none、opacity 小于 1、fixed/sticky 定位、video/canvas、filter、mask、clip-path",
         "可以手动提升：用 will-change: transform、will-change: opacity 提前告诉浏览器这块会动，让它提前建层",
         "提升不是免费的：每个层都占一份显存，层数越多，GPU 每帧要贴的图就越多，滚动和合成都会变慢",
         "浏览器会做「层合并」把相邻的同 z-index 图层压回去以省显存，但显式声明的层往往躲不过这份优化",
@@ -89,7 +89,7 @@
         "async：脚本下载完就立刻执行，彼此之间不保证顺序，也可能早于 defer 脚本执行，甚至插到别的 async 脚本前面",
         "选型：顺序敏感、依赖 DOM 结构或依赖其它脚本结果的代码用 defer；完全独立、越早跑越好的第三方脚本（埋点、广告）用 async",
         "type=\"module\" 的脚本默认就是 defer 行为，而且下载是并行的、执行按顺序",
-        "两者都会拖住 DOMContentLoaded：async 脚本如果下载很慢，这个事件会一直等它"
+        "只有 defer 会被 DOMContentLoaded 等待；async 不阻塞这个事件，下载慢也不会拖住它，但可能在 DCL 之后才执行"
       ],
       "notes": "常见追问：defer 脚本一定在 DOMContentLoaded 前执行完吗？——是的，DOMContentLoaded 会等所有 defer 脚本执行完再触发。常见追问：加 defer 后能用 document.write 吗？——不能，defer 执行时文档已经解析完了，document.write 会把页面清空。常见错误回答：「async 更安全因为不影响顺序」——恰恰相反，async 打乱顺序才更容易踩到依赖问题。"
     },
@@ -115,7 +115,7 @@
         "关键点是「清空式」：微任务队列会一直被清到空，一个微任务里再产生微任务，同一轮里会接着跑完",
         "await 相当于把后续代码放进微任务队列，所以 await 之后的代码一定早于 setTimeout(fn, 0) 执行",
         "MutationObserver 属于微任务，它回调里再改 DOM，改完会在同一轮微任务阶段再触发一次回调，直到不再变化为止",
-        "宏任务里新产生的 Promise.then 排在「本轮微任务清空之后」执行，也就是下一个宏任务之前——它不会插队到当前宏任务中间"
+        "宏任务执行期间产生的 Promise.then 会在本轮宏任务结束后的微任务检查点执行，不会留到下一个宏任务"
       ],
       "notes": "常见追问：微任务为什么不能饿死渲染？——规范要求每轮宏任务之后清空微任务，但实践中仍要避免在微任务里做无限递归的 Promise 链。常见追问：requestAnimationFrame 属于哪个队列？——它不是宏任务也不是微任务，是渲染阶段前的独立回调时机。常见错误回答：「setTimeout 和 Promise.then 按加入顺序执行」——队列不同，Promise.then 永远先。"
     },
@@ -164,10 +164,9 @@
       "answer": [
         "HTTP 缓存是浏览器缓存体系的一层：由 Cache-Control、Expires、ETag/Last-Modified 控制，属于磁盘缓存里按 HTTP 语义管理的部分",
         "内存缓存（memory cache）在更上面：页面生命周期内命中，不发请求也不读磁盘，JS、CSS、图片都可能在里面",
-        "磁盘缓存里除了 HTTP 缓存的内容，也存强缓存命中的产物；命中强缓存直接用不发请求，命中弱缓存要发条件请求，命中时服务端回 304",
+        "磁盘缓存：HTTP 缓存和强缓存命中的产物都落在这里；命中强缓存直接使用，命中协商缓存才发条件请求",
         "Service Worker 缓存是脚本自己控制的另一层，可以自定义匹配策略、支持离线；bfcache 则是整个页面的快照，恢复时几乎不发请求",
-        "preload 和 prefetch 有专门的预取缓存，取用时机和普通缓存不同：prefetch 的资源优先级低，常被浏览器丢掉",
-        "强制刷新（Ctrl+F5）会绕过 HTTP 缓存并发 Cache-Control: no-cache，普通刷新（Ctrl+R）仍会做缓存校验；fetch 和 XHR 默认也走 HTTP 缓存，除非显式 no-store"
+        "preload 和 prefetch 有专门的预取缓存，取用时机和普通缓存不同：prefetch 的资源优先级低，常被浏览器丢掉"
       ],
       "notes": "常见追问：304 是一次完整响应吗？——不是，304 只带响应头、不带响应体，浏览器用本地缓存的实体填充。常见追问：为什么改了代码但页面没变？——强缓存还在，要么改文件名加内容哈希，要么强制刷新。常见错误回答：「浏览器缓存就是 HTTP 缓存」——还有内存缓存、Service Worker 缓存、bfcache，命中路径完全不同。"
     },
@@ -177,25 +176,38 @@
       "answer": [
         "TTFB：从发起导航到收到第一个响应字节的时间，衡量服务端处理和网络往返，往上还包括 DNS、TCP、TLS",
         "FCP：首次内容绘制时间，页面第一次画出文字或图片等内容的时刻，代表「白屏结束」",
-        "LCP：最大内容元素的渲染时间，衡量主要内容多久可见；2024 年起它取代 FCP 成为 Core Web Vitals 指标之一",
+        "LCP：最大内容元素的渲染时间，2020 年起就是 Core Web Vitals 之一，衡量主要内容多久可见",
         "CLS：累积布局偏移，统计加载过程中可见元素突然移动的累计分数，衡量页面稳不稳",
-        "INP：交互到下一次绘制的延迟，取整次会话交互的高分位值，衡量「点了之后多久有反应」，取代了旧的 FID",
+        "INP：交互到下一次绘制的延迟，取整次会话交互的高分位值，2024 年起取代 FID，衡量「点了之后多久有反应」",
         "Core Web Vitals 三项是 LCP、INP、CLS，良好阈值约为 LCP ≤ 2.5s、INP ≤ 200ms、CLS ≤ 0.1，按真实用户数据的第 75 百分位统计；TTFB 是诊断指标，不属于三项之一"
       ],
       "notes": "常见追问：这些指标怎么采？——用 PerformanceObserver 监听 paint、largest-contentful-paint、layout-shift、event（或直接用 web-vitals 库）；TTFB 取 PerformanceNavigationTiming 的 responseStart 减 startTime。常见追问：CLS 高怎么定位？——看 layout-shift 属性的 sources 找出是哪个元素移动，通常是图片没占位、字体替换或动态插入内容。常见错误回答：「LCP 就是首屏时间」——LCP 只取最大内容元素那一次，首屏还要看 FCP 和 TTFB。"
     },
     {
-      "title": "同源策略是什么？跨域请求为什么读不到响应？CORS 怎么工作？",
-      "description": "重点是把「限制读取」和「允许发送」分开讲，以及 CORS 是服务端授权而不是浏览器放行。",
+      "title": "同源策略限制的是读取还是发送？具体卡住哪些操作？",
+      "description": "聚焦同源策略本身：请求能发出去，但 JS 读不到跨源响应。",
       "answer": [
-        "同源要求「协议 + 主机 + 端口」三者全同，任意一项不同就是跨源；同源策略规定不同源之间默认互相隔离",
-        "同源策略限制的是「读取」，不是「发送」：跨源图片、脚本、样式、iframe、表单都能正常加载和提交，只是 JS 拿不到内容",
-        "具体表现：读不到跨源 XHR/fetch 的响应体；访问不到跨源 iframe 的 DOM；拿不到别的源的 localStorage；canvas 被跨源图片污染后 getImageData 和 toBlob 直接抛安全错误",
-        "CORS 是服务端授权跨源读取的机制：响应里加 Access-Control-Allow-Origin（具体来源或 *）放行，浏览器看到它才把响应交给 JS",
-        "简单请求（GET/HEAD/POST 加常见 Content-Type、不带自定义头）直接发并读响应；非简单请求先发 OPTIONS 预检，服务端要回 Allow-Methods 和 Allow-Headers 才放行",
-        "带凭证（Cookie、Authorization）时前端要设 withCredentials: true，服务端必须回具体来源的 Allow-Origin 并带 Allow-Credentials: true，此时不能用 *"
+        "同源要求协议、主机、端口三者全同，任意一项不同就是跨源，默认互相隔离",
+        "同源策略限制的是读取不是发送：跨源图片、脚本、样式、iframe、表单都能加载或提交，只是 JS 拿不到内容",
+        "具体卡住的操作：读不到跨源 XHR/fetch 的响应体，访问不到跨源 iframe 的 DOM，拿不到别的源的 localStorage 和 IndexedDB",
+        "canvas 被跨源图片污染后 getImageData 和 toBlob 直接抛安全错误；跨源脚本报错时 window.onerror 也拿不到细节",
+        "合法的跨源读取要靠服务端授权：CORS 用响应头放行，或者双方用 postMessage 显式传消息",
+        "准确说法是：简单请求能发到服务端，浏览器拦的是读取响应；带预检的请求如果预检不通过，真正的请求根本不会发"
       ],
-      "notes": "常见追问：CORS 请求算不算「跨域请求」？——是，但「跨域」和「跨源」不完全等价，同源不同端口也算跨源。常见追问：为什么 form 提交不需要 CORS？——表单提交是导航行为，浏览器只负责发出去，本来就不允许读回响应。常见追问：postMessage 是什么？——它是绕过同源限制的显式通道，需要双方配合并校验 origin。常见错误回答：「CORS 是浏览器放行的开关」——它其实是服务端的授权声明，浏览器只是执行方；服务端不配，浏览器直接拦下响应。"
+      "notes": "常见追问：CORS 和同源策略是什么关系？——CORS 是服务端用响应头授权后、浏览器才放行跨源读取的机制；「postMessage 要注意什么」——校验 event.origin 和 event.source，不要用 *；「JSONP 为什么能跨域」——script 标签不受读取限制，但只能 GET 且等于执行远端代码。常见错误回答：「同源策略禁止跨域请求」——请求能发出去，被限制的是读取响应。"
+    },
+    {
+      "title": "第三方 Cookie 为什么要淘汰？CHIPS 和 Safari、Firefox 的做法有什么不同？",
+      "description": "浏览器对跨站追踪的收紧路线不同，面试要能分清「禁用」「分区」和「申请授权」三种策略。",
+      "answer": [
+        "第三方 Cookie 是在 A 站页面里加载 B 站 iframe 或脚本时写入的 B 站 Cookie；它天然能跨站识别用户，是广告追踪和跨站画像的基础",
+        "Chrome 原计划 2022 年全面淘汰，多次推迟后改为不默认禁用、把选择权交给用户；截至 2025 年 Chrome 默认仍允许第三方 Cookie，只在无痕模式或用户手动设置时拦截",
+        "CHIPS 是 Chrome 主推的显式分区方案：Cookie 加 Partitioned; Secure; SameSite=None，浏览器按顶层站点分桶，同一个 B 站 Cookie 在 A 站和 C 站互不相通；Chrome 114 起支持",
+        "Safari 走 ITP：2020 年 Safari 13.1 起默认阻止所有第三方 Cookie，需要跨站访问时用 Storage Access API 申请；ITP 还会把脚本可写存储在 7 天无交互后清掉",
+        "Firefox 走 Total Cookie Protection / State Partitioning：把 Cookie 和 localStorage、IndexedDB 等按顶层站点分区，动态分区从 Firefox 103 起默认开启，不是简单全禁，而是每个顶层站点一个独立 cookie jar",
+        "兼容做法：第三方嵌入优先用 Storage Access API 申请权限；确实需要跨站 Cookie 时用 CHIPS；同时准备无 Cookie 方案（OAuth 重定向、服务端会话、分区存储）"
+      ],
+      "notes": "常见追问：CHIPS 和 SameSite=None 是什么关系？——CHIPS 的 Cookie 在第三方上下文仍然要 SameSite=None 才会发送，Partitioned 只是再加一层顶层站点分区。常见追问：Safari 和 Firefox 都算「禁用第三方 Cookie」吗？——Safari 是默认阻止，Firefox 是默认分区，效果都是跨站拿不到同一份 Cookie。常见错误回答：「Chrome 已经全面禁用第三方 Cookie」——没有，Chrome 目前默认仍允许，只是推分区和用户控制。"
     }
   ]
 }
