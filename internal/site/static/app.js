@@ -48,6 +48,53 @@
 		})
 		.filter(Boolean);
 	var ticking = false;
+	var pinned = null;
+	var pinTimer = null;
+
+	// 吸顶的元素会盖住内容：顶栏，窄屏还有分组导航。
+	// 宽屏时分组导航是独立的左栏，不遮正文，不算进来。
+	//
+	// 关键：锚点跳转的落点和高亮的判定线必须用同一个高度，
+	// 否则点中一个分组，判定时算出来的是上一个。
+	function stickyOffset() {
+		var offset = 0;
+		var main = document.querySelector("main");
+		var mainRect = main ? main.getBoundingClientRect() : null;
+
+		var els = document.querySelectorAll(".site-header, .group-nav");
+		for (var i = 0; i < els.length; i++) {
+			var el = els[i];
+			var cs = window.getComputedStyle(el);
+			if (cs.position !== "sticky") {
+				continue;
+			}
+			if (mainRect) {
+				// 和正文横向不重叠 = 在旁边，不挡路
+				var r = el.getBoundingClientRect();
+				if (!(r.left < mainRect.right && mainRect.left < r.right)) {
+					continue;
+				}
+			}
+			var bottom = (parseFloat(cs.top) || 0) + el.getBoundingClientRect().height;
+			if (bottom > offset) {
+				offset = bottom;
+			}
+		}
+
+		document.documentElement.style.setProperty("--sticky-offset", offset + "px");
+		return offset;
+	}
+
+	function setActive(id) {
+		navLinks.forEach(function (a) {
+			a.classList.toggle("active", a.getAttribute("href") === "#" + id);
+		});
+	}
+
+	function isAtBottom() {
+		var doc = document.documentElement;
+		return window.innerHeight + window.scrollY >= doc.scrollHeight - 2;
+	}
 
 	// 滚动到哪个分组，就把侧边栏里对应的那一项标成当前
 	function updateActive() {
@@ -56,24 +103,44 @@
 			return;
 		}
 
-		var offset = 120;
-		var current = null;
-		sections.forEach(function (s) {
-			if (s.hidden) {
-				// 被搜索过滤掉的分组不算
+		var line = stickyOffset();
+
+		// 刚点了导航链接、正在平滑滚动：先跟着点的那一个走，滚到位再交还给滚动判定
+		if (pinned) {
+			var target = document.getElementById(pinned);
+			if (target && Math.abs(target.getBoundingClientRect().top - line) > 4) {
 				return;
 			}
-			if (s.getBoundingClientRect().top <= offset) {
-				current = s;
-			}
-		});
-		if (!current) {
-			return;
+			pinned = null;
 		}
 
-		navLinks.forEach(function (a) {
-			a.classList.toggle("active", a.getAttribute("href") === "#" + current.id);
-		});
+		var current = null;
+		var lastVisible = null;
+		for (var i = 0; i < sections.length; i++) {
+			var s = sections[i];
+			if (s.hidden) {
+				// 被搜索过滤掉的分组不算
+				continue;
+			}
+			if (s.getBoundingClientRect().top <= line + 2) {
+				lastVisible = s;
+			}
+		}
+		current = lastVisible;
+
+		// 滚到底了：最后一个分组可能还没越过判定线（页面不够长，滚不动了）
+		if (!current || isAtBottom()) {
+			for (var j = sections.length - 1; j >= 0; j--) {
+				if (!sections[j].hidden) {
+					current = sections[j];
+					break;
+				}
+			}
+		}
+
+		if (current) {
+			setActive(current.id);
+		}
 	}
 
 	if (sections.length) {
@@ -87,6 +154,25 @@
 			},
 			{ passive: true }
 		);
+		window.addEventListener("resize", function () {
+			stickyOffset();
+			updateActive();
+		});
+
+		// 点导航：立刻高亮，并记住这个选择直到滚动到位
+		navLinks.forEach(function (a) {
+			a.addEventListener("click", function () {
+				pinned = a.getAttribute("href").slice(1);
+				setActive(pinned);
+				window.clearTimeout(pinTimer);
+				pinTimer = window.setTimeout(function () {
+					pinned = null;
+					updateActive();
+				}, 2000);
+			});
+		});
+
+		stickyOffset();
 		updateActive();
 	}
 

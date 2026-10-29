@@ -51,7 +51,9 @@
 
 html {
 	scroll-behavior: smooth;
-	scroll-padding-top: 5rem;
+	/* 吸顶元素的总高度，由 app.js 测量后写进这个变量。
+	   锚点落点和「当前分组」的判定线必须用同一个值，否则会差一个分组。 */
+	scroll-padding-top: var(--sticky-offset, 3.5rem);
 }
 
 body {
@@ -244,6 +246,8 @@ main > h1 {
 
 .group {
 	margin-bottom: 2.5rem;
+	/* 锚点跳转时同样要避开吸顶的元素 */
+	scroll-margin-top: var(--sticky-offset, 3.5rem);
 }
 
 .group > h2 {
@@ -440,10 +444,6 @@ main > h1 {
 		opacity: 1;
 	}
 
-	/* 顶栏折成两行，锚点要多留点偏移 */
-	html {
-		scroll-padding-top: 9rem;
-	}
 }
 
 /* ---------- 跟随系统偏好（没有显式选择时） ---------- */
