@@ -1,0 +1,186 @@
+{
+  "id": "transaction",
+  "title": "MySQL 事务与隔离级别",
+  "entries": [
+    {
+      "title": "事务的 ACID 四个特性分别是什么？InnoDB 靠什么实现？",
+      "description": "ACID 是事务这一概念最基础的一套术语，面试里几乎一定会被用来暖场。能顺带把每个特性的存储层实现说清楚，才算答到点上。",
+      "answer": [
+        "原子性（Atomicity）：事务要么全做要么全不做，InnoDB 靠 undo log 保存修改前的镜像，回滚时逐条反向执行",
+        "一致性（Consistency）：事务前后数据都满足完整性约束，靠 A、I、D 三者加上应用逻辑共同保证，数据库层的约束（主键、唯一键、外键、非空）是兜底",
+        "隔离性（Isolation）：并发事务互不干扰，InnoDB 靠 MVCC（快照读）+ 锁（当前读）实现，不同隔离级别就是这两者的不同组合",
+        "持久性（Durability）：提交后数据不会因为宕机丢失，InnoDB 靠 redo log 的 WAL 机制，先写日志再改数据页，崩溃时重放 redo 补齐",
+        "ACID 里 A、I、D 都有明确的机制支撑，C 更多是「结果」而不是「手段」——一致性最终还是要靠业务代码不写错"
+      ],
+      "notes": "常见追问：redo log 和 binlog 有什么区别？——redo log 是 InnoDB 引擎层的物理日志，宕机恢复用；binlog 是 Server 层的逻辑日志，主从复制和数据归档用。常见错误回答：说一致性「由数据库自动保证」，其实框架没法替你保证业务约束。"
+    },
+    {
+      "title": "MySQL 有哪四种事务隔离级别？每一级分别能防住什么读问题？",
+      "description": "隔离级别是事务题的核心考点。回答时不要只背四个名字，要把每一级「能防住什么、放过了什么」说清楚。",
+      "answer": [
+        "读未提交（READ UNCOMMITTED，RU）：不加读锁，能读到别的事务还没提交的修改，会出现脏读",
+        "读已提交（READ COMMITTED，RC）：只能读到已提交的数据，防住脏读；但同一事务内两次读同一行可能值不同（不可重复读），范围查询也可能多出新行（幻读）",
+        "可重复读（REPEATABLE READ，RR）：同一事务内的快照读始终看到同一个快照，防住脏读和不可重复读",
+        "串行化（SERIALIZABLE）：所有读都加共享锁（MySQL 8.0 里普通 SELECT 会转成 SELECT ... FOR SHARE），三个读问题全防住，但并发度最低",
+        "隔离级别越高并发越低，RU 因为连基本正确性都不保证，实际生产几乎不用，只在调试时用",
+        "SQL 标准里 RR 仍防不住幻读；InnoDB 用间隙锁加 next-key lock 在「写」这一侧把幻读补上了，具体见下一题"
+      ],
+      "notes": "常见追问：脏读、不可重复读、幻读分别是什么？——脏读是读到未提交的数据，不可重复读是同一行两次读到的值变了，幻读是同一范围查询两次结果集的行数变了。常见错误回答：直接背「RR 防幻读」，忘了标准语义里 RU/RC/RR 都防不住幻读。"
+    },
+    {
+      "title": "MySQL 默认的事务隔离级别是什么？可重复读是不是彻底解决了幻读？",
+      "description": "默认值是高频追问点，「RR 到底防没防住幻读」是区分背答案和真懂的分水岭。",
+      "answer": [
+        "MySQL（含 InnoDB）默认是 REPEATABLE READ；Oracle 和 PostgreSQL 默认 READ COMMITTED，SQL Server 默认 READ COMMITTED（加锁版本）",
+        "MySQL 8.0 查当前值用 SELECT @@transaction_isolation，旧版本里的变量名是 tx_isolation",
+        "改法分两级：SET SESSION TRANSACTION ISOLATION LEVEL ... 只影响当前连接，SET GLOBAL ... 只影响之后新建的连接，已有连接不变",
+        "InnoDB 的 RR 下「快照读」不产生幻读：ReadView 在事务第一次快照读时固定并一直复用，期间别的事务插进来的行不在视图里",
+        "但 RR 不是「彻底没有幻读」：当前读（UPDATE、DELETE、SELECT ... FOR UPDATE）读最新版本，同一事务里先快照读再当前读，两边结果可能对不上，这就是 RR 下幻读的残留形态",
+        "准确说法是：InnoDB 的 RR 用 MVCC 挡住快照读侧的幻影，用 next-key lock 挡住写侧的幻影插入，两条路径各用一套机制"
+      ],
+      "notes": "常见追问：为什么很多互联网公司把 MySQL 改成 RC？——RC 的间隙锁少、死锁少、主从延迟小，业务上多数场景也不需要 RR 的强一致快照。常见错误回答：说「RR 完全杜绝幻读」或者「MySQL 的 RR 根本防不住幻读」，两种说法都不准确，要看是快照读还是当前读。"
+    },
+    {
+      "title": "MVCC 是什么？一行数据的多个版本是怎么来的？",
+      "description": "MVCC 是 InnoDB 高并发的地基，能把「不加锁也能读」这件事讲明白，基本就抓住了 InnoDB 设计的核心。",
+      "answer": [
+        "MVCC = Multi-Version Concurrency Control，多版本并发控制：读不加锁，靠「每个版本有自己的可见性判断」来避免读写互相阻塞",
+        "每个行记录有两个隐藏列：DB_TRX_ID（最后一次修改该行的事务 ID）和 DB_ROLL_PTR（回滚指针，指向 undo log 里该行的上一个版本）",
+        "更新一行时 InnoDB 不原地覆盖：先把旧版本写进 undo log，行上的 DB_TRX_ID 改成新事务 ID，DB_ROLL_PTR 指向刚写入的 undo 记录，版本链就串起来了",
+        "读操作顺着版本链往回回溯，找到对当前事务可见的那个版本，链上没有可见版本就说明该行对本事务不可见",
+        "可见性由 ReadView 决定：它记录了生成瞬间的活跃事务 ID 列表、其中最小的 ID、以及下一个将要分配的事务 ID",
+        "好处是读不阻塞写、写不阻塞读；代价是历史版本必须靠 undo log 留着，没人要了才能 purge"
+      ],
+      "notes": "常见追问：ReadView 里那几个字段分别干什么？——用来把行版本的 trx_id 归类成「比快照老」「是自己改的」「比快照新」「快照当时还在活跃」，从而决定可见性。常见错误回答：把 MVCC 说成「多副本数据同步」，它和多线程并发控制完全是两回事。"
+    },
+    {
+      "title": "undo log 有什么作用？它和 redo log 有什么区别？",
+      "description": "undo log 和 redo log 是 InnoDB 最容易被混淆的一对日志，面试常要求成对比较着答。",
+      "answer": [
+        "undo log 记录「修改前的旧数据」，作用有三：事务回滚（保证原子性）、为 MVCC 提供历史版本、崩溃恢复时回滚未提交的事务",
+        "redo log 记录「物理页的改动」，作用是宕机后重放，保证持久性；undo log 方向相反，是「反向操作」，保证可回滚",
+        "undo log 分两类：insert undo（插入后未提交，回滚时直接删掉这行，因为它对别的事务不可见，不需要留给 MVCC）和 update undo（记录被更新前的行镜像，含 DB_TRX_ID 和 DB_ROLL_PTR，是版本链的来源）",
+        "undo log 本身不写进 redo log，但 undo 表空间里给它分配的空间信息会写进 redo，保证重启后仍能找到这些 undo 记录",
+        "undo log 存放在 undo 表空间里，后台 purge 线程负责清理不再被任何 ReadView 需要的旧版本",
+        "关键限制：只要还有一个长事务的 ReadView 没释放，对应的 undo log 就不能 purge，这是长事务最常见的危害来源"
+      ],
+      "notes": "常见追问：undo log 会不会把磁盘撑爆？——会，长事务会挡住 purge，undo 表空间持续膨胀。常见追问：undo log 为什么不能像 redo log 那样直接覆盖？——旧版本可能正被别的事务的快照读引用，覆盖了就读不到了。常见错误回答：把 undo log 也说成「宕机恢复日志」，其实它主要是回滚和版本链。"
+    },
+    {
+      "title": "什么是快照读？什么是当前读？",
+      "description": "这两个词几乎覆盖了 InnoDB 所有读路径，也是解释「为什么 RR 下读到的是旧数据」的钥匙。",
+      "answer": [
+        "快照读（consistent read）：普通 SELECT，不加锁，读 MVCC 中对当前事务可见的版本，既不阻塞写也不被写阻塞",
+        "当前读（locking read）：读取最新版本并加锁，包括 SELECT ... FOR UPDATE、SELECT ... FOR SHARE、LOCK IN SHARE MODE，以及 UPDATE、DELETE、INSERT ... SELECT",
+        "判断口诀：SELECT 后面带 FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE 就是当前读，否则是快照读",
+        "快照读只看 ReadView 决定的历史版本，当前读永远看最新已提交版本，所以它必须靠加锁来防止并发写",
+        "RC 下每次快照读都重新生成一个 ReadView（因此会不可重复读）；RR 下整个事务复用第一次快照读建立的同一个 ReadView（因此可重复读）",
+        "业务影响：RR 下如果先快照读再更新同一行，更新拿到的是最新版本，可能和你之前读到的值对不上，这是线上偶发不一致的常见来源"
+      ],
+      "notes": "常见追问：UPDATE 属于快照读还是当前读？——当前读，它内部先以当前读方式取最新版本再上锁。常见追问：为什么快照读不需要加锁？——它读的版本对别人不可见，天然不会读到脏数据。常见错误回答：以为「读」都是快照读，忘了 FOR UPDATE 也是读。"
+    },
+    {
+      "title": "可重复读下的幻读是怎么处理的？间隙锁和 next-key lock 是什么？",
+      "description": "这是隔离级别题的深水区，能讲清间隙锁的区间语义，基本就能拿到这一题的满分。",
+      "answer": [
+        "幻读的定义：同一事务内两次范围查询，结果集的行数变了（多出新行），RR 要防的就是这个",
+        "快照读侧靠 ReadView 固定住视图，新插入的行不在视图里，所以快照读看不到幻影",
+        "当前读走索引扫描，RR 下 InnoDB 用 next-key lock 锁住「记录 + 它前面的间隙」，别的事务想往这个间隙 INSERT 就会被挡住",
+        "next-key lock = 记录锁 + 间隙锁，锁的区间是左开右闭，比如 (10, 20]；单独的间隙锁锁的是 (10, 20) 这样的开区间，只防插入不防更新",
+        "插入意向锁（insert intention lock）是插入前获取的间隙锁变体，多个插入意向锁之间不互斥，只和真正冲突的间隙锁互斥",
+        "RC 下不加间隙锁（唯一性检查、外键检查等场景除外），间隙可以被插入，所以 RC 会有幻读——这正是 RC 死锁少但可能出幻读的原因"
+      ],
+      "notes": "常见追问：间隙锁什么时候会加？——RR 下按索引扫描，命中记录就加记录锁并把相邻间隙一并锁上；没走索引的全表扫描会锁住大量间隙甚至相当于全表锁。常见追问：为什么 RR 反而更容易死锁？——间隙锁范围大，两个事务以不同顺序扫同一段索引就会互相等待。常见错误回答：把 next-key lock 说成「锁住整张表」。"
+    },
+    {
+      "title": "Read Committed 和 Repeatable Read 在 InnoDB 里到底差在哪？",
+      "description": "只背「RC 少一层锁」容易被追问穿，把差异落到 ReadView 生命周期、锁范围和业务影响上才站得住。",
+      "answer": [
+        "读视图：RC 每次快照读都重新生成 ReadView，RR 只在事务第一次快照读时生成一次并全程复用",
+        "锁范围：RR 加 next-key lock（记录加间隙），RC 基本只加记录锁、不锁间隙，唯一性检查和外键检查等场景例外",
+        "幻读：RC 下允许幻读（间隙可被插入），RR 下写场景被 next-key lock 挡住",
+        "死锁与等待：RC 的锁范围小、死锁明显更少，但同一行被竞争时更容易直接表现为锁等待超时",
+        "复制影响：statement 格式的 binlog 要求 RC 及以上才能保证从库复现出一致结果，用 statement 格式时 RC 更安全",
+        "实践共识：需要「事务内多次读结果一致」就用 RR；只是「读到已提交数据」的普通业务用 RC 通常更划算，间隙锁少、并发高、主从延迟小"
+      ],
+      "notes": "常见追问：改成 RC 会不会破坏业务正确性？——要看业务是否依赖事务内的固定快照，比如「先查余额再扣减」这类扣库存逻辑在 RC 下要自己加条件（UPDATE ... WHERE stock > 0）或改用 SELECT ... FOR UPDATE。常见追问：RC 下怎么对付不可重复读？——用乐观锁版本号或行锁兜底，而不是指望隔离级别。"
+    },
+    {
+      "title": "事务是怎么提交的？redo log 的两阶段提交讲一下。",
+      "description": "提交流程题考察对 InnoDB 和 Server 两层日志的理解，答出「为什么需要两阶段」才算答到根上。",
+      "answer": [
+        "正常提交流程：修改数据 → 写 redo log 并标记为 prepare → 写 binlog → 提交事务，把 redo log 标记为 commit；binlog 什么时候落盘由 sync_binlog 控制",
+        "要分两阶段，是因为要同时保证 InnoDB 的 redo log 和 Server 层的 binlog 一致：只写 redo 不写 binlog，主库恢复出来的数据和从库就对不上了",
+        "第一阶段：redo log 写完并标记为 prepare，此时事务还没有提交，别的连接看不到",
+        "第二阶段：写 binlog，然后提交，把 redo log 标记为 commit；两步之间任何时刻宕机都要能靠日志判定",
+        "崩溃恢复规则：redo log 处于 prepare 状态时，若 binlog 完整（存在对应的 commit 记录）则提交事务，binlog 不完整则回滚事务",
+        "判定依据是 binlog 的完整性和 XID 匹配，MySQL 用这套规则把 prepare 状态的事务唯一地归到「提交」或「回滚」一边"
+      ],
+      "notes": "常见追问：这是分布式事务的 2PC 吗？——思路一致但不是同一个东西，这里是 MySQL 内部 InnoDB 模块和 Server 模块之间的一致性协议。常见追问：保证 crash-safe 的参数有哪些？——innodb_flush_log_at_trx_commit（redo，设为 1 最安全）、sync_binlog（binlog，设为 1 最安全）。常见错误回答：说「先写 binlog 再写 redo」，实际顺序是 redo prepare → binlog → redo commit。"
+    },
+    {
+      "title": "哪些操作会造成隐式提交？",
+      "description": "隐式提交是线上「回滚不回来」的常见原因，很多人在事务里执行了一条 DDL 才发现前面已经提交了。",
+      "answer": [
+        "DDL 语句：CREATE TABLE、ALTER TABLE、DROP TABLE、TRUNCATE、RENAME 等，存储过程、函数、触发器的定义体里也一样；MySQL 8.0 的 DDL 本身是原子的（失败不留中间状态），但依然会隐式提交",
+        "事务控制语句：START TRANSACTION / BEGIN 会先提交掉当前未提交的事务，COMMIT 和 ROLLBACK 本身也是提交点，SET autocommit = 1 同样会提交之前累积的事务",
+        "权限和统计类语句：GRANT、REVOKE、ANALYZE TABLE、CACHE INDEX、FLUSH、LOCK TABLES",
+        "反过来，INSERT / UPDATE / DELETE 本身不会隐式提交，即使 autocommit = 0 也是一样，需要你手动 COMMIT",
+        "危害：在事务中间执行 DDL 时，以为前面的 DML 还能回滚，实际早就被提交了，数据回不来"
+      ],
+      "notes": "常见追问：怎么确认当前事务有没有被隐式提交？——观察 DDL 前后的数据是否还能被 ROLLBACK 撤销，或用 SHOW ENGINE INNODB STATUS、performance_schema 看事务列表。常见追问：MySQL 8.0 的原子 DDL 是不是就不需要管 DDL 事务了？——不是，它解决的是 DDL 自身的原子性，隐式提交的行为一点没变。"
+    },
+    {
+      "title": "savepoint 是什么？回滚到 savepoint 之后事务是什么状态？",
+      "description": "savepoint 是「局部回滚」，和整体 ROLLBACK 的区别是这道题的关键，也是事务控制里最常被问的细节。",
+      "answer": [
+        "SAVEPOINT sp1 在事务里打一个标记点，ROLLBACK TO SAVEPOINT sp1 把事务退回到该点之后的状态",
+        "关键区别：回滚到保存点只撤销该点之后的修改，事务并没有结束，可以继续执行语句，最后再 COMMIT",
+        "而 ROLLBACK 是回滚整个事务并结束它，之后不能再 COMMIT",
+        "RELEASE SAVEPOINT sp1 只是丢弃这个标记点，本身不修改任何数据",
+        "保存点可以嵌套，同名保存点后设的会覆盖先设的那个",
+        "实现上保存点对应 undo log 里的一个位置标记，回滚到它就是把 undo 链回退到该位置；事务已持有的行锁不会因为回滚到保存点而释放，要等整个事务提交或回滚"
+      ],
+      "notes": "常见追问：保存点能跨事务使用吗？——不能，事务一旦提交或回滚，保存点全部失效。常见追问：回滚到保存点和回滚整个事务，在 redo/undo 上有什么区别？——前者只回退 undo 链的一段，已写入的 redo 依然保留，提交时照常写 binlog。常见错误回答：把 ROLLBACK TO SAVEPOINT 当成「回滚并结束事务」。"
+    },
+    {
+      "title": "长事务有哪些危害？",
+      "description": "长事务是 MySQL 生产环境最常见的慢性问题之一，能列出危害面，就说明你真的见过线上事故。",
+      "answer": [
+        "undo log 无法 purge：只要长事务的 ReadView 还在，旧版本就不能清理，undo 表空间持续膨胀，最后把磁盘写满",
+        "长时间持锁：行锁、间隙锁一直不释放，其他事务排队等待，表现出来是大面积锁等待甚至超时",
+        "间隙锁挡住插入：RR 下长事务持有大范围 next-key lock，别的事务的 INSERT 被卡住，表看起来像「卡住了」",
+        "回滚代价高：大事务回滚要逐条反向执行，回滚期间锁继续持有；崩溃恢复时回滚未提交事务同样很慢",
+        "主从延迟：binlog 里的这个大事务在从库上要重放同样长的时间，从库长时间卡在同一条事务上",
+        "资源占用：连接被长期占住拖垮连接池，purge 线程跟不上还会堆积 history list length"
+      ],
+      "notes": "常见追问：怎么避免长事务？——把大事务拆成小批次提交，不要在事务里做 RPC、HTTP 调用、发消息，也不要在事务里等用户输入。常见追问：为什么一个只读的长事务也有危害？——它虽然没改数据，但建立了 ReadView 且一直不释放，旧版本就 purge 不掉。"
+    },
+    {
+      "title": "怎么排查和终止长事务？",
+      "description": "排查题考的是动手能力：能说出具体视图、具体列、具体命令，就比只讲「看监控」强很多。",
+      "answer": [
+        "information_schema.INNODB_TRX：列出所有正在运行的事务，重点看 trx_state（RUNNING 或 LOCK WAIT）、trx_started、trx_mysql_thread_id（对应 processlist 的 Id）、trx_query、trx_rows_locked、trx_rows_modified",
+        "按时间过滤出长事务：SELECT * FROM information_schema.INNODB_TRX WHERE trx_started < NOW() - INTERVAL 60 SECOND;",
+        "SHOW FULL PROCESSLIST：看 Time 列（该连接已持续多久）和 Info 列（正在执行的语句），按 Time 排序就能找出久占连接的会话",
+        "performance_schema 的 events_transactions_history_long 和 events_statements_history_long 能回看历史事务与语句，事后复盘比实时表更全",
+        "看锁等待和阻塞链：SHOW ENGINE INNODB STATUS 的 TRANSACTIONS 和 LATEST DETECTED DEADLOCK 段，或者 MySQL 8.0 的 performance_schema.data_lock_waits",
+        "终止手段：KILL <processlist_id> 断开整个连接，KILL QUERY <id> 只中断当前语句、让事务继续跑，第三方工具 pt-kill 可以按查询时长或用户自动清理"
+      ],
+      "notes": "常见追问：KILL 掉长事务有什么风险？——客户端事务被回滚，未提交的修改全部撤销，连接断开时正在执行的语句会报错。常见追问：怎么防止长事务再次出现？——设置 innodb_lock_wait_timeout 和业务层超时，监控 innodb_trx 里 trx_started 的分布并告警，代码规范上禁止在事务里做外部调用。常见错误回答：把 processlist 里 Time 大的连接一律当成长事务——那可能只是客户端连着但事务早就提交了。"
+    },
+    {
+      "title": "autocommit、START TRANSACTION 和 BEGIN 有什么区别？事务该怎么开？",
+      "description": "事务怎么开比事务是什么更容易在代码里出错，尤其是 START TRANSACTION 会提交掉前一个事务这一点。",
+      "answer": [
+        "autocommit = ON（默认）：每一条语句都是独立事务并自动提交，SET autocommit = 0 或 SET SESSION autocommit = 0 可以关掉",
+        "autocommit = 0 时语句不再自动提交，需要你手动 BEGIN / COMMIT / ROLLBACK",
+        "START TRANSACTION 和 BEGIN 基本等价：都在当前会话开启新事务，并且执行时会先隐式提交掉之前未提交的事务",
+        "START TRANSACTION 支持修饰符：WITH CONSISTENT SNAPSHOT（立刻建立 ReadView，不用等第一次快照读）、READ WRITE 和 READ ONLY（只读事务省掉部分 undo 和锁）",
+        "需要「从某一刻起的数据视图一致」时用 START TRANSACTION WITH CONSISTENT SNAPSHOT；普通 BEGIN 的 ReadView 要到第一次快照读时才建立",
+        "MySQL 没有嵌套事务：再次 BEGIN 只是提交掉前一个再开新的，不会形成子事务"
+      ],
+      "notes": "常见追问：START TRANSACTION 会把前面的 DML 提交掉吗？——会，这就是隐式提交，最容易踩坑。常见追问：只读事务有什么用？——READ ONLY 在 RC/RR 下可以省掉 undo log 和部分锁，但不能写。常见错误回答：以为 BEGIN 可以嵌套，MySQL 不支持。"
+    }
+  ]
+}
