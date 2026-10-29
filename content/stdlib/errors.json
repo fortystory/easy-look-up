@@ -1,0 +1,111 @@
+{
+  "id": "errors",
+  "title": "错误处理与格式化",
+  "entries": [
+    {
+      "title": "errors.New 与 fmt.Errorf：固定文本用前者",
+      "description": "错误信息每次都一样时用 errors.New，一个固定字符串就够；信息里要插变量就用 fmt.Errorf，格式串和 fmt.Printf 一样。",
+      "code": "// 文本固定不变：用 errors.New\nerr1 := errors.New(\"数据库连接失败\")\n\n// 文本里要带变量：用 fmt.Errorf\ntable := \"orders\"\nerr2 := fmt.Errorf(\"查询表 %s 失败\", table)\n\nfmt.Println(err1)\nfmt.Println(err2)",
+      "lang": "go",
+      "notes": "errors.New 只接受一个固定字符串，想拼内容就得换 fmt.Errorf。另外，两次分别调 errors.New(\"同一段话\") 造出来的错误不是同一个（== 为 false），要当固定标记用得先存成变量。"
+    },
+    {
+      "title": "fmt.Errorf 的 %w：把底层错误包起来",
+      "description": "底层报错要往上抛时，用 %w 把原错误包进新错误：消息多了上下文，原错误还留在错误链上，之后照样能被 errors.Is / errors.As 找到。",
+      "code": "base := errors.New(\"连接被拒绝\")\nerr := fmt.Errorf(\"请求用户 %d 失败: %w\", 42, base)\n\nfmt.Println(err)  // 请求用户 42 失败: 连接被拒绝\nfmt.Println(base) // 底层错误本身",
+      "lang": "go",
+      "notes": "%w 后面必须跟 error 类型的值，别的类型会打印成 %!w(int=42) 这种怪东西。一个 fmt.Errorf 里可以写多个 %w（Go 1.20+）。"
+    },
+    {
+      "title": "%v 和 %w 的区别：一个只转文本，一个建错误链",
+      "description": "两种写法打印出来的文字一模一样，区别在错误链：%v 只是把错误格式化成一段文本，%w 会把原错误记录下来，变成可以往回追溯的链。",
+      "code": "base := errors.New(\"超时\")\nid := 7\n\ntext := fmt.Errorf(\"任务 %d 失败: %v\", id, base)  // 只是文本\nchain := fmt.Errorf(\"任务 %d 失败: %w\", id, base) // 带错误链\n\nfmt.Println(errors.Unwrap(text))  // nil：链是断的\nfmt.Println(errors.Unwrap(chain)) // 超时：能取回底层错误",
+      "lang": "go",
+      "notes": "用 %v 包出来的错误跟原错误再无关系，errors.Is 判断不到它。需要保留原错误就必须用 %w，这一条是 Go 错误处理的核心约定。"
+    },
+    {
+      "title": "errors.Is：判断是不是某个错误",
+      "description": "想知道错误是不是某个特定的错误，用 errors.Is：它顺着错误链一层层找，找到就返回 true，比直接用 == 靠谱。",
+      "code": "sentinel := errors.New(\"记录不存在\")\nerr := fmt.Errorf(\"查询用户 %d 失败: %w\", 42, sentinel)\n\nfmt.Println(errors.Is(err, sentinel)) // true：包了几层都认得",
+      "lang": "go",
+      "notes": "错误被 %w 包过之后 == 就失效了（== 比较的是接口里装的值本身），所以判断「是不是某个特定错误」永远用 errors.Is，不要自己写 err == ErrXxx。"
+    },
+    {
+      "title": "errors.As：从错误链里取出自定义错误类型",
+      "description": "要拿到错误里带的字段（错误码、出错的字段名），先声明目标指针，再交给 errors.As：它会沿错误链找第一个类型对得上的错误并把值填进去。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\ntype ValidationError struct {\n\tField string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn \"字段 \" + e.Field + \" 不合法\"\n}\n\nfunc main() {\n\terr := fmt.Errorf(\"保存用户失败: %w\", &ValidationError{Field: \"age\"})\n\n\tvar ve *ValidationError\n\tif errors.As(err, &ve) {\n\t\tfmt.Println(\"出错的字段:\", ve.Field)\n\t}\n}",
+      "lang": "go",
+      "notes": "第二个参数必须是「指针的指针」：ve 的类型是 *ValidationError，所以要传 &ve，直接传 ve 编译不过。目标类型没实现 error 接口也编译不过。链上有多个同类型错误时只取到最外层那个。"
+    },
+    {
+      "title": "errors.Unwrap：拆开一层错误链",
+      "description": "错误链是一层套一层的，errors.Unwrap 只拆最外面一层，拿到被包进去的那个错误；拆到最原始的那个错误时就返回 nil。",
+      "code": "base := errors.New(\"底层失败\")\nmid := fmt.Errorf(\"中间层: %w\", base)\ntop := fmt.Errorf(\"最外层: %w\", mid)\n\nfmt.Println(errors.Unwrap(top))  // 中间层: 底层失败\nfmt.Println(errors.Unwrap(base)) // nil：它自己就是最底层",
+      "lang": "go",
+      "notes": "Unwrap 一次只拆一层，要一层层拆得自己循环调用它。用多个 %w 包装的错误（Go 1.20+）拆不开，Unwrap 返回 nil，这种错误只能靠 errors.Is / errors.As 找。"
+    },
+    {
+      "title": "哨兵错误：包级导出的 ErrXxx",
+      "description": "把「某一种特定的失败」做成包级的导出变量（哨兵错误），调用方就能用 errors.Is 判断是不是这种错误，不用去匹配错误文本。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar ErrNotFound = errors.New(\"用户不存在\")\n\nfunc findUser(id int) error {\n\tif id == 0 {\n\t\treturn fmt.Errorf(\"查找用户 %d 失败: %w\", id, ErrNotFound)\n\t}\n\treturn nil\n}\n\nfunc main() {\n\tif errors.Is(findUser(0), ErrNotFound) {\n\t\tfmt.Println(\"用户不存在\")\n\t}\n}",
+      "lang": "go",
+      "notes": "哨兵错误按约定命名成 ErrXxx 并导出，放在包级。不要在函数里现造，否则每次都是新值，errors.Is 就找不到了；定义了哨兵错误就要用 errors.Is 去找它。"
+    },
+    {
+      "title": "自定义错误类型：带字段的错误",
+      "description": "错误要带额外信息（错误码、出错的字段）时定义自己的类型，给它加一个 Error() string 方法就自动满足 error 接口，可以直接当 error 返回。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype ConfigError struct {\n\tField  string\n\tReason string\n}\n\nfunc (e *ConfigError) Error() string {\n\treturn fmt.Sprintf(\"配置项 %s 不合法: %s\", e.Field, e.Reason)\n}\n\nfunc load(name string) error {\n\tif name == \"\" {\n\t\treturn &ConfigError{Field: \"name\", Reason: \"不能为空\"}\n\t}\n\treturn nil\n}\n\nfunc main() {\n\tfmt.Println(load(\"\"))\n}",
+      "lang": "go",
+      "notes": "接收者用指针还是值要前后统一：用值接收者时 T 和 *T 都实现了 error，混着来容易在 errors.As 时取不到目标类型。Error() 只负责拼消息，要让调用方拿到结构化字段就把字段做成导出成员。"
+    },
+    {
+      "title": "errors.Join：把多个错误合成一个",
+      "description": "多个错误同时发生、要一起往上抛时用 errors.Join（Go 1.20+），它把多个错误合成一个 error，消息按行分开。",
+      "code": "errA := errors.New(\"写数据库失败\")\nerrB := errors.New(\"发通知失败\")\n\nerr := errors.Join(errA, errB)\nfmt.Println(err)                  // 两行错误信息\nfmt.Println(errors.Is(err, errA)) // true：合成后照样找得到",
+      "lang": "go",
+      "notes": "全是 nil 时 errors.Join 返回 nil，所以可以直接 return errors.Join(a, b)。合成后的错误只有 Unwrap() []error、没有 Unwrap() error，所以 errors.Unwrap 对它返回 nil，得用 errors.Is / errors.As 找里面的错误。"
+    },
+    {
+      "title": "fmt.Errorf 里写多个 %w：一次包住几个错误",
+      "description": "Go 1.20 起一个 fmt.Errorf 里可以写多个 %w，同时包装几个错误，之后 errors.Is / errors.As 都能查到其中任意一个。",
+      "code": "diskFull := errors.New(\"磁盘满\")\noffline := errors.New(\"网络断\")\nerr := fmt.Errorf(\"保存失败: %w, %w\", diskFull, offline)\n\nfmt.Println(err)                      // 保存失败: 磁盘满, 网络断\nfmt.Println(errors.Is(err, diskFull)) // true\nfmt.Println(errors.Unwrap(err))       // nil：一次包了多个，拆不开",
+      "lang": "go",
+      "notes": "包了多个错误之后 errors.Unwrap 返回 nil，因为「被包的那一层」不是一个。这种写法比 errors.Join 更常用：既带得上上下文文本，又能一次包住多个错误。"
+    },
+    {
+      "title": "fmt.Sprintf：先把内容拼成字符串",
+      "description": "要把内容拼成字符串再拿去别处用（写日志、拼 SQL、做模板）就用 fmt.Sprintf：它返回字符串，本身不打印任何东西。",
+      "code": "name := \"张三\"\nage := 18\n\nmsg := fmt.Sprintf(\"用户 %s（%d 岁）已创建\", name, age)\nfmt.Println(msg)",
+      "lang": "go",
+      "notes": "Sprintf 不输出任何东西，返回值必须接住，忘了接收就等于什么都没做。要直接打印就用 fmt.Printf / fmt.Println，没必要先 Sprintf 再 Println。"
+    },
+    {
+      "title": "fmt 常用动词：%v %s %d %q %T %x %f",
+      "description": "打印时按类型挑动词：%v 万能、%s 字符串、%d 整数、%q 带引号的字符串、%T 打印类型、%x 十六进制、%f 浮点数。",
+      "code": "name := \"go\"\ncount := 3\nprice := 9.99\n\nfmt.Printf(\"%v %s %d %q %T\\n\", name, name, count, name, price)\nfmt.Printf(\"%x %x\\n\", 255, \"go\")\nfmt.Printf(\"%f %.2f\\n\", price, price)",
+      "lang": "go",
+      "notes": "%v 对任何值都能用，打印结构体最省事。%q 会给字符串加引号并转义，调试 JSON 文本时很顺手。%f 默认六位小数，要两位用 %.2f。%x 也能打字符串（逐字节的十六进制）。"
+    },
+    {
+      "title": "%+v：把细节打全",
+      "description": "%v 打结构体只给值，%+v 连字段名一起给；%+v 还是错误类型显示更多细节的入口——让错误类型实现 fmt.Formatter，就能把整条错误链一起打出来。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\ntype Config struct {\n\tName string\n\tPort int\n}\n\n// ChainError 让 %+v 打出底层错误\ntype ChainError struct {\n\tMsg string\n\tErr error\n}\n\nfunc (e *ChainError) Error() string { return e.Msg }\n\nfunc (e *ChainError) Format(s fmt.State, verb rune) {\n\tfmt.Fprint(s, e.Msg)\n\tif s.Flag('+') && e.Err != nil {\n\t\tfmt.Fprintf(s, \"\\n底层错误: %v\", e.Err)\n\t}\n}\n\nfunc main() {\n\tcfg := Config{Name: \"api\", Port: 8080}\n\tfmt.Printf(\"%v\\n\", cfg)  // {api 8080}\n\tfmt.Printf(\"%+v\\n\", cfg) // {Name:api Port:8080}\n\n\terr := &ChainError{Msg: \"保存配置失败\", Err: errors.New(\"磁盘只读\")}\n\tfmt.Printf(\"%v\\n\", err)  // 保存配置失败\n\tfmt.Printf(\"%+v\\n\", err) // 保存配置失败 + 底层错误: 磁盘只读\n}",
+      "lang": "go",
+      "notes": "普通 error 的 %+v 和 %v 完全一样（都只调用 Error()），不会自动展开错误链；想让 %+v 多打点东西，得让类型自己实现 Format 方法。s.Flag('+') 就是在判断这次打印带没带 + 号。"
+    },
+    {
+      "title": "fmt.Println 和 fmt.Print：差一个换行",
+      "description": "Print 系列不换行，Println 在末尾自动加一个换行。日常输出用 Println，只有想自己控制输出长什么样时才用 Print。",
+      "code": "fmt.Print(\"第一行\")\nfmt.Print(\"第二行\\n\")\nfmt.Println(\"第三行\")",
+      "lang": "go",
+      "notes": "Print 不换行，两次 Print 的内容会粘在一起（上面前两行连成了一行）。Println 的参数之间会自动加空格、末尾补一个换行；Printf 有格式串但同样不换行。"
+    },
+    {
+      "title": "组合示例：把错误处理和格式化用起来",
+      "description": "把这一组的东西放在一起：哨兵错误 + %w 包装用 errors.Is 判断，errors.As 取出自定义错误类型，errors.Unwrap 拆链，errors.Join 合并错误，再用 fmt 的动词和 %+v 把结果打出来。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar ErrNotFound = errors.New(\"用户不存在\")\n\ntype ValidationError struct {\n\tField  string\n\tReason string\n}\n\nfunc (e *ValidationError) Error() string {\n\treturn fmt.Sprintf(\"字段 %s 不合法: %s\", e.Field, e.Reason)\n}\n\ntype User struct {\n\tName string\n\tAge  int\n}\n\nfunc findUser(id int) error {\n\tif id == 0 {\n\t\treturn fmt.Errorf(\"查找用户 %d 失败: %w\", id, ErrNotFound)\n\t}\n\treturn nil\n}\n\nfunc validate(name string) error {\n\tif name == \"\" {\n\t\treturn &ValidationError{Field: \"name\", Reason: \"不能为空\"}\n\t}\n\treturn nil\n}\n\nfunc main() {\n\t// 哨兵错误 + errors.Is\n\terr := findUser(0)\n\tfmt.Println(\"错误信息:\", err)\n\tfmt.Println(\"是「用户不存在」吗?\", errors.Is(err, ErrNotFound))\n\n\t// 自定义错误类型 + errors.As\n\tvar ve *ValidationError\n\tif errors.As(validate(\"\"), &ve) {\n\t\tfmt.Printf(\"出错的字段: %s（原因: %v）\\n\", ve.Field, ve.Reason)\n\t}\n\n\t// 拆开一层错误链\n\tfmt.Println(\"拆开后:\", errors.Unwrap(err))\n\n\t// 多个错误合成一个\n\tjoined := errors.Join(errors.New(\"写库失败\"), errors.New(\"发通知失败\"))\n\tfmt.Println(\"合并后的错误:\\n\" + joined.Error())\n\n\t// fmt 的常用动词与 %+v\n\tu := User{Name: \"张三\", Age: 18}\n\tfmt.Printf(\"%v|%s|%d|%q|%T|%x|%.2f\\n\", u, u.Name, u.Age, u.Name, u.Age, 255, 9.99)\n\tfmt.Printf(\"%%v  %v\\n\", u)\n\tfmt.Printf(\"%%+v %+v\\n\", u)\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

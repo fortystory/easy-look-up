@@ -1,0 +1,111 @@
+{
+  "id": "concurrency",
+  "title": "并发",
+  "entries": [
+    {
+      "title": "启动 goroutine",
+      "description": "用 go 语句启动一个新的 goroutine：调用已有的函数写 go f()，临时逻辑写成 go func() { ... }()。",
+      "code": "go func() {\n\tfmt.Println(\"子 goroutine\")\n}()\nfmt.Println(\"主 goroutine\")",
+      "lang": "go",
+      "notes": "go 只是把函数丢到后台排队，不会立刻执行，谁先跑不确定。主 goroutine 一结束，整个程序就结束，后台的 goroutine 可能还没跑完就被掐掉。"
+    },
+    {
+      "title": "用 WaitGroup 等一组 goroutine",
+      "description": "要等一批 goroutine 全部做完，用 sync.WaitGroup：Add 计数、Done 减一、Wait 等到计数归零。",
+      "code": "var wg sync.WaitGroup\nwg.Add(1) // 计数 +1\ngo func() {\n\tdefer wg.Done() // 结束时计数 -1\n\tfmt.Println(\"子任务完成\")\n}()\nwg.Wait() // 等计数归零",
+      "lang": "go",
+      "notes": "Add 和 Done 必须配平，漏掉一次 Done，Wait 就永远卡住。计数已经是 0 时再调 Wait 会立刻返回，别拿它当同步手段。"
+    },
+    {
+      "title": "WaitGroup 的 Add 必须在 go 之前",
+      "description": "wg.Add(n) 是在告诉 WaitGroup「还有 n 个任务没结束」，所以必须写在启动 goroutine 之前。",
+      "code": "var wg sync.WaitGroup\ngo func() {\n\twg.Add(1) // 错误示范：Add 放晚了\n\tdefer wg.Done()\n\tfmt.Println(\"子任务完成\")\n}()\nwg.Wait() // 可能在 Add 之前就返回了",
+      "lang": "go",
+      "notes": "Add 写在 goroutine 内部时，Wait 可能已经返回，主流程会误以为任务都做完了，后台还在跑。正确顺序是 wg.Add(1) → go func() { defer wg.Done(); ... }() → wg.Wait()。"
+    },
+    {
+      "title": "channel：创建、发送、接收",
+      "description": "channel 是 goroutine 之间传数据的管道，类型在创建时定死：make 创建，ch <- v 发送，v := <-ch 接收。",
+      "code": "ch := make(chan int) // 创建无缓冲 channel\nch <- 42             // 发送\nv := <-ch            // 接收\nfmt.Println(v)",
+      "lang": "go",
+      "notes": "发送和接收默认都是阻塞的，要两边都就绪才继续。channel 是引用类型，可以直接当参数传给别的 goroutine。也可以只写方向：chan<- int 只写、<-chan int 只读。"
+    },
+    {
+      "title": "channel 会阻塞：没人接收就死锁",
+      "description": "无缓冲 channel 的发送必须有人同时接收才能完成，否则发送方会一直卡住。",
+      "code": "ch := make(chan int) // 无缓冲 channel\nch <- 1              // 没有接收者，永久阻塞\nfmt.Println(<-ch)    // 这一行永远执行不到",
+      "lang": "go",
+      "notes": "运行这个片段会直接退出：fatal error: all goroutines are asleep - deadlock!。所有 goroutine 都在等 channel、又没有发送方时，Go 就判定成死锁。避免办法是加缓冲，或者用 select 配一个超时分支。"
+    },
+    {
+      "title": "close 与 range 遍历 channel",
+      "description": "发送方用 close(ch) 关闭 channel，接收方就能用 for range 把它遍历完，遍历到 channel 关闭时自动结束。",
+      "code": "ch := make(chan int, 2)\nch <- 1\nch <- 2\nclose(ch)           // 关闭 channel\nfor v := range ch { // 遍历到 channel 关闭为止\n\tfmt.Println(v)\n}",
+      "lang": "go",
+      "notes": "关闭之后只能接收、不能再发送。range 依赖关闭信号：发送方不 close，接收方就会一直等下去。重复 close 同一个 channel 会 panic。"
+    },
+    {
+      "title": "往已关闭的 channel 发送会 panic",
+      "description": "close 之后还往 channel 发送数据会 panic，这是运行期错误，编译器发现不了。",
+      "code": "ch := make(chan int, 1)\nclose(ch)\nch <- 1 // panic: send on closed channel",
+      "lang": "go",
+      "notes": "报错是 panic: send on closed channel，整个程序直接崩掉。记住规则：关闭由发送方负责，关闭之后不再发送；有多个发送方时，用一个额外的信号 channel 通知「没有更多数据了」。"
+    },
+    {
+      "title": "select：多个 channel 里挑一个",
+      "description": "select 可以同时等好几个 channel，哪个先就绪就走哪一条分支，常用来监听多个数据源。",
+      "code": "ch1, ch2 := make(chan string), make(chan string)\ngo func() { ch1 <- \"一\" }()\ngo func() { ch2 <- \"二\" }()\nselect {\ncase v := <-ch1:\n\tfmt.Println(\"收到\", v)\ncase v := <-ch2:\n\tfmt.Println(\"收到\", v)\n}",
+      "lang": "go",
+      "notes": "多个 case 同时就绪时选哪一个是随机的。select 里没有就绪的分支时它会一直阻塞，所以经常要配一个超时分支；一个 case 都没有就写 default。"
+    },
+    {
+      "title": "select + default：不等也能返回",
+      "description": "select 里加上 default 分支就是非阻塞的：没有 case 就绪时立刻走 default，不等任何人。",
+      "code": "ch := make(chan int)\nselect {\ncase v := <-ch:\n\tfmt.Println(\"收到\", v)\ndefault:\n\tfmt.Println(\"没有数据，立刻返回\")\n}",
+      "lang": "go",
+      "notes": "default 必须写在 select 的最后面。典型用法是「先看看有没有数据，没有就算了」，避免把 goroutine 卡死在那儿。"
+    },
+    {
+      "title": "带缓冲的 channel",
+      "description": "make(chan int, n) 创建带缓冲的 channel：缓冲没满时发送不阻塞，缓冲没空时接收不阻塞。",
+      "code": "ch := make(chan int, 2) // 容量 2\nch <- 1\nch <- 2\nfmt.Println(len(ch)) // 缓冲里还没取走的个数",
+      "lang": "go",
+      "notes": "不带容量的 make(ch) 是无缓冲的，发送必须马上有人接收。缓冲满了发送方才会阻塞，缓冲空了接收方才会阻塞。len(ch) 是当前缓冲里的元素个数，cap(ch) 是容量。"
+    },
+    {
+      "title": "Mutex 互斥锁",
+      "description": "多个 goroutine 要改同一份数据时，用 sync.Mutex 互斥锁：Lock 拿锁，Unlock 放锁，临界区同一时刻只进一个 goroutine。",
+      "code": "var mu sync.Mutex\ncounter := 0\nmu.Lock()         // 上锁\ndefer mu.Unlock() // 函数退出时解锁\ncounter++         // 临界区\nfmt.Println(counter)",
+      "lang": "go",
+      "notes": "固定写法是 mu.Lock() 后面紧跟 defer mu.Unlock()，这样中途 return 或 panic 也会解锁；少了 Unlock 就会永久卡死。defer 在函数返回时才执行，所以临界区会一直持续到函数结束，别在持锁期间做慢操作。"
+    },
+    {
+      "title": "RWMutex 读写锁",
+      "description": "读多写少的时候用 sync.RWMutex：RLock 是共享的（多个读者能同时进），Lock 是独占的（写的时候谁都不能进）。",
+      "code": "var mu sync.RWMutex\ndata := map[string]int{\"a\": 1}\nmu.RLock() // 读锁：多个读者可以同时进\nv := data[\"a\"]\nmu.RUnlock() // 读完就放\nmu.Lock()    // 写锁：独占，其它读写都排队\ndata[\"a\"] = v + 1\nmu.Unlock()",
+      "lang": "go",
+      "notes": "同一个 goroutine 里先 RLock 再 Lock 会死锁：读锁还没放就想要写锁。RLock 要配对 RUnlock。读写比例差不多时用 Mutex 就够了，RWMutex 本身有额外开销。"
+    },
+    {
+      "title": "并发访问 map 要加锁",
+      "description": "map 不是并发安全的：多个 goroutine 同时写同一个 map 会直接崩掉。要么用互斥锁包住所有读写，要么用 sync.Map。",
+      "code": "var mu sync.Mutex\ncounts := map[string]int{} // 普通 map：并发读写必须加锁\nmu.Lock()\ncounts[\"a\"]++\nmu.Unlock()\nvar m sync.Map // 读多写少、key 类型不固定时可以用它\nm.Store(\"k\", 1)\nv, _ := m.Load(\"k\")\nfmt.Println(counts[\"a\"], v)",
+      "lang": "go",
+      "notes": "不加锁时的报错是 fatal error: concurrent map writes，程序直接退出，recover 都救不回来。sync.Map 的 API 和普通 map 不一样：Store、Load、LoadOrStore、Range，它适合读多写少、key 类型不固定的情况；只是偶尔读写同一个 map，用 Mutex 更简单。"
+    },
+    {
+      "title": "goroutine 泄露",
+      "description": "goroutine 泄露就是 goroutine 一直不退出：它的栈和内存被一直占着，程序跑得越久泄漏得越多。",
+      "code": "ch := make(chan int)\ngo func() {\n\tch <- 1 // 永远没人接收，这个 goroutine 就一直卡着\n}()\ntime.Sleep(100 * time.Millisecond)\nfmt.Println(\"主流程结束了，但那个 goroutine 还卡在发送上\")",
+      "lang": "go",
+      "notes": "常见原因：往没人接收的 channel 发送、接收方等一个永远不会来的数据、忘记 close 导致 range 一直等。避免办法：给每个 goroutine 一条明确的退出路径，比如用 context 取消或者 select 加超时分支，不要让它无限期地等下去。"
+    },
+    {
+      "title": "组合示例：并发处理一批任务",
+      "description": "把这一组的东西放在一起：goroutine 并行干活、WaitGroup 等全部结束、带缓冲的 channel 传数据、close 加 range 收尾、Mutex 保护共享计数、select 等信号。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync\"\n\t\"time\"\n)\n\nfunc greet(name string) {\n\tfmt.Println(\"你好，\", name)\n}\n\nfunc main() {\n\tvar wg sync.WaitGroup\n\tvar mu sync.Mutex\n\ttotal := 0\n\n\tjobs := make(chan int, 3) // 带缓冲的 channel\n\tresults := make(chan string, 3)\n\n\t// 两个 worker 并行处理任务\n\tfor id := 1; id <= 2; id++ {\n\t\twg.Add(1)\n\t\tgo func(id int) {\n\t\t\tdefer wg.Done()\n\t\t\tfor job := range jobs {\n\t\t\t\tresults <- fmt.Sprintf(\"worker %d 完成任务 %d\", id, job)\n\t\t\t\tmu.Lock()\n\t\t\t\ttotal++\n\t\t\t\tmu.Unlock()\n\t\t\t}\n\t\t}(id)\n\t}\n\n\tfor job := 1; job <= 3; job++ {\n\t\tjobs <- job\n\t}\n\tclose(jobs) // worker 的 range 收到关闭信号才会结束\n\n\twg.Wait()\n\tclose(results)\n\n\tfor msg := range results {\n\t\tfmt.Println(msg)\n\t}\n\tfmt.Println(\"共完成\", total, \"个任务\")\n\n\t// select：等完成信号，最多等 1 秒\n\tdone := make(chan struct{})\n\tgo func() {\n\t\ttime.Sleep(100 * time.Millisecond)\n\t\tclose(done)\n\t}()\n\tselect {\n\tcase <-done:\n\t\tfmt.Println(\"收到完成信号\")\n\tcase <-time.After(time.Second):\n\t\tfmt.Println(\"超时了\")\n\t}\n\n\tgo greet(\"并发世界\")\n\ttime.Sleep(50 * time.Millisecond)\n}",
+      "lang": "go",
+      "notes": "顺序很关键：先 Add 再 go，goroutine 里第一行 defer wg.Done()；发送方负责 close，接收方才能 range 结束；共享数据用 Mutex 包住；等信号用 select 配一个超时兜底。"
+    }
+  ]
+}

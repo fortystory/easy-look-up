@@ -1,0 +1,111 @@
+{
+  "id": "os",
+  "title": "文件与 I/O",
+  "entries": [
+    {
+      "title": "os.ReadFile：把整个文件读进来",
+      "description": "小文件一次性读完就用它，返回文件内容的字节切片。读配置、读模板这类一次性读取的场景最省事。",
+      "code": "data, err := os.ReadFile(\"config.json\")\nif err != nil {\n\tfmt.Println(\"读取失败:\", err)\n\treturn\n}\nfmt.Println(\"内容:\", string(data))",
+      "lang": "go",
+      "notes": "文件不存在或没权限都返回 error，不会 panic。一次性把整个文件装进内存，文件大到几百 MB 会把内存吃紧，这时改用 bufio.Scanner 逐行读。"
+    },
+    {
+      "title": "os.WriteFile：把内容一次性写进文件",
+      "description": "整个文件重写一遍时用它，不用自己先 Create 再 Write。写之前先确认目录存在。",
+      "code": "dir, err := os.MkdirTemp(\"\", \"demo\")\nif err != nil {\n\tpanic(err)\n}\ndefer os.RemoveAll(dir)\n\npath := filepath.Join(dir, \"out.txt\")\nerr = os.WriteFile(path, []byte(\"hello\\n\"), 0644)\nfmt.Println(\"写入结果:\", err)",
+      "lang": "go",
+      "notes": "第三个参数是权限位，只在文件被创建时生效，文件已存在时不会改权限。文件已存在会被整个覆盖，想追加得用 os.OpenFile 配 os.O_APPEND。"
+    },
+    {
+      "title": "os.Create：新建文件并往里写",
+      "description": "要往文件里分段写内容时用它：先拿到文件句柄，再多次 Write，最后关掉。",
+      "code": "dir, err := os.MkdirTemp(\"\", \"demo\")\nif err != nil {\n\tpanic(err)\n}\ndefer os.RemoveAll(dir)\n\nf, err := os.Create(filepath.Join(dir, \"note.txt\"))\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\n_, err = f.WriteString(\"第一行\\n\")\nfmt.Println(\"写入结果:\", err)",
+      "lang": "go",
+      "notes": "Create 等价于 OpenFile 加 O_RDWR|O_CREATE|O_TRUNC：文件不存在就建，存在就清空。返回的是 *os.File，用完必须 Close。只写不读就用 WriteString、Write。"
+    },
+    {
+      "title": "os.OpenFile：按标志打开文件",
+      "description": "要控制读还是写、要不要新建、要不要追加时用它，标志用 | 组合起来传。",
+      "code": "dir, err := os.MkdirTemp(\"\", \"demo\")\nif err != nil {\n\tpanic(err)\n}\ndefer os.RemoveAll(dir)\n\npath := filepath.Join(dir, \"data.log\")\nf, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\n_, err = f.WriteString(\"追加一行\\n\")\nfmt.Println(\"写入结果:\", err)",
+      "lang": "go",
+      "notes": "常用标志：O_RDONLY 只读、O_WRONLY 只写、O_RDWR 读写、O_CREATE 不存在就建、O_TRUNC 打开就清空、O_APPEND 往末尾追加。只读文件用 os.Open 更简单，它就是 OpenFile 加 O_RDONLY。"
+    },
+    {
+      "title": "defer f.Close()：文件用完必须关",
+      "description": "文件描述符是系统资源，进程退出才释放。用完立刻 defer Close，别等函数末尾。",
+      "code": "f, err := os.Open(\"data.txt\")\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\nbuf := make([]byte, 1024)\nn, err := f.Read(buf)\nfmt.Println(\"读到\", n, \"字节\", err)",
+      "lang": "go",
+      "notes": "不关文件的话，开够数量就报 too many open files。defer 要紧跟在打开成功之后写，中途 return 也能关掉。只读整个文件时用 os.ReadFile，它内部已经帮你关好了。"
+    },
+    {
+      "title": "bufio.NewReader：带缓冲地读",
+      "description": "按行或按块读文件时用它，它一次读一大块到缓冲区，减少系统调用次数。",
+      "code": "f, err := os.Open(\"data.txt\")\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\nreader := bufio.NewReader(f)\nline, err := reader.ReadString('\\n')\nfmt.Println(strings.TrimSpace(line), err)",
+      "lang": "go",
+      "notes": "ReadString 一直读到分隔符才返回；读到文件末尾还没遇到分隔符时，内容照样返回，但 err 是 io.EOF。按固定长度读用 reader.Read(buf)，只想看一眼不消费用 reader.Peek(n)。"
+    },
+    {
+      "title": "bufio.NewScanner：逐行扫描",
+      "description": "处理文本文件最常用的写法：一行一行读，每行拿到的是去掉换行符的字符串。",
+      "code": "f, err := os.Open(\"data.txt\")\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\nscanner := bufio.NewScanner(f)\nfor scanner.Scan() {\n\tfmt.Println(scanner.Text())\n}\nfmt.Println(\"扫描错误:\", scanner.Err())",
+      "lang": "go",
+      "notes": "Scan 返回 false 有两种情况：读完了，或者出错了。一定要再检查 scanner.Err()，否则出错会被当成正常结束。Text() 返回当前行的内容，不含行尾的换行符。"
+    },
+    {
+      "title": "bufio.Scanner 逐行读大文件",
+      "description": "日志、导出数据这类大文件用 Scanner 逐行处理，内存里只留一行，不会把整个文件读进来。",
+      "code": "f, err := os.Open(\"big.log\")\nif err != nil {\n\tpanic(err)\n}\ndefer f.Close()\n\nscanner := bufio.NewScanner(f)\nhits := 0\nfor scanner.Scan() {\n\tif strings.Contains(scanner.Text(), \"ERROR\") {\n\t\thits++\n\t}\n}\nfmt.Println(\"匹配行数:\", hits, \"错误:\", scanner.Err())",
+      "lang": "go",
+      "notes": "Scanner 默认一行最长 64KB，超了会返回 bufio.ErrTooLong；遇到超长行要用 scanner.Buffer 调大上限。大文件用 Scanner、小文件用 os.ReadFile 是常见分工。"
+    },
+    {
+      "title": "io.ReadAll 与 io.Copy：读完一个流，或把流搬走",
+      "description": "ReadAll 把一个 Reader 全部读完，Copy 把数据从一个流搬到另一个流。读写 HTTP 响应体、复制文件都用得上。",
+      "code": "r := strings.NewReader(\"hello\\nworld\\n\")\n\ndata, err := io.ReadAll(r)\nfmt.Println(\"读到:\", string(data), err)\n\nvar buf bytes.Buffer\nn, err := io.Copy(&buf, strings.NewReader(\"copy me\"))\nfmt.Println(\"复制\", n, \"字节:\", buf.String(), err)",
+      "lang": "go",
+      "notes": "ReadAll 会把整个流装进内存，读 HTTP 响应体常用（io.ReadAll(resp.Body)）。Copy 内部用缓冲区循环搬运，不会把整个内容读进内存，文件之间复制用它最合适。"
+    },
+    {
+      "title": "os.Stat 与 FileInfo：查文件属性",
+      "description": "想知道文件多大、是不是目录、什么时候改过的，用 os.Stat 拿 FileInfo。",
+      "code": "info, err := os.Stat(\"main.go\")\nif err != nil {\n\tpanic(err)\n}\n\nfmt.Println(\"大小:\", info.Size(), \"字节\")\nfmt.Println(\"是不是目录:\", info.IsDir())\nfmt.Println(\"权限:\", info.Mode())\nfmt.Println(\"修改时间:\", info.ModTime())",
+      "lang": "go",
+      "notes": "文件不存在时返回 error，用 os.IsNotExist(err) 判断。Stat 查的是符号链接本身，要看链接指向的目标用 os.Lstat。要列出目录里的内容用 os.ReadDir。"
+    },
+    {
+      "title": "os.MkdirAll、os.Remove、os.RemoveAll：建目录和删目录",
+      "description": "建多级目录用 MkdirAll，删单个文件或空目录用 Remove，删整棵目录树用 RemoveAll。",
+      "code": "dir, err := os.MkdirTemp(\"\", \"demo\")\nif err != nil {\n\tpanic(err)\n}\ndefer os.RemoveAll(dir)\n\nsub := filepath.Join(dir, \"a\", \"b\")\nif err := os.MkdirAll(sub, 0755); err != nil {\n\tpanic(err)\n}\n\nfile := filepath.Join(sub, \"f.txt\")\nif err := os.WriteFile(file, []byte(\"x\"), 0644); err != nil {\n\tpanic(err)\n}\n\nfmt.Println(\"删文件:\", os.Remove(file))\nfmt.Println(\"删目录树:\", os.RemoveAll(filepath.Join(dir, \"a\")))",
+      "lang": "go",
+      "notes": "MkdirAll 会把缺的父目录一起建出来，目录已存在也不报错。Remove 只能删空目录，里面有东西会返回 error。RemoveAll 连目录带内容一起删，路径不存在也不报错，所以调用前要确认路径没写错。"
+    },
+    {
+      "title": "os.Rename：改名和移动",
+      "description": "改文件名、或者把文件挪到别的目录，用它一步完成。",
+      "code": "dir, err := os.MkdirTemp(\"\", \"demo\")\nif err != nil {\n\tpanic(err)\n}\ndefer os.RemoveAll(dir)\n\noldPath := filepath.Join(dir, \"old.txt\")\nnewPath := filepath.Join(dir, \"new.txt\")\n\nif err := os.WriteFile(oldPath, []byte(\"data\"), 0644); err != nil {\n\tpanic(err)\n}\n\nerr = os.Rename(oldPath, newPath)\nfmt.Println(\"改名结果:\", err)",
+      "lang": "go",
+      "notes": "目标已存在时 Unix 直接覆盖，Windows 会失败。跨文件系统（比如从 /tmp 挪到另一个挂载点）会报 invalid cross-device link，这时得先复制再删。"
+    },
+    {
+      "title": "os.Getenv、os.Setenv、os.LookupEnv：环境变量",
+      "description": "读配置项最常见的方式就是环境变量：Setenv 设置，Getenv 读取，LookupEnv 顺便告诉你设没设过。",
+      "code": "os.Setenv(\"APP_ENV\", \"dev\")\n\nfmt.Println(\"APP_ENV:\", os.Getenv(\"APP_ENV\"))\nfmt.Println(\"没设置时:\", os.Getenv(\"NOT_SET\"))\n\nvalue, ok := os.LookupEnv(\"APP_ENV\")\nfmt.Println(\"存在:\", ok, \"值:\", value)",
+      "lang": "go",
+      "notes": "Getenv 没设置时返回空字符串，分不清「没设置」和「设置成了空值」，要区分就用 LookupEnv，它多返回一个 ok。Setenv 只影响当前进程和它的子进程，改不了父进程的环境变量。"
+    },
+    {
+      "title": "filepath.Join、Base、Ext、Dir：拼路径和拆路径",
+      "description": "拼目录用 Join，取文件名用 Base，取扩展名用 Ext，取所在目录用 Dir，路径处理全交给 filepath。",
+      "code": "path := filepath.Join(\"data\", \"logs\", \"app.log\")\n\nfmt.Println(\"完整路径:\", path)\nfmt.Println(\"文件名:\", filepath.Base(path))\nfmt.Println(\"扩展名:\", filepath.Ext(path))\nfmt.Println(\"所在目录:\", filepath.Dir(path))",
+      "lang": "go",
+      "notes": "Join 会按当前操作系统的分隔符拼路径，还顺手去掉多余的分隔符，别自己拿 / 拼。Ext 返回的扩展名带点（\".log\"）。path 包只处理用斜杠的路径，路径里有分隔符就用 filepath。"
+    },
+    {
+      "title": "组合示例：文件与 I/O 的完整流程",
+      "description": "把这一组串起来：环境变量决定文件名，临时目录里建好目录，写入源文件，用 Scanner 逐行统计，用 io.Copy 复制，再改名、看属性、读回内容、清理。",
+      "code": "package main\n\nimport (\n\t\"bufio\"\n\t\"fmt\"\n\t\"io\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"strings\"\n)\n\nfunc main() {\n\t// 环境变量：没设置就用默认值\n\tos.Setenv(\"APP_ENV\", \"dev\")\n\tenv, ok := os.LookupEnv(\"APP_ENV\")\n\tfmt.Println(\"运行环境:\", env, \"存在:\", ok)\n\n\tname := os.Getenv(\"OUT_NAME\")\n\tif name == \"\" {\n\t\tname = \"report.txt\"\n\t}\n\n\t// 临时工作目录，退出时整体删掉\n\tdir, err := os.MkdirTemp(\"\", \"demo\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer os.RemoveAll(dir)\n\n\twork := filepath.Join(dir, \"work\")\n\tif err := os.MkdirAll(work, 0755); err != nil {\n\t\tpanic(err)\n\t}\n\n\tsrc := filepath.Join(work, \"source.txt\")\n\tif err := os.WriteFile(src, []byte(\"alpha\\nbeta\\ngamma\\n\"), 0644); err != nil {\n\t\tpanic(err)\n\t}\n\n\t// 用 Scanner 逐行读，统计含 a 的行\n\tf, err := os.Open(src)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer f.Close()\n\n\tscanner := bufio.NewScanner(f)\n\thits := 0\n\tfor scanner.Scan() {\n\t\tif strings.Contains(scanner.Text(), \"a\") {\n\t\t\thits++\n\t\t}\n\t}\n\tif err := scanner.Err(); err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(\"含 a 的行数:\", hits)\n\n\t// 用 io.Copy 把源文件复制成目标文件\n\tdst := filepath.Join(work, name)\n\tout, err := os.Create(dst)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer out.Close()\n\n\tin, err := os.Open(src)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer in.Close()\n\n\tn, err := io.Copy(out, in)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(\"复制字节数:\", n)\n\n\t// 改名，再看文件属性\n\tfinal := filepath.Join(work, \"final.txt\")\n\tif err := os.Rename(dst, final); err != nil {\n\t\tpanic(err)\n\t}\n\n\tinfo, err := os.Stat(final)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(\"文件:\", filepath.Base(final), \"扩展名:\", filepath.Ext(final), \"大小:\", info.Size())\n\n\t// 读回来确认内容\n\tdata, err := os.ReadFile(final)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(\"内容:\", strings.TrimSpace(string(data)))\n\n\t// 删掉不再需要的源文件\n\tif err := os.Remove(src); err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(\"源文件已删除\")\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

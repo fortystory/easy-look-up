@@ -1,0 +1,111 @@
+{
+  "id": "loops",
+  "title": "循环",
+  "entries": [
+    {
+      "title": "for 的三段式循环",
+      "description": "最常见的写法：初始化、判断、步进三段用分号隔开。计数、求和、按位置取数据都靠它。",
+      "code": "for i := 0; i < 3; i++ {\n\tfmt.Println(i)\n}",
+      "lang": "go",
+      "notes": "循环变量 i 的作用域只在 for 语句内。步进里写 i++、i--、i += 2 都行，但别忘了写，否则死循环。"
+    },
+    {
+      "title": "for 只有条件",
+      "description": "省掉初始化和步进，就是别的语言里的 while。适合「不知道要循环几次、只知道什么时候该停」的场景。",
+      "code": "i := 0\nfor i < 3 {\n\tfmt.Println(i)\n\ti++\n}",
+      "lang": "go",
+      "notes": "条件要自己改，否则永远是 true。步进忘了写在循环体里就会变成死循环。"
+    },
+    {
+      "title": "for {} 死循环",
+      "description": "条件全省掉就是无限循环，服务端的常驻主循环常这么写。只能靠 break、return 或者 panic 结束。",
+      "code": "i := 0\nfor {\n\ti++\n\tif i == 3 {\n\t\tbreak\n\t}\n}\nfmt.Println(i)",
+      "lang": "go",
+      "notes": "没有出口的 for {} 就是真死循环。这种 for 之后的代码编译器认为不可达，写了也永远执行不到。"
+    },
+    {
+      "title": "range 遍历切片",
+      "description": "range 一次拿到下标和元素，遍历集合的首选，不用手动维护下标。",
+      "code": "nums := []int{10, 20, 30}\nfor i, v := range nums {\n\tfmt.Println(i, v)\n}",
+      "lang": "go",
+      "notes": "range 在开始时就把长度定死了，循环里 append 的新元素不会被遍历到。要边遍历边追加，用 for i := 0; i < len(nums); i++。"
+    },
+    {
+      "title": "range 只要元素",
+      "description": "不要下标时用下划线把它丢掉，比留个闲置变量清楚。",
+      "code": "nums := []int{10, 20, 30}\nfor _, v := range nums {\n\tfmt.Println(v)\n}",
+      "lang": "go",
+      "notes": "只写一个变量时拿到的是下标不是元素——for v := range nums 里的 v 是序号，想要元素必须写成 _, v。"
+    },
+    {
+      "title": "range 遍历 map",
+      "description": "遍历 map 时拿到键和值。只想用键写 for k := range m，只要值就写 _, v。",
+      "code": "m := map[string]int{\"a\": 1, \"b\": 2}\nfor k, v := range m {\n\tfmt.Println(k, v)\n}",
+      "lang": "go",
+      "notes": "遍历顺序是随机的，每次运行都可能不同，不要依赖它。遍历过程中往 map 里加新键，结果也不确定。"
+    },
+    {
+      "title": "range 遍历字符串",
+      "description": "range 遍历字符串时按字符（rune）拆开，中文也能完整取到。左边是字节下标，右边是字符本身。",
+      "code": "s := \"Go语言\"\nfor i, r := range s {\n\tfmt.Printf(\"%d %c\\n\", i, r)\n}",
+      "lang": "go",
+      "notes": "i 是字节偏移不是字符序号：「Go语言」里第一个汉字的下标是 2。别拿 i 去切字符串，否则会切坏 UTF-8。"
+    },
+    {
+      "title": "range 遍历 channel",
+      "description": "range 能直接遍历 channel，从里面取值直到 channel 被关闭。写管道读取循环时用它最省事。",
+      "code": "ch := make(chan int, 3)\nch <- 1\nch <- 2\nclose(ch)\nfor v := range ch {\n\tfmt.Println(v)\n}",
+      "lang": "go",
+      "notes": "channel 没 close 时这个循环不会结束。要拿到关闭状态写 for v, ok := range ch，close 之后 ok 是 false。"
+    },
+    {
+      "title": "range 遍历整数（Go 1.22+）",
+      "description": "Go 1.22 起可以直接 range 一个整数，依次拿到 0 到 n-1，省掉手写计数变量。",
+      "code": "for i := range 3 {\n\tfmt.Println(i)\n}",
+      "lang": "go",
+      "notes": "需要 Go 1.22 及以上，老版本会编译报错。遍历的永远是 0 到 n-1，不含 n 本身。"
+    },
+    {
+      "title": "range 拿到的元素是副本",
+      "description": "range 给的 v 是元素的一份拷贝，改它不会动到原切片。想改元素得靠下标写回。",
+      "code": "nums := []int{1, 2, 3}\nfor i, v := range nums {\n\tfmt.Println(v)\n\tnums[i] = v * 2\n}\nfmt.Println(nums)",
+      "lang": "go",
+      "notes": "改 v 等于白改，操作原数据要写 nums[i] = ...。含指针的值是例外：结构体里的 map、指针字段，副本里仍指向同一份数据。"
+    },
+    {
+      "title": "break 跳出循环",
+      "description": "break 立刻结束当前这一层 for，剩下的语句不再执行。想提前退出某个分支时用它。",
+      "code": "nums := []int{1, 2, 3, 4}\nfor _, v := range nums {\n\tif v == 3 {\n\t\tbreak\n\t}\n\tfmt.Println(v)\n}",
+      "lang": "go",
+      "notes": "break 只作用于最内层的 for 或 switch。嵌套循环里想跳出外层那一层，得用标签。"
+    },
+    {
+      "title": "continue 跳过本轮",
+      "description": "continue 不退出循环，直接进入下一轮。只想处理一部分数据时用它。",
+      "code": "for i := 0; i < 5; i++ {\n\tif i%2 == 0 {\n\t\tcontinue\n\t}\n\tfmt.Println(i)\n}",
+      "lang": "go",
+      "notes": "continue 会照常执行步进语句 i++，不会死循环。但它跳过了本轮后面所有语句，必要逻辑别放在 continue 之后。"
+    },
+    {
+      "title": "带标签的 break",
+      "description": "在 for 前面加个标签名，break 后面写上标签名，就能跳出指定的那一层循环。",
+      "code": "outer:\n\tfor i := 0; i < 3; i++ {\n\t\tfor j := 0; j < 3; j++ {\n\t\t\tif i+j == 2 {\n\t\t\t\tbreak outer\n\t\t\t}\n\t\t\tfmt.Println(i, j)\n\t\t}\n\t}",
+      "lang": "go",
+      "notes": "标签写在语句前面、后面跟冒号，名字自己起。break outer 跳出的是标签所在的那层，不是最近的那层。"
+    },
+    {
+      "title": "带标签的 continue",
+      "description": "continue 加上标签名，可以直接跳到标签所在循环的下一轮，内层循环剩下的部分整个跳过。",
+      "code": "outer:\n\tfor i := 0; i < 3; i++ {\n\t\tfor j := 0; j < 3; j++ {\n\t\t\tif j == 1 {\n\t\t\t\tcontinue outer\n\t\t\t}\n\t\t\tfmt.Println(i, j)\n\t\t}\n\t}",
+      "lang": "go",
+      "notes": "continue outer 跳的是外层循环的下一轮，内层循环当场结束。被跳过的代码如果写在内层循环里，就不会执行。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把 for 的几种形式、range 的各种用法、break、continue 和标签放进一个能跑的小程序。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\t// for 的三种形式\n\tfor i := 0; i < 3; i++ {\n\t\tfmt.Println(\"三段式:\", i)\n\t}\n\tj := 0\n\tfor j < 2 {\n\t\tfmt.Println(\"只有条件:\", j)\n\t\tj++\n\t}\n\n\t// range 遍历切片、map、字符串、整数\n\tnums := []int{10, 20}\n\tfor i, v := range nums {\n\t\tfmt.Println(\"切片:\", i, v)\n\t}\n\tscores := map[string]int{\"语文\": 90, \"数学\": 80}\n\tfor k, v := range scores {\n\t\tfmt.Println(\"成绩:\", k, v)\n\t}\n\tfor _, r := range \"Go\" {\n\t\tfmt.Printf(\"字符: %c\\n\", r)\n\t}\n\tfor i := range 2 {\n\t\tfmt.Println(\"序号:\", i)\n\t}\n\n\t// break 和 continue\n\tfor i := 0; i < 4; i++ {\n\t\tif i == 1 {\n\t\t\tcontinue\n\t\t}\n\t\tif i == 3 {\n\t\t\tbreak\n\t\t}\n\t\tfmt.Println(\"结果:\", i)\n\t}\n\n\t// 带标签的 break\nouter:\n\tfor i := 0; i < 2; i++ {\n\t\tfor k := 0; k < 2; k++ {\n\t\t\tif i+k == 1 {\n\t\t\t\tbreak outer\n\t\t\t}\n\t\t\tfmt.Println(\"嵌套:\", i, k)\n\t\t}\n\t}\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

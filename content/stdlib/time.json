@@ -1,0 +1,111 @@
+{
+  "id": "time",
+  "title": "时间",
+  "entries": [
+    {
+      "title": "time.Now()：拿到当前时间",
+      "description": "需要「此刻」就用 time.Now()，它返回一个带时区信息的 time.Time。程序里所有当前时刻都从它拿，别自己拼一个。",
+      "code": "now := time.Now()\nfmt.Println(now)\nfmt.Println(now.Year(), now.Month(), now.Day())\nfmt.Println(now.Weekday(), now.Hour(), now.Minute())",
+      "lang": "go",
+      "notes": "time.Now() 带单调时钟读数，两个它相减得到的是真实经过的时间，不受系统时间被调来调去影响。"
+    },
+    {
+      "title": "time.Duration 与时间单位",
+      "description": "时间间隔用 time.Duration 表示，它其实是 int64，单位是纳秒。time.Second、time.Millisecond 这些是常量，写 90 * time.Second 就有 90 秒。",
+      "code": "d := 90 * time.Second\nfmt.Println(d)\nfmt.Println(d.Minutes(), d.Seconds())\nfmt.Println(1500 * time.Millisecond)",
+      "lang": "go",
+      "notes": "d * time.Second 也能编译，但那是纳秒数再乘 10^9，结果没有意义——倍数应该写 d * 2。"
+    },
+    {
+      "title": "time.Sleep：让程序停一会儿",
+      "description": "调试、重试间隔、模拟延迟时用 time.Sleep，它至少阻塞给定的时长才返回。",
+      "code": "start := time.Now()\ntime.Sleep(100 * time.Millisecond)\nfmt.Println(\"实际耗时\", time.Now().Sub(start))",
+      "lang": "go",
+      "notes": "time.Sleep 睡过了就睡过了，中途醒不来也打断不了；要能提前醒就别用它。"
+    },
+    {
+      "title": "time.After：等到点就超时",
+      "description": "配合 select 用最常见：等到点会收到一个时间值，等不到就走超时分支。",
+      "code": "select {\ncase <-time.After(2 * time.Second):\n\tfmt.Println(\"超时了\")\ncase <-time.After(50 * time.Millisecond):\n\tfmt.Println(\"先到的是这个\")\n}",
+      "lang": "go",
+      "notes": "time.After 返回的 channel 只会有一次值，读过之后不会再有；每次调用都新建一个定时器，放在循环里要当心堆积。"
+    },
+    {
+      "title": "time.NewTimer：能手动控制的定时器",
+      "description": "和 time.After 一样是定时器，但返回 *time.Timer 对象，能提前 Stop，也能从 .C 通道拿到触发时刻。",
+      "code": "timer := time.NewTimer(2 * time.Second)\nfmt.Println(\"等 2 秒\")\n<-timer.C\nfmt.Println(\"时间到\")",
+      "lang": "go",
+      "notes": "定时器触发后往 .C 里写一次值；Stop 成功之后 .C 里不会再有值。"
+    },
+    {
+      "title": "time.AfterFunc：到点自动执行回调",
+      "description": "不想用 select 等，就让 time.AfterFunc 到点自己跑一个函数。回调在独立的 goroutine 里执行，主流程不等它。",
+      "code": "time.AfterFunc(100*time.Millisecond, func() {\n\tfmt.Println(\"回调触发\")\n})\ntime.Sleep(200 * time.Millisecond)\nfmt.Println(\"主流程结束\")",
+      "lang": "go",
+      "notes": "回调里 panic 不会带崩主流程。要拿到定时器本身（比如为了 Stop），用它的返回值 *time.Timer。"
+    },
+    {
+      "title": "Timer.Stop：取消还没触发的定时器",
+      "description": "定时器还没到点就能取消掉。返回 true 表示确实被取消了，返回 false 说明它已经触发过。",
+      "code": "timer := time.NewTimer(5 * time.Second)\nif timer.Stop() {\n\tfmt.Println(\"成功取消\")\n}",
+      "lang": "go",
+      "notes": "Stop 返回 false 时 channel 里可能还留着一个没被读走的时间值，这时 select 会立刻命中，得用 <-timer.C 把残留值排空。"
+    },
+    {
+      "title": "Add：给时间加上、减去一段时长",
+      "description": "time.Time 加上一个 time.Duration 得到新的 time.Time。算截止时间、过期时间都用它。",
+      "code": "now := time.Now()\nlater := now.Add(72 * time.Hour)\nearlier := now.Add(-30 * time.Minute)\nfmt.Println(later, earlier)",
+      "lang": "go",
+      "notes": "time.Time 没有「减一个时长」的方法，要往前挪就 Add 一个负数。Sub 是拿来求两个时间之间的差的。"
+    },
+    {
+      "title": "两个时间相减：Sub 得到 Duration",
+      "description": "想知道「过了多久」，拿一个 time.Time 去减另一个，得到的是 time.Duration，不是时间。",
+      "code": "start := time.Now()\nend := start.Add(90 * time.Second)\nd := end.Sub(start)\nfmt.Println(d, d.Minutes())",
+      "lang": "go",
+      "notes": "结果单位是纳秒。要秒用 d.Seconds()，要分钟用 d.Minutes()，别自己写 d / 1e9。"
+    },
+    {
+      "title": "Before、After、Equal：比较两个时间",
+      "description": "判断先后顺序、是否相等用这三个方法，比直接用 == 可靠。",
+      "code": "t1 := time.Now()\nt2 := t1.Add(time.Hour)\nfmt.Println(t1.Before(t2), t1.After(t2), t1.Equal(t2))",
+      "lang": "go",
+      "notes": "Before/After/Equal 是方法（t.Before(u)），time.After 是包级函数（返回 channel），两个不是一回事。== 还会比较位置指针和单调时钟读数，比时间请用 Equal。"
+    },
+    {
+      "title": "time.Parse 和 time.ParseDuration：解析字符串",
+      "description": "收到一串时间文本要转成 time.Time 用 time.Parse；收到「1h30m」这种时长文本要转成 Duration 用 time.ParseDuration。两者都返回 error。",
+      "code": "t, err := time.Parse(time.RFC3339, \"2026-10-29T16:45:38+08:00\")\nif err != nil {\n\tfmt.Println(\"解析失败:\", err)\n}\nfmt.Println(t)\nd, err := time.ParseDuration(\"1h30m\")\nfmt.Println(\"时长:\", d, err)",
+      "lang": "go",
+      "notes": "time.Parse 的第一个参数是布局（time.RFC3339 这类常量），不是随便一个日期字符串；布局里没写时区偏移时结果按 UTC 算。解析失败返回的是零值 time.Time，别把它当真值用。"
+    },
+    {
+      "title": "Format 和 time.RFC3339：格式化输出",
+      "description": "要给人看的字符串用 Format，跨系统传输用标准常量 time.RFC3339。",
+      "code": "t := time.Now()\nfmt.Println(t.Format(time.RFC3339))\nfmt.Println(t.Format(\"2006-01-02 15:04:05\"))\nfmt.Println(t.Format(\"2006年01月02日\"))",
+      "lang": "go",
+      "notes": "布局串用的是参考时刻 2006-01-02 15:04:05 的写法，不是 YYYY-MM-DD HH:mm:ss。里面的 2006、01、02 分别是年、月、日的占位，换成别的数字含义就变了。"
+    },
+    {
+      "title": "Unix 和 UnixMilli：取 Unix 时间戳",
+      "description": "存数据库、传给别的系统一般用 Unix 时间戳。Unix() 是秒，UnixMilli() 是毫秒。",
+      "code": "t := time.Now()\nfmt.Println(t.Unix())\nfmt.Println(t.UnixMilli())\nfmt.Println(t.UnixNano())",
+      "lang": "go",
+      "notes": "都是自 1970-01-01 UTC 起的整数。毫秒别写 t.Unix() * 1000，那会先把秒截断再放大，直接用 UnixMilli() 才准。"
+    },
+    {
+      "title": "time.Zone 和 time.Local：时区",
+      "description": "想知道某个时间在哪个时区、偏移多少用 Zone()；要换到别的时区显示用 t.In(loc)。",
+      "code": "t := time.Now()\nname, offset := t.Zone()\nfmt.Println(name, offset/3600)\nfmt.Println(t.In(time.Local).Format(time.RFC3339))",
+      "lang": "go",
+      "notes": "Zone 返回的第二个值是距 UTC 的秒数，要小时得自己除 3600。time.Local 是本机时区、time.UTC 是 UTC；容器里 TZ 没设的话 time.Local 可能就是 UTC。"
+    },
+    {
+      "title": "组合示例：把时间这一组用起来",
+      "description": "把这一组的东西串起来：取当前时间、算截止时间、比较、解析字符串、定时器一起用。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\t// 当前时间、格式化与时间戳\n\tnow := time.Now()\n\tfmt.Println(\"现在:\", now.Format(time.RFC3339))\n\tfmt.Println(\"时间戳(毫秒):\", now.UnixMilli())\n\n\t// 时区\n\tzone, offset := now.Zone()\n\tfmt.Println(\"时区:\", zone, \"偏移小时:\", offset/3600)\n\tfmt.Println(\"本地时间:\", now.In(time.Local).Format(\"2006-01-02 15:04:05\"))\n\n\t// 加减、时间差与比较\n\tdeadline := now.Add(30 * time.Minute)\n\tfmt.Println(\"半小时后:\", deadline.Format(\"2006-01-02 15:04:05\"))\n\tfmt.Println(\"相差分钟:\", deadline.Sub(now).Minutes())\n\tfmt.Println(\"已超时?\", now.After(deadline))\n\n\t// 解析时间字符串与时长字符串\n\tparsed, err := time.Parse(time.RFC3339, \"2026-10-29T16:45:38+08:00\")\n\tif err != nil {\n\t\tfmt.Println(\"解析失败:\", err)\n\t\treturn\n\t}\n\tfmt.Println(\"解析得到:\", parsed.Format(\"2006-01-02 15:04:05\"))\n\n\td, err := time.ParseDuration(\"1h30m\")\n\tif err != nil {\n\t\tfmt.Println(\"时长解析失败:\", err)\n\t\treturn\n\t}\n\tfmt.Println(\"时长:\", d)\n\n\t// 定时器: 延时回调与超时等待\n\tstart := time.Now()\n\ttimer := time.AfterFunc(200*time.Millisecond, func() {\n\t\tfmt.Println(\"AfterFunc 回调触发\")\n\t})\n\ttime.Sleep(300 * time.Millisecond)\n\tfmt.Println(\"定时器已触发, Stop 返回:\", timer.Stop())\n\n\tselect {\n\tcase <-time.After(50 * time.Millisecond):\n\t\tfmt.Println(\"等待结束\")\n\tcase <-time.After(2 * time.Second):\n\t\tfmt.Println(\"超时\")\n\t}\n\n\tidle := time.NewTimer(time.Hour)\n\tfmt.Println(\"取消长定时器:\", idle.Stop())\n\tfmt.Println(\"总耗时:\", time.Now().Sub(start))\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

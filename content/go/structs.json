@@ -1,0 +1,113 @@
+{
+  "id": "structs",
+  "title": "结构体与方法",
+  "entries": [
+    {
+      "title": "结构体定义与零值",
+      "description": "用 type 加 struct 把一组字段打包成一个类型。字段名首字母大写表示导出给包外用；不显式初始化时，各字段取各自的零值。",
+      "code": "type Point struct {\n\tX int\n\tY int\n}\n\nvar p Point\np.X = 3\nfmt.Println(p.X, p.Y)",
+      "lang": "go",
+      "notes": "零值结构体往往就能直接用，不必写 `Point{}`。但零值不一定满足业务约束——带必填校验的字段还是得靠构造函数填。"
+    },
+    {
+      "title": "字面量初始化",
+      "description": "两种写法：带字段名（`Point{X: 1}`，顺序随意、可以只写一部分字段）和不带字段名（`Point{1, 2}`，必须按定义顺序写全）。",
+      "code": "type Point struct {\n\tX int\n\tY int\n}\n\na := Point{X: 1, Y: 2}\nb := Point{1, 2}\nfmt.Println(a, b)",
+      "lang": "go",
+      "notes": "不带字段名时顺序必须和定义完全一致，少写一个就编译报错「too few values in struct literal」。字段一多就容易写错，优先用带字段名的写法。"
+    },
+    {
+      "title": "具名字段与匿名字段",
+      "description": "字段只写类型名就是匿名字段（嵌入），写「字段名 类型」就是具名字段。嵌入等于把整个结构体当作一个字段塞进来。",
+      "code": "type Base struct{ ID int }\ntype User struct {\n\tBase\n\tName string\n}\nu := User{Base: Base{ID: 1}, Name: \"张三\"}\nfmt.Println(u.Base.ID, u.Name)",
+      "lang": "go",
+      "notes": "嵌入字段没有自己的名字，用类型名当字段名，所以初始化时写 `Base: Base{...}`。嵌入的类型本身可以是未导出的，包外照样能访问它导出的字段。"
+    },
+    {
+      "title": "字段提升",
+      "description": "嵌入结构体的字段被提升到外层，可以直接访问，不用一层层写 u.Base.ID。",
+      "code": "type Base struct {\n\tID int\n}\ntype User struct {\n\tBase\n}\nu := User{Base: Base{ID: 7}}\nfmt.Println(u.ID)",
+      "lang": "go",
+      "notes": "提升只穿透一层：外层嵌 A、A 又嵌 B 时，B 的字段不会提到最外层，得写 u.A.BID。两层都有同名字段时，以最外层的为准。"
+    },
+    {
+      "title": "方法提升",
+      "description": "嵌入结构体的方法也会提升到外层：u.Describe() 实际调用的是 u.Base.Describe()，不用显式写出嵌入类型。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Base struct {\n\tID int\n}\n\nfunc (b Base) Describe() string {\n\treturn fmt.Sprintf(\"base-%d\", b.ID)\n}\n\ntype User struct {\n\tBase\n}\n\nfunc main() {\n\tu := User{Base: Base{ID: 7}}\n\tfmt.Println(u.Describe())\n}",
+      "lang": "go",
+      "notes": "字段和方法是同一套提升机制。被外层同名字段或方法遮住时，得写全名 u.Base.Describe() 才能调到被遮住的那个。"
+    },
+    {
+      "title": "组合优于继承",
+      "description": "Go 没有类继承。想复用别的类型的行为，就用嵌入（组合）把它的字段和方法拿过来，而不是拉一层继承链。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Logger struct {\n\tPrefix string\n}\n\nfunc (l Logger) Log(msg string) {\n\tfmt.Println(l.Prefix, msg)\n}\n\ntype Service struct {\n\tLogger\n\tName string\n}\n\nfunc main() {\n\ts := Service{Logger: Logger{Prefix: \"svc:\"}, Name: \"order\"}\n\ts.Log(\"started\")\n\tfmt.Println(s.Name)\n}",
+      "lang": "go",
+      "notes": "嵌入不是继承：Service 仍是独立类型，不会隐式变成 Logger 的子类，Logger 也不会自动获得 Service 的东西。组合还能同时嵌多个类型，继承做不到。"
+    },
+    {
+      "title": "值接收者与指针接收者",
+      "description": "接收者既可以写值类型也可以写指针。值接收者拿到的是副本，改副本不影响原对象；指针接收者拿到地址，改的就是原对象。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Point struct {\n\tX int\n\tY int\n}\n\nfunc (p Point) SetX(v int) {\n\tp.X = v\n}\n\nfunc (p *Point) SetY(v int) {\n\tp.Y = v\n}\n\nfunc main() {\n\tp := Point{}\n\tp.SetX(1)\n\tp.SetY(2)\n\tfmt.Println(p)\n}",
+      "lang": "go",
+      "notes": "输出是 {0 2}：SetX 改的是副本，p.X 还是 0。Go 的惯例是——方法要改状态就用指针接收者，并且同一个类型上别混用两种接收者。"
+    },
+    {
+      "title": "方法集",
+      "description": "值类型 T 的方法集只包含值接收者的方法，指针类型 *T 的方法集两者都有。方法集决定一个类型能不能满足某个接口。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype T struct{}\n\nfunc (t T) Name() string {\n\treturn \"t\"\n}\n\ntype Namer interface {\n\tName() string\n}\n\nfunc main() {\n\tvar v Namer = T{}\n\tvar p Namer = &T{}\n\tfmt.Println(v.Name(), p.Name())\n}",
+      "lang": "go",
+      "notes": "这里 T 和 *T 都实现了 Namer，因为 Name 是值接收者。改成指针接收者就只剩 *T 实现了——所以标准库接口大多用指针接收者。"
+    },
+    {
+      "title": "指针接收者的方法不属于值类型",
+      "description": "方法写成指针接收者时，值的类型 T 不再满足接口，只有 &T 满足。把 T 直接赋给接口会编译失败。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype T struct{}\n\nfunc (t *T) Name() string {\n\treturn \"t\"\n}\n\ntype Namer interface {\n\tName() string\n}\n\nfunc main() {\n\tvar n Namer = T{}\n\tfmt.Println(n.Name())\n}",
+      "lang": "go",
+      "notes": "报错是「cannot use T{} ... T does not implement Namer (missing method Name)」。方法明明写了，但 T 的方法集里没有指针接收者的方法。",
+      "expect_error": true
+    },
+    {
+      "title": "结构体比较",
+      "description": "结构体可以用 == 比较：逐个字段比，全部相等两个结构体才相等。前提是所有字段的类型都可比较。",
+      "code": "type Point struct {\n\tX int\n\tY int\n}\n\na := Point{1, 2}\nb := Point{1, 2}\nfmt.Println(a == b)",
+      "lang": "go",
+      "notes": "可比较的类型有数值、字符串、布尔、指针、通道、接口，以及元素可比较的数组、字段都可比较的结构体。切片、map、函数不行。"
+    },
+    {
+      "title": "含切片的结构体不能比较",
+      "description": "结构体里只要有一个字段不可比较，整个结构体就不能用 == 比，切片是最常见的不可比较字段。",
+      "code": "type Bag struct {\n\tItems []string\n}\n\na := Bag{Items: []string{\"x\"}}\nb := Bag{Items: []string{\"x\"}}\nfmt.Println(a == b)",
+      "lang": "go",
+      "notes": "报错是「invalid operation: a == b (struct containing []string cannot be compared)」。切片比的是底层数组引用，不是内容；要比内容得自己逐个比，或者用 reflect.DeepEqual。",
+      "expect_error": true
+    },
+    {
+      "title": "构造函数 NewXxx",
+      "description": "Go 没有构造函数，惯例是写一个 New 开头的函数返回这个类型，一般返回指针，方便填默认值和做校验。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Point struct {\n\tX int\n\tY int\n}\n\nfunc NewPoint(x, y int) *Point {\n\treturn &Point{X: x, Y: y}\n}\n\nfunc main() {\n\tp := NewPoint(1, 2)\n\tfmt.Println(p.X, p.Y)\n}",
+      "lang": "go",
+      "notes": "返回指针还省掉一次结构体拷贝。需要校验参数就返回 error，常见签名是 `func NewXxx(...) (*Xxx, error)`。"
+    },
+    {
+      "title": "结构体 tag",
+      "description": "反引号里的 tag 是给反射用的元数据，运行时能读出来。JSON 库按 `json:\"name\"` 决定输出字段名，数据库库按 `db:\"col\"` 映射列名。",
+      "code": "type User struct {\n\tID   int    `json:\"id\"`\n\tName string `json:\"name\"`\n}\n\nu := User{ID: 1, Name: \"张三\"}\nfmt.Println(u.ID, u.Name)",
+      "lang": "go",
+      "notes": "tag 不参与字段比较，也不影响赋值，只是写给库看的。标准库和数据库驱动大多认 `json`、`db` 这类约定名，命名用小写或下划线。"
+    },
+    {
+      "title": "结构体是值类型",
+      "description": "结构体赋值和传参都是复制一份副本。改副本不影响原对象，想和别处共享同一份数据就传指针。",
+      "code": "type Point struct {\n\tX int\n}\n\na := Point{X: 1}\nb := a\nb.X = 2\nfmt.Println(a.X, b.X)",
+      "lang": "go",
+      "notes": "函数传参同理：`func f(p Point)` 改的是副本，要改就传 `*Point`。结构体大的时候也通常用指针传，省掉拷贝开销。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：结构体定义、嵌入与字段提升、方法提升、指针接收者改状态、构造函数、结构体比较。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Base struct {\n\tID int\n}\n\nfunc (b Base) Describe() string {\n\treturn fmt.Sprintf(\"base-%d\", b.ID)\n}\n\ntype Item struct {\n\tBase\n\tName  string `json:\"name\"`\n\tPrice int\n}\n\nfunc (i *Item) Discount(rate int) {\n\ti.Price -= i.Price * rate / 100\n}\n\nfunc NewItem(id int, name string, price int) *Item {\n\treturn &Item{Base: Base{ID: id}, Name: name, Price: price}\n}\n\nfunc main() {\n\titem := NewItem(1, \"键盘\", 200)\n\tfmt.Println(item.Describe(), item.Name)\n\n\titem.Discount(10)\n\tfmt.Println(item.Price)\n\n\tother := NewItem(1, \"键盘\", 180)\n\tfmt.Println(*item == *other)\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

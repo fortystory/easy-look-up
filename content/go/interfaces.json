@@ -1,0 +1,98 @@
+{
+  "id": "interfaces",
+  "title": "接口",
+  "entries": [
+    {
+      "title": "接口定义：方法集合",
+      "description": "接口用 type 加 interface 写出一组方法签名，是一组行为的约定，不含实现也不含字段。方法里的参数名可以省。",
+      "code": "type Speaker interface {\n\tSpeak() string\n}\n\nvar s Speaker\nfmt.Println(s == nil) // 接口的零值是 nil",
+      "lang": "go",
+      "notes": "实现方的方法名和签名必须和接口完全一致（参数、返回值都要一样），差一个都不算实现。"
+    },
+    {
+      "title": "隐式实现：不用写 implements",
+      "description": "Go 没有 implements 关键字。只要一个类型具备接口要求的全部方法，它就自动实现了这个接口，赋值时编译器负责检查。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Speaker interface{ Speak() string }\n\ntype Dog struct{}\n\nfunc (Dog) Speak() string { return \"汪汪\" }\n\nfunc main() {\n\tvar s Speaker = Dog{} // 不用写 implements\n\tfmt.Println(s.Speak())\n}",
+      "lang": "go",
+      "notes": "少一个方法就编译报错：「missing method Speak」。还要看方法集：方法写在指针接收者上时只有 *Dog 算实现，Dog{} 赋给接口会编译失败。"
+    },
+    {
+      "title": "空接口 any",
+      "description": "空接口 any 没有任何方法要求，所以什么类型都能装进去。参数写 any 就等于接受任何值，标准库里到处都是这种写法（fmt.Println 就是）。",
+      "code": "var v any = 42\nfmt.Println(v)\nv = \"hi\"\nfmt.Println(v)\nv = []int{1, 2}\nfmt.Println(v)",
+      "lang": "go",
+      "notes": "any 是 interface{} 的别名（Go 1.18 起），老代码写 interface{} 是一个意思。装进去之后是什么类型，得靠类型断言或类型 switch 才知道。"
+    },
+    {
+      "title": "类型断言 v.(T)",
+      "description": "想知道接口变量里装的具体类型，就做类型断言：v.(T) 把里面的值取出来转成 T。comma-ok 形式多返回一个 bool，断言失败不会 panic。",
+      "code": "var v any = 42\nn, ok := v.(int)\nfmt.Println(n, ok) // 断言成功\n\ns, ok := v.(string)\nfmt.Println(s, ok) // 断言失败，s 是零值",
+      "lang": "go",
+      "notes": "单值写法 v.(int) 断言失败直接 panic：interface conversion: interface {} is int, not string。断言只能用在接口值上，普通变量得先装进接口变量。"
+    },
+    {
+      "title": "类型 switch",
+      "description": "类型 switch 按接口值的动态类型分支。switch x := v.(type) 里每个 case 的 x 已经是那个分支的具体类型，可以直接当具体类型用。",
+      "code": "var v any = \"hi\"\nswitch x := v.(type) {\ncase int:\n\tfmt.Println(\"整数\", x)\ncase string:\n\tfmt.Println(\"字符串\", x)\ndefault:\n\tfmt.Printf(\"其它 %T\\n\", x)\n}",
+      "lang": "go",
+      "notes": "Go 1.18 起可以写 case nil 专门匹配接口值为 nil 的情况。一个 case 里写多个类型（case int, string:）时 x 的类型是 any，要再断言一次才能当具体类型用。"
+    },
+    {
+      "title": "接口值 = 动态类型 + 动态值",
+      "description": "接口变量里存的是两样东西：动态类型（具体是什么类型）和动态值（那个类型的值）。变量自己的类型始终是接口类型，赋别的类型进去就整体换掉。",
+      "code": "var e error = fmt.Errorf(\"坏了\")\nfmt.Printf(\"动态类型 %T，动态值 %v\\n\", e, e)\n\nvar v any = 42\nfmt.Printf(\"动态类型 %T，动态值 %v\\n\", v, v)",
+      "lang": "go",
+      "notes": "接口转接口（一个接口赋给另一个接口）不会拆箱，只是把动态类型和动态值原样搬过去。"
+    },
+    {
+      "title": "动态类型是 nil，接口不等于 nil",
+      "description": "接口值只有在动态类型和动态值都是 nil 时才等于 nil。把一个 nil 指针装进接口，动态类型就不是 nil 了。",
+      "code": "var p *int\nvar v any = p\nvar w any\nfmt.Println(v == nil, w == nil) // false true",
+      "lang": "go",
+      "notes": "经典坑：函数声明返回 *MyError，出错时 return nil，调用方拿到接口后 err != nil 为真。要返回 error 就直接返回 nil，别返回 nil 指针。"
+    },
+    {
+      "title": "接口里不能有字段",
+      "description": "接口只能描述行为，不能描述数据。想带上字段就用结构体，让实现方把结构体包进接口。",
+      "code": "type Person interface {\n\tName string // 接口里不能有字段\n}",
+      "lang": "go",
+      "notes": "编译报错是 syntax error: unexpected name string in interface type（老版本 Go 提示 interface contains field Name）。",
+      "expect_error": true
+    },
+    {
+      "title": "接口作为函数参数",
+      "description": "函数参数写接口类型，调用方可以传任何实现了它的类型。函数只依赖「要什么行为」，不依赖具体实现，这就是依赖倒置。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Speaker interface{ Speak() string }\n\ntype Cat struct{}\n\nfunc (Cat) Speak() string { return \"喵\" }\n\nfunc talk(s Speaker) string {\n\treturn s.Speak()\n}\n\nfunc main() {\n\tfmt.Println(talk(Cat{}))\n}",
+      "lang": "go",
+      "notes": "参数写接口比写具体类型松：以后换实现不用改调用方。返回值也可以是接口，但要小心 nil 指针那个坑。"
+    },
+    {
+      "title": "编译期检查是否实现了接口",
+      "description": "在包级写一句 var _ Interface = (*T)(nil)，编译期就能确认 T 实现了这个接口。方法改名或改签名时会立刻编译报错。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Speaker interface{ Speak() string }\n\ntype Dog struct{}\n\nfunc (Dog) Speak() string { return \"汪汪\" }\n\nvar _ Speaker = (*Dog)(nil) // 编译期检查\n\nfunc main() {\n\tfmt.Println(\"编译通过\")\n}",
+      "lang": "go",
+      "notes": "下划线表示「只关心类型对不对，不关心值」。这行常放在实现文件里，接口的方法一改就编译失败，而不是等到调用时才炸。"
+    },
+    {
+      "title": "接口定义在使用方，不在实现方",
+      "description": "谁需要这个行为，谁定义接口；实现方只管把方法写出来，不用知道接口长什么样。这样换实现时使用方一行都不用改。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Storage interface{ Save(key string) }\n\ntype UserService struct{ store Storage }\n\nfunc (s UserService) SaveUser(name string) {\n\ts.store.Save(\"user:\" + name)\n}\n\ntype memStore struct{}\n\nfunc (memStore) Save(key string) { fmt.Println(\"已保存\", key) }\n\nfunc main() {\n\ts := UserService{store: memStore{}}\n\ts.SaveUser(\"张三\")\n}",
+      "lang": "go",
+      "notes": "标准库也是这么定的：io.Reader、fmt.Stringer 这些接口都是用的人定义的，不是实现的人定义的。"
+    },
+    {
+      "title": "iter.Seq：迭代器接口",
+      "description": "Go 1.23 起标准库有了 iter.Seq[T]：它是一个函数类型，参数是 yield 回调，用 range over func 就能遍历。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"iter\"\n)\n\nfunc nums() iter.Seq[int] {\n\treturn func(yield func(int) bool) {\n\t\tfor i := 1; i <= 3; i++ {\n\t\t\tif !yield(i) {\n\t\t\t\treturn\n\t\t\t}\n\t\t}\n\t}\n}\n\nfunc main() {\n\tfor v := range nums() {\n\t\tfmt.Println(v)\n\t}\n}",
+      "lang": "go",
+      "notes": "标准库到处都在用这种接口（maps.Keys、slices.All）。yield 返回 false 表示提前停止，遍历方用 break 就能中断。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：使用方定义接口、实现方隐式实现、编译期检查、接口作参数、类型断言、类型 switch、nil 动态类型。",
+      "code": "package main\n\nimport \"fmt\"\n\n// 使用方定义接口\ntype Notifier interface {\n\tNotify(msg string)\n}\n\n// 实现方隐式实现 Notifier\ntype LogNotifier struct{}\n\nfunc (LogNotifier) Notify(msg string) {\n\tfmt.Println(\"[通知]\", msg)\n}\n\nvar _ Notifier = (*LogNotifier)(nil) // 编译期检查\n\nfunc send(n Notifier, msg string) {\n\tn.Notify(msg)\n}\n\nfunc main() {\n\tsend(LogNotifier{}, \"订单已创建\")\n\n\tvar v any = \"键盘\"\n\tif s, ok := v.(string); ok { // 类型断言\n\t\tfmt.Println(\"名称\", s)\n\t}\n\n\tswitch x := v.(type) { // 类型 switch\n\tcase int:\n\t\tfmt.Println(\"整数\", x)\n\tcase string:\n\t\tfmt.Println(\"字符串\", x)\n\tdefault:\n\t\tfmt.Printf(\"其它 %T\\n\", x)\n\t}\n\n\tvar p *int\n\tvar e any = p\n\tfmt.Println(\"接口是 nil 吗？\", e == nil) // false\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

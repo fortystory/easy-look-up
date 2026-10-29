@@ -1,0 +1,104 @@
+{
+  "id": "slices",
+  "title": "切片",
+  "entries": [
+    {
+      "title": "声明切片",
+      "description": "切片是底层数组上的一个视图。`var s []int` 声明一个 nil 切片，`s := []int{1, 2, 3}` 用字面量创建，长度就定死了。",
+      "code": "var s []int\nnums := []int{1, 2, 3}\nfmt.Println(s, nums, len(s))",
+      "lang": "go",
+      "notes": "var s []int 声明出来的是 nil 切片，len 是 0，但还没有底层数组，往里 append 才会分配。"
+    },
+    {
+      "title": "用 make 创建切片",
+      "description": "make([]T, len, cap) 一次性分配底层数组并指定长度和容量。只想预留位置、暂时不要元素时，长度写 0。",
+      "code": "s := make([]int, 0, 10)\nbuf := make([]byte, 16)\nfmt.Println(s, len(s), cap(s), len(buf))",
+      "lang": "go",
+      "notes": "make([]int, 10) 是「长度 10、容量 10」，10 个元素都是零值，不是空切片。"
+    },
+    {
+      "title": "len 和 cap 的区别",
+      "description": "len 是切片当前装了多少个元素，cap 是从切片起点到底层数组末尾最多还能装多少个元素。cap 永远大于等于 len。",
+      "code": "nums := make([]int, 2, 5)\nnums = append(nums, 1, 2, 3)\nfmt.Println(len(nums), cap(nums))",
+      "lang": "go",
+      "notes": "截取 s[1:3] 之后 len 变成 2，cap 则变成「底层数组末尾减去新起点」，不是原来的 cap。"
+    },
+    {
+      "title": "append 的三种写法",
+      "description": "append 在末尾追加元素并返回新切片。常见三种：追加单个值、一次追加多个值、用 ... 把另一个切片展开后追加。",
+      "code": "s := []int{1, 2}\ns = append(s, 3)\ns = append(s, 4, 5)\nother := []int{6, 7}\ns = append(s, other...)\nfmt.Println(s)",
+      "lang": "go",
+      "notes": "append 的返回值必须接住，写成 s = append(s, x) 才算数；光写 append(s, x) 元素不会进 s。"
+    },
+    {
+      "title": "append 扩容时底层数组会换",
+      "description": "容量不够时 append 会重新分配一个更大的底层数组，把老元素搬过去，切片转而指向新数组，老数组可能被回收。",
+      "code": "s := make([]int, 0, 2)\ns = append(s, 1, 2, 3)\nfmt.Println(len(s), cap(s))",
+      "lang": "go",
+      "notes": "扩容后 cap 具体涨到多少是 Go 的实现细节（这里 2 涨到 4），不要在代码里依赖这个数值。"
+    },
+    {
+      "title": "截取切片",
+      "description": "s[low:high] 取出 [low, high) 这一段，得到一个新切片；底层数组还是原来那个，所以改元素会互相影响。",
+      "code": "nums := []int{1, 2, 3, 4, 5}\nmid := nums[1:3]\nmid[0] = 99\nfmt.Println(nums, mid)",
+      "lang": "go",
+      "notes": "切片赋值不复制元素，只是多了一个「起点 + 长度 + 容量」的视图；想真正独立得用 copy。"
+    },
+    {
+      "title": "三索引切片",
+      "description": "s[low:high:max] 的第三个索引限定新切片的容量上限，cap 等于 max - low，用来挡住 append 写穿后面的区间。",
+      "code": "nums := []int{1, 2, 3, 4, 5}\nsub := nums[1:3:4]\nfmt.Println(sub, len(sub), cap(sub))",
+      "lang": "go",
+      "notes": "限制住 cap 之后，append(sub, x) 会因为容量不够而重新分配，不会改到 nums 里还没纳入的区间。"
+    },
+    {
+      "title": "copy 复制元素",
+      "description": "copy(dst, src) 把 src 的元素拷进 dst，返回实际复制的个数，取两个切片长度中较小的那个。",
+      "code": "src := []int{1, 2, 3, 4}\ndst := make([]int, 2)\nn := copy(dst, src)\nfmt.Println(dst, n)",
+      "lang": "go",
+      "notes": "dst 长度不够时只复制前 n 个，剩下的 src 元素直接丢弃，不会报错。"
+    },
+    {
+      "title": "删除切片元素",
+      "description": "删掉第 i 个元素的做法是把后面的元素往前挪一位，用 append(s[:i], s[i+1:]...) 实现，结果要赋回 s。",
+      "code": "nums := []int{1, 2, 3, 4}\nnums = append(nums[:1], nums[2:]...)\nfmt.Println(nums)",
+      "lang": "go",
+      "notes": "append(nums[:1], ...) 改的是同一个底层数组，nums 的长度本身没变，得接住返回值赋回 nums 才是 3 个元素。"
+    },
+    {
+      "title": "nil 切片和空切片的区别",
+      "description": "nil 切片是零值，还没有底层数组；空切片 []int{} 长度是 0 但底层数组存在。两者都能遍历、都能 append。",
+      "code": "var nilSlice []int\nempty := []int{}\nfmt.Println(nilSlice == nil, empty == nil, len(nilSlice), len(empty))",
+      "lang": "go",
+      "notes": "只有 nil 切片 == nil 为 true。往 nil 切片 append 会顺手分配底层数组，这也是 nil 切片能当空切片用的原因。"
+    },
+    {
+      "title": "复制到新数组，断开共享",
+      "description": "想让子切片彻底独立，就 make 一个新数组，再用 copy 把元素拷过去，之后两边各改各的。",
+      "code": "nums := []int{1, 2, 3}\nclone := make([]int, len(nums))\ncopy(clone, nums)\nclone[0] = 99\nfmt.Println(nums, clone)",
+      "lang": "go",
+      "notes": "切片要传出去、存起来或返回给别人时先复制一份，否则对方能改到你的底层数组。"
+    },
+    {
+      "title": "遍历时修改元素",
+      "description": "想在遍历中改元素，用下标写回去：for i, v := range nums { nums[i] = v * 10 }。",
+      "code": "nums := []int{1, 2, 3}\nfor i, v := range nums {\n\tnums[i] = v * 10\n}\nfmt.Println(nums)",
+      "lang": "go",
+      "notes": "v 只是元素的一份副本，for _, v := range nums { v = 0 } 什么也不会发生。"
+    },
+    {
+      "title": "切片作为函数参数",
+      "description": "传切片时传的是切片头（底层数组指针 + 长度 + 容量）。函数里改元素会影响调用方，但 append 带来的长度变化传不回去。",
+      "code": "modify := func(s []int) {\n\ts[0] = 99\n\ts = append(s, 4)\n}\nnums := []int{1, 2, 3}\nmodify(nums)\nfmt.Println(nums)",
+      "lang": "go",
+      "notes": "想让调用方的长度也变，函数就得返回切片：func add(s []int) []int { return append(s, 4) }，调用方接住返回值。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组串起来：make 与 append、len 和 cap、截取与三索引、copy 隔离、删除元素、遍历改值、nil 与空切片。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc addItem(s []int, v int) []int {\n\treturn append(s, v)\n}\n\nfunc main() {\n\tvar tags []string\n\tfmt.Println(tags == nil, len(tags))\n\ttags = append(tags, \"go\", \"slice\")\n\tfmt.Println(len(tags), cap(tags))\n\n\tnums := make([]int, 0, 4)\n\tnums = addItem(nums, 1)\n\tnums = addItem(nums, 2)\n\tnums = addItem(nums, 3)\n\tfmt.Println(nums, len(nums), cap(nums))\n\n\thead := nums[:2]\n\ttail := nums[2:]\n\tlimited := nums[1:3:4]\n\tfmt.Println(head, tail, limited, len(limited), cap(limited))\n\n\tclone := make([]int, len(nums))\n\tcopy(clone, nums)\n\tclone[0] = 99\n\tfmt.Println(nums, clone)\n\n\tdel := make([]int, len(nums))\n\tcopy(del, nums)\n\tdel = append(del[:1], del[2:]...)\n\tfmt.Println(del)\n\n\tfor i := range nums {\n\t\tnums[i] *= 10\n\t}\n\tfmt.Println(nums)\n\n\tempty := []int{}\n\tfmt.Println(empty == nil, len(empty))\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

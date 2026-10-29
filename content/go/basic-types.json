@@ -84,7 +84,8 @@
       "description": "Go 要求局部变量必须被使用，否则编译不过。这是有意设计的，防止遗留用不到的变量。",
       "code": "x := 1\n// x 从未被使用 —— 编译报错：\n// declared and not used: x",
       "lang": "go",
-      "notes": "确实想丢弃一个值，用 _ 显式接收：_ = someFunc()，这样不会报错。"
+      "notes": "确实想丢弃一个值，用 _ 显式接收：_ = someFunc()，这样不会报错。",
+      "expect_error": true
     },
     {
       "title": "多变量声明与赋值",

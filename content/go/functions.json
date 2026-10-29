@@ -1,0 +1,111 @@
+{
+  "id": "functions",
+  "title": "函数",
+  "entries": [
+    {
+      "title": "函数定义与调用",
+      "description": "把要重复用的逻辑抽成函数：func 名字(参数列表) 返回值 { 函数体 }，调用时写函数名加括号。",
+      "code": "package main\n\nimport \"fmt\"\n\n// 两个参数同类型时可以只写一次类型\nfunc add(a, b int) int {\n\treturn a + b\n}\n\nfunc main() {\n\tfmt.Println(add(1, 2))\n}",
+      "lang": "go",
+      "notes": "Go 没有函数重载，同名函数只能有一个；参数少传或多传都是编译错误。也没有默认参数，可选参数只能用可变参数或零值代替。"
+    },
+    {
+      "title": "多返回值",
+      "description": "一个函数要给出多个结果时（比如商和余数、结果和错误），把返回值写成一串，接收时按顺序一一对应。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc divmod(a, b int) (int, int) {\n\treturn a / b, a % b\n}\n\nfunc main() {\n\tq, r := divmod(10, 3)\n\tfmt.Println(q, r)\n\n\t// 不关心的返回值用 _ 丢弃\n\tonly, _ := divmod(9, 2)\n\tfmt.Println(only)\n}",
+      "lang": "go",
+      "notes": "返回值个数必须和接收的个数完全一致，多一个少一个都编译报错。Go 约定把 error 放在最后一个返回值：q, err := divmod(a, b)。"
+    },
+    {
+      "title": "命名返回值与默认返回",
+      "description": "给返回值起名字后可以在函数体里直接赋值，最后写一个裸 return，编译器帮你把这些名字返回出去。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc split(s string) (head, tail string) {\n\ti := len(s) / 2\n\thead = s[:i]\n\ttail = s[i:]\n\treturn\n}\n\nfunc main() {\n\th, t := split(\"golang\")\n\tfmt.Println(h, t)\n}",
+      "lang": "go",
+      "notes": "裸 return 只有在有命名返回值时才合法。命名返回值是在 return 之后才交给调用方的，所以 defer 里改它们能改掉最终返回值，这是 Go 的惯用技巧。"
+    },
+    {
+      "title": "defer 的执行时机与顺序",
+      "description": "需要「函数结束时再做一件事」（关闭资源、记日志、收尾）时用 defer；多个 defer 按后进先出（LIFO）执行，和栈一样。",
+      "code": "defer fmt.Println(\"先注册的，最后执行\")\ndefer fmt.Println(\"第二个注册的，中间执行\")\ndefer fmt.Println(\"最后注册的，最先执行\")\nfmt.Println(\"函数体先执行\")",
+      "lang": "go",
+      "notes": "函数体执行完才轮到 defer；即使 panic，defer 也会先跑完再把 panic 抛上去。只有 os.Exit、进程被杀掉这类情况会跳过 defer。"
+    },
+    {
+      "title": "defer 里的参数当场求值",
+      "description": "defer 的实参在 defer 语句执行的那一刻就求值定死了，函数结束时打印的是那一刻的值，不是最终的值。",
+      "code": "i := 1\ndefer fmt.Println(\"defer 时 i =\", i)\ni = 2\nfmt.Println(\"现在 i =\", i)",
+      "lang": "go",
+      "notes": "想在函数结束时用最终的值，就把它包成闭包：defer func() { fmt.Println(i) }()，求值推迟到函数返回那一刻。"
+    },
+    {
+      "title": "defer 关闭文件与解锁",
+      "description": "拿到资源后立刻用 defer 登记它的释放动作：文件用 Close，锁用 Unlock，函数返回时自动执行，中途 return 或 panic 都不会漏掉。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"sync\"\n)\n\nfunc main() {\n\tvar mu sync.Mutex\n\tmu.Lock()\n\tdefer mu.Unlock() // 函数结束时解锁\n\n\tf, err := os.Create(\"demo.txt\")\n\tif err != nil {\n\t\tfmt.Println(\"创建文件失败:\", err)\n\t\treturn\n\t}\n\tdefer f.Close() // 函数结束时关闭文件\n\n\tfmt.Fprintln(f, \"hello\")\n\tfmt.Println(\"写入中\")\n}",
+      "lang": "go",
+      "notes": "defer 必须紧跟在获取资源的那行后面，中间隔了代码就容易忘。锁也一样：Lock 之后马上 defer Unlock，否则 panic 时锁永远不释放。"
+    },
+    {
+      "title": "闭包捕获外部变量",
+      "description": "想让一段逻辑记住并修改外层的变量时用闭包；外层函数返回后，闭包照样能用那些变量。",
+      "code": "count := 0\nincrement := func() {\n\tcount++\n}\nincrement()\nincrement()\nfmt.Println(count)",
+      "lang": "go",
+      "notes": "被捕获的变量会一直活到闭包不再被引用为止。常见套路是让一个函数返回闭包，每调用一次就有一份独立的计数器。"
+    },
+    {
+      "title": "闭包捕获的是变量本身",
+      "description": "闭包拿到的是变量本身而不是当时的拷贝，所以几个闭包看到的是同一个变量的最新值，循环里最容易踩这个坑。",
+      "code": "var fns []func()\nvar i int\nfor i = 0; i < 3; i++ {\n\tfns = append(fns, func() { fmt.Println(i) })\n}\nfor _, f := range fns {\n\tf()\n}",
+      "lang": "go",
+      "notes": "这里 i 声明在循环外，三个闭包共享同一个 i，所以打印 3、3、3。Go 1.22 起 for 语句里直接声明的循环变量每轮都是新的，经典的「循环变量捕获」坑已修复，但循环外声明的变量仍然共享。"
+    },
+    {
+      "title": "匿名函数",
+      "description": "不想给函数起名字、只想当场定义并使用时写匿名函数：func(参数) 返回值 { 函数体 }，可以赋值给变量、当参数传、或者立刻调用。",
+      "code": "double := func(x int) int {\n\treturn x * 2\n}\nfmt.Println(double(21))",
+      "lang": "go",
+      "notes": "匿名函数同样能捕获外层变量。它没有名字，想递归就得靠变量引用自己：var f func(int) int; f = func(n int) int { ... }。"
+    },
+    {
+      "title": "可变参数与切片展开",
+      "description": "参数个数不确定时在参数列表末尾写 ...T，函数体内它就是一个切片；反过来用 xs... 可以把切片展开成一个个实参传进去。",
+      "code": "package main\n\nimport \"fmt\"\n\n// nums 在函数体内就是 []int\nfunc sum(nums ...int) int {\n\ttotal := 0\n\tfor _, n := range nums {\n\t\ttotal += n\n\t}\n\treturn total\n}\n\nfunc main() {\n\txs := []int{1, 2, 3}\n\tfmt.Println(sum(1, 2), sum(xs...))\n}",
+      "lang": "go",
+      "notes": "可变参数必须是最后一个参数。sum() 不传参数也合法，此时 nums 是长度为 0 的空切片。普通参数和展开可以混着用：sum(1, xs...)。"
+    },
+    {
+      "title": "函数作为值传递",
+      "description": "需要把行为当数据用时，把函数赋值给变量或当参数传；函数的类型写成 func(参数列表) 返回值。",
+      "code": "var apply func(int) int = func(x int) int { return x * 2 }\nfmt.Println(apply(21))\nfmt.Println(apply(apply(1)))",
+      "lang": "go",
+      "notes": "函数的类型必须写全，比如 func(int) int。把签名不一样的函数塞进同一个 map，值的类型会统一成某一个 func 类型，签名对不上就编译报错。"
+    },
+    {
+      "title": "递归",
+      "description": "问题能拆成同类的、更小的子问题时用递归：先写终止条件，再写递推关系。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc fact(n int) int {\n\tif n <= 1 {\n\t\treturn 1\n\t}\n\treturn n * fact(n - 1)\n}\n\nfunc main() {\n\tfmt.Println(fact(5))\n}",
+      "lang": "go",
+      "notes": "一定要有终止条件，否则会一直递归到爆栈（panic: stack overflow）。Go 没有尾调用优化，递归层数很深时也可能栈溢出。"
+    },
+    {
+      "title": "立即执行函数",
+      "description": "想马上执行一段逻辑、又不想给它起名字时，在匿名函数后面直接跟一对括号，定义完立刻就调用。",
+      "code": "result := func() int {\n\treturn 42\n}()\nfmt.Println(result)",
+      "lang": "go",
+      "notes": "这种写法也叫 IIFE。常见用法是包一层作用域，把临时变量关在里面，不跟外层同名变量打架。"
+    },
+    {
+      "title": "defer 与 recover 配合",
+      "description": "想在某个函数里兜住 panic、别让程序直接崩掉时，在 defer 注册的函数里调 recover，把崩溃变成一次普通的返回。",
+      "code": "safe := func() {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tfmt.Println(\"捕获到 panic:\", r)\n\t\t}\n\t}()\n\tpanic(\"出错了\")\n}\nsafe()",
+      "lang": "go",
+      "notes": "recover 必须由 defer 注册的函数直接调用才有效，中间隔一层就失效。recover 之后 panic 被吞掉，函数继续往下走；没被 recover 的 panic 会沿调用栈往上抛。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：函数定义、多返回值、命名返回值、defer 与 recover、闭包、匿名函数、可变参数、函数作为值、递归、立即执行。",
+      "code": "package main\n\nimport \"fmt\"\n\n// 可变参数 + 命名返回值 + 裸 return\nfunc average(nums ...float64) (avg float64, err error) {\n\tif len(nums) == 0 {\n\t\treturn 0, fmt.Errorf(\"没有数据\")\n\t}\n\tfor _, n := range nums {\n\t\tavg += n\n\t}\n\tavg /= float64(len(nums))\n\treturn\n}\n\n// 递归\nfunc fact(n int) int {\n\tif n <= 1 {\n\t\treturn 1\n\t}\n\treturn n * fact(n-1)\n}\n\nfunc main() {\n\t// 立即执行函数\n\tfunc() {\n\t\tfmt.Println(\"=== 开始 ===\")\n\t}()\n\n\t// 多返回值 + 命名返回值\n\tavg, err := average(1, 2, 3, 4)\n\tif err != nil {\n\t\tfmt.Println(\"出错:\", err)\n\t\treturn\n\t}\n\tfmt.Println(\"平均值:\", avg)\n\n\t// 切片展开\n\txs := []float64{5, 6}\n\tavg2, _ := average(xs...)\n\tfmt.Println(\"平均值2:\", avg2)\n\n\t// 匿名函数 + 函数作为值\n\tdouble := func(x float64) float64 { return x * 2 }\n\tfmt.Println(\"两倍:\", double(avg))\n\n\t// 闭包捕获外部变量\n\tcount := 0\n\tincrement := func() { count++ }\n\tincrement()\n\tincrement()\n\tfmt.Println(\"计数:\", count)\n\n\t// defer 与 recover\n\tsafe := func(f func()) {\n\t\tdefer func() {\n\t\t\tif r := recover(); r != nil {\n\t\t\t\tfmt.Println(\"已捕获:\", r)\n\t\t\t}\n\t\t}()\n\t\tf()\n\t}\n\tsafe(func() { panic(\"出错了\") })\n\n\t// defer 的执行顺序是后进先出，参数在 defer 时就求值\n\tfor i := 1; i <= 3; i++ {\n\t\tdefer fmt.Println(\"defer\", i)\n\t}\n\tfmt.Println(\"阶乘:\", fact(5))\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "id": "strings",
+  "title": "字符串与数值转换",
+  "entries": [
+    {
+      "title": "查找与定位：Contains、HasPrefix、HasSuffix、Index",
+      "description": "判断一段文本里有没有某个子串、用什么开头结尾、位置在哪，用 strings 这一组函数，别自己写 for 循环找。",
+      "code": "path := \"static/app/main.go\"\nfmt.Println(strings.Contains(path, \"/app/\"))\nfmt.Println(strings.HasPrefix(path, \"static/\"))\nfmt.Println(strings.HasSuffix(path, \".go\"))\nfmt.Println(strings.Index(path, \"main.go\"))",
+      "lang": "go",
+      "notes": "这几个函数都区分大小写。找不到时 Index 返回 -1 而不是报错，拿去切片前一定要先判断 >= 0，否则会 panic；找最后一次出现用 LastIndex。"
+    },
+    {
+      "title": "切分与拼接：Split、Join",
+      "description": "把一段文本按分隔符拆成切片，或者把切片拼回一段文本，这是一对互相配合的函数。",
+      "code": "parts := strings.Split(\"a,b,c\", \",\")\nfmt.Println(parts)\nfmt.Println(strings.Join(parts, \"-\"))\nfmt.Println(strings.Split(\"a,,b\", \",\"))",
+      "lang": "go",
+      "notes": "Split 的结果长度是固定的（分隔符个数 + 1），\"a,,b\" 会得到三个元素，中间那个是空串。分隔符传空串则按 UTF-8 字符逐个切分。"
+    },
+    {
+      "title": "替换：Replace、ReplaceAll",
+      "description": "替换字符串里的片段：Replace 只换前 N 处，ReplaceAll 一次全换掉。",
+      "code": "s := \"go go go\"\nfmt.Println(strings.Replace(s, \"go\", \"Golang\", 1))\nfmt.Println(strings.ReplaceAll(s, \"go\", \"Golang\"))",
+      "lang": "go",
+      "notes": "Replace 的第三个参数是替换次数，-1 表示不限次数（但那样直接写 ReplaceAll 更清楚）。两个函数都返回新串，原串不会被改。"
+    },
+    {
+      "title": "裁剪：TrimSpace、Trim、TrimPrefix、TrimSuffix",
+      "description": "处理用户输入时先去掉两头的空白，或者去掉固定的前缀后缀（协议头、路径前缀、文件扩展名）。",
+      "code": "s := \"  \\t hello \\n\"\nfmt.Println(strings.TrimSpace(s))\nfmt.Println(strings.Trim(\"!!!hello!!!\", \"!\"))\nfmt.Println(strings.TrimPrefix(\"user:tom\", \"user:\"))\nfmt.Println(strings.TrimSuffix(\"main.go\", \".go\"))",
+      "lang": "go",
+      "notes": "TrimSpace 只去空白字符；Trim 的第二个参数是「字符集合」不是子串，\"abc\" 会把 a、b、c 三个字符都当切割符。TrimPrefix / TrimSuffix 遇到不存在的前后缀就原样返回。"
+    },
+    {
+      "title": "大小写转换：ToLower、ToUpper",
+      "description": "把字符串统一转成小写或大写，常用于比较前归一化、生成小写的标识符或路径。",
+      "code": "fmt.Println(strings.ToLower(\"GoLang\"))\nfmt.Println(strings.ToUpper(\"GoLang\"))\nfmt.Println(strings.ToLower(\"ÄPFEL\"))",
+      "lang": "go",
+      "notes": "转换按 Unicode 规则做，不看语言环境：土耳其语里 \"I\" 的小写是 \"ı\"，ToLower 不会按土耳其规则转。要按地区规则转得用 unicode.ToLowerSpecial。"
+    },
+    {
+      "title": "重复、计数与按空白切分：Repeat、Count、Fields",
+      "description": "重复一段字符串、统计子串出现多少次、把一段文本按空白切成词，分别用这三个函数。",
+      "code": "fmt.Println(strings.Repeat(\"ab\", 3))\nfmt.Println(strings.Count(\"cheese\", \"e\"))\nfmt.Println(strings.Fields(\" a  b\\tc\\n\"))",
+      "lang": "go",
+      "notes": "Count 数的是不重叠的匹配次数，\"aaa\" 里数 \"aa\" 只有 1 次。Fields 按任意连续空白切分并丢掉空字段，跟 Split(s, \" \") 结果不一样。"
+    },
+    {
+      "title": "strings.Builder：高效拼接字符串",
+      "description": "循环里拼字符串时用 Builder，它内部用 []byte 缓冲，最后 String() 时才拼一次，比反复 s += x 快得多。",
+      "code": "var b strings.Builder\nb.WriteString(\"Hello\")\nb.WriteString(\", \")\nb.WriteString(\"World\")\nfmt.Println(b.String())\nfmt.Println(b.Len())",
+      "lang": "go",
+      "notes": "Builder 不能复制：值拷贝会让两个 Builder 共享同一个底层 buffer，内容会串，要传就传 *strings.Builder。WriteString 返回的 error 永远是 nil，不用管。"
+    },
+    {
+      "title": "strings.NewReader：把字符串当 io.Reader 用",
+      "description": "很多函数只收 io.Reader，NewReader 能把现成的字符串包成 reader，不用先落成临时文件。",
+      "code": "r := strings.NewReader(\"hello world\")\ndata, err := io.ReadAll(r)\nfmt.Println(len(data), string(data), err)",
+      "lang": "go",
+      "notes": "NewReader 返回 *strings.Reader，实现了 io.Reader（还兼有 ReaderAt、Seeker、WriterTo），只能读不能写。读到末尾就结束了，想重读得重新建一个。"
+    },
+    {
+      "title": "strings.NewReplacer：一次替换多种模式",
+      "description": "要同时替换好几组字符串时，建一个 Replacer 反复用，比连着写一串 ReplaceAll 清楚。",
+      "code": "r := strings.NewReplacer(\"cat\", \"猫\", \"dog\", \"狗\")\nfmt.Println(r.Replace(\"cat and dog\"))\nfmt.Println(r.Replace(\"the dog chases the cat\"))",
+      "lang": "go",
+      "notes": "参数必须成对出现，写成奇数个会 panic。替换按参数顺序从左到右匹配，不是最长优先；Replace 返回新串，不改原串。"
+    },
+    {
+      "title": "strings.Cut：在分隔符处切一刀",
+      "description": "想按某个分隔符把字符串切成前后两半，用 Cut 一步到位，不用自己算 Index 的位置再切片。",
+      "code": "before, after, found := strings.Cut(\"key=value\", \"=\")\nfmt.Println(before, after, found)\nfmt.Println(strings.Cut(\"novalue\", \"=\"))",
+      "lang": "go",
+      "notes": "只在第一个分隔符处切。找不到分隔符时 found 是 false，before 是整串、after 是空串，先看 found 再用 after。"
+    },
+    {
+      "title": "strings.EqualFold：忽略大小写比较",
+      "description": "比较两个字符串但不想管大小写时用 EqualFold，比先 ToLower 再 == 更靠谱。",
+      "code": "fmt.Println(strings.EqualFold(\"Go\", \"GO\"))\nfmt.Println(strings.EqualFold(\"Go\", \"Golang\"))\nfmt.Println(strings.EqualFold(\"Σ\", \"ς\"))",
+      "lang": "go",
+      "notes": "EqualFold 用的是 Unicode 简单大小写折叠，不是先 ToLower 再比较：\"Σ\" 和 \"ς\" 在 EqualFold 里相等，ToLower 之后却不相等。只是想把 key 统一成小写时，直接用 ToLower 更省事。"
+    },
+    {
+      "title": "strconv.Itoa 与 Atoi：整数和字符串互转",
+      "description": "整数变字符串用 Itoa，字符串变整数用 Atoi，是最常来回调转的一对。",
+      "code": "fmt.Println(strconv.Itoa(42))\nn, err := strconv.Atoi(\"123\")\nfmt.Println(n, err)\nbad, err2 := strconv.Atoi(\"12x\")\nfmt.Println(bad, err2)",
+      "lang": "go",
+      "notes": "Atoi 返回 (int, error)：转换失败时第一个值是 0、第二个是 error，一定要先判 err 再用这个数。它只认十进制整数，\"12.5\" 会直接报 invalid syntax。"
+    },
+    {
+      "title": "strconv.ParseInt、ParseFloat、FormatInt：带格式的数值转换",
+      "description": "进制不是十进制、或者要处理浮点和溢出时，用 ParseInt / ParseFloat；整数转字符串也可以指定进制输出。",
+      "code": "n, err := strconv.ParseInt(\"ff\", 16, 64)\nfmt.Println(n, err)\nf, err2 := strconv.ParseFloat(\"3.14\", 64)\nfmt.Println(f, err2)\nfmt.Println(strconv.FormatInt(255, 16))\no, err3 := strconv.ParseInt(\"99999999999999999999\", 10, 64)\nfmt.Println(o, err3)",
+      "lang": "go",
+      "notes": "ParseInt 的第二个参数是进制：0 表示按前缀自动判断（0x 十六进制、0b 二进制、0o 八进制），2~36 是合法取值；第三个参数是结果的位宽，超范围会返回 value out of range 错误，同时把结果截成该类型的最大或最小值。ParseFloat 的位宽只能填 32 或 64。"
+    },
+    {
+      "title": "strconv.ParseBool 与 strconv.Quote：解析布尔与加引号",
+      "description": "ParseBool 把文本解析成 bool；Quote 把字符串变成带引号、转义好的 Go 字面量，和 fmt 的 %q 是一回事。",
+      "code": "b, err := strconv.ParseBool(\"true\")\nfmt.Println(b, err)\ns := strconv.Quote(\"hello\\nworld\")\nfmt.Println(s)\nfmt.Printf(\"%q\\n\", \"hello\\nworld\")\nfmt.Println(strconv.Quote(\"你好\"))",
+      "lang": "go",
+      "notes": "ParseBool 只认 1/0、t/f、T/F、true/false 这些写法，不认 yes/no。%q 的输出和 strconv.Quote 完全一致：中文等可打印字符原样保留，只转义引号、反斜杠、换行这些；想要纯 ASCII 的转义用 %+q，想要反引号形式用 %#q。"
+    },
+    {
+      "title": "组合示例：把一段订单文本解析成结构化数据",
+      "description": "把这一组用起来：清理空白、用 Cut 拆键值对、用 Builder 拼结果，再用 strconv 把字符串转成数字和布尔。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strconv\"\n\t\"strings\"\n)\n\nfunc main() {\n\traw := \"  order_id=1024, amount=19.90, paid=true  \"\n\n\tparts := strings.Split(strings.TrimSpace(raw), \",\")\n\tfmt.Println(\"字段数:\", len(parts))\n\n\tvar b strings.Builder\n\tfor _, p := range parts {\n\t\tkey, value, ok := strings.Cut(strings.TrimSpace(p), \"=\")\n\t\tif ok {\n\t\t\tb.WriteString(strings.ToLower(key))\n\t\t\tb.WriteString(\"=\")\n\t\t\tb.WriteString(value)\n\t\t\tb.WriteString(\";\")\n\t\t}\n\t}\n\tfmt.Println(\"整理后:\", b.String())\n\n\tfor _, p := range parts {\n\t\tkey, value, ok := strings.Cut(strings.TrimSpace(p), \"=\")\n\t\tif !ok {\n\t\t\tcontinue\n\t\t}\n\t\tif strings.EqualFold(key, \"order_id\") {\n\t\t\tid, err := strconv.Atoi(value)\n\t\t\tif err != nil {\n\t\t\t\tfmt.Println(\"订单号解析失败:\", err)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tfmt.Printf(\"订单号 %d，十六进制 %s\\n\", id, strconv.FormatInt(int64(id), 16))\n\t\t} else if strings.EqualFold(key, \"amount\") {\n\t\t\tamount, err := strconv.ParseFloat(value, 64)\n\t\t\tif err != nil {\n\t\t\t\tfmt.Println(\"金额解析失败:\", err)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tfmt.Printf(\"金额 %.2f\\n\", amount)\n\t\t} else if strings.EqualFold(key, \"paid\") {\n\t\t\tpaid, err := strconv.ParseBool(value)\n\t\t\tif err != nil {\n\t\t\t\tfmt.Println(\"布尔解析失败:\", err)\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tfmt.Println(\"是否已支付:\", paid)\n\t\t}\n\t}\n\n\tfmt.Println(\"键值对数量:\", strings.Count(b.String(), \"=\"))\n\tfmt.Println(strings.NewReplacer(\"order_id\", \"订单号\").Replace(b.String()))\n\tfmt.Println(strconv.Quote(\"订单已提交\"))\n\tfmt.Println(strings.Repeat(\"-\", 20))\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

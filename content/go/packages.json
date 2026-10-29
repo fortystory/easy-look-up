@@ -1,0 +1,111 @@
+{
+  "id": "packages",
+  "title": "包与模块",
+  "entries": [
+    {
+      "title": "package 名与导入路径",
+      "description": "包名写在每个 .go 文件的 package 子句里，导入路径则是这个包在磁盘上的目录。两件事由不同规则决定：目录决定路径，文件里的 package 声明决定包名。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"math/rand/v2\"\n)\n\nfunc main() {\n\t// 目录是 math/rand/v2，包名却是 rand\n\tfmt.Println(rand.IntN(10))\n}",
+      "lang": "go",
+      "notes": "路径的最后一段经常不等于包名（math/rand/v2 的包名是 rand，gopkg.in/yaml.v3 的包名是 yaml），别靠猜路径最后一段来写包名，用 IDE 的自动补全更稳。"
+    },
+    {
+      "title": "import 一个包",
+      "description": "只用到一个包时写一行 import \"路径\"。路径要写完整：模块内的包写相对模块根目录的完整路径，第三方包写仓库地址。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\t// 只导一个包时，写一行 import\n\tfmt.Println(\"导入之后用包名引用，比如 fmt.Println\")\n}",
+      "lang": "go",
+      "notes": "别只写目录名或文件名：要写 \"myapp/internal/store\" 这样带目录的完整路径，第三方包要写 \"github.com/gin-gonic/gin\" 这种仓库地址。"
+    },
+    {
+      "title": "分组导入",
+      "description": "导入多个包时用 import ( ... ) 括起来分组写，一行一个包，这是 Go 的惯例写法。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc main() {\n\t// 多个包用括号分组，goimports 会自动排好组\n\tfmt.Println(strings.TrimSpace(\"  go  \"))\n}",
+      "lang": "go",
+      "notes": "习惯上标准库一组、第三方一组、本地包一组，中间空行隔开。gofmt 只管排版不分组，goimports 才会分组，顺带还能删掉没用到的导入。"
+    },
+    {
+      "title": "导入别名",
+      "description": "想让导入的包在本地换个名字（或者两个包撞了同名），在路径前面写一个别名：import 别名 \"路径\"。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\tmrand \"math/rand\"\n\t\"math/rand/v2\"\n)\n\nfunc main() {\n\t// 两个包的包名都是 rand，用别名区分\n\tfmt.Println(mrand.Intn(10), rand.IntN(10))\n}",
+      "lang": "go",
+      "notes": "别名只在这个文件里生效，别的文件照旧写 rand。用了别名之后就不能再用原包名了。同一个包里两个包同名（rand、template 最常见）时必须靠别名区分。"
+    },
+    {
+      "title": "空白导入",
+      "description": "只想要一个包的 init 跑一遍（比如注册驱动），但又不用它里面的任何东西，就写 import _ \"路径\"。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t_ \"image/png\" // 只要副作用：把 PNG 解码器注册进 image\n)\n\nfunc main() {\n\tfmt.Println(\"image/png 的 init 注册了解码器\")\n}",
+      "lang": "go",
+      "notes": "最常见的是数据库驱动（_ \"github.com/go-sql-driver/mysql\"）和图片解码器（_ \"image/png\"）。用 _ 表示「我不引用它的任何东西，只要它的副作用」。"
+    },
+    {
+      "title": "点导入",
+      "description": "想把一个包里的导出名直接引进当前文件、不带包名前缀，用 import . \"路径\"。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t. \"strings\"\n)\n\nfunc main() {\n\t// 点导入：包里的导出名直接进当前文件\n\tfmt.Println(ToUpper(\"golang\"))\n}",
+      "lang": "go",
+      "notes": "不推荐：名字从哪来一眼看不出来，还容易和标准库或本地名字撞车（两个点导入的包有同名标识符就直接编译报错）。真要用就只在一个小文件里用。"
+    },
+    {
+      "title": "导出规则：首字母大写才导出",
+      "description": "标识符首字母大写就是导出，别的包能访问；小写开头就是包内私有。函数、类型、变量、结构体字段、方法都一样。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Config struct {\n\tHost string // 大写开头：导出，别的包能访问\n\tport int    // 小写开头：不导出，只有本包能访问\n}\n\nfunc main() {\n\tc := Config{Host: \"localhost\", port: 8080}\n\tfmt.Println(c.Host, c.port)\n}",
+      "lang": "go",
+      "notes": "跨包访问小写标识符会编译报错，比如访问 time.Time 的 wall 字段：t.wall undefined (cannot refer to unexported field wall)。"
+    },
+    {
+      "title": "同包内可以访问未导出标识符",
+      "description": "同一个目录下的所有 .go 文件算一个包，彼此之间不受导出规则限制，私有函数、私有字段随便用。",
+      "code": "package main\n\nimport \"fmt\"\n\n// 小写开头：包内随便用，别的包 import 不到\nfunc helper() string {\n\treturn \"包内私有函数\"\n}\n\nfunc main() {\n\tfmt.Println(helper())\n}",
+      "lang": "go",
+      "notes": "限制只在跨包时才有。想让包外也能用，就把名字改成大写，或者加一个导出的小方法把内部值包一层。"
+    },
+    {
+      "title": "go.mod：module 路径与 go 指令",
+      "description": "每个模块根目录都有一个 go.mod，第一行 module 是模块路径，go 指令声明这个模块需要的最低 Go 版本。",
+      "code": "// go.mod 的内容：\n//\n// module example.com/myapp                      模块路径，别的模块 import 你时用它\n// go 1.21                                       语言版本下限\n//\n// require github.com/gin-gonic/gin v1.10.0       依赖清单",
+      "lang": "go",
+      "notes": "module 路径一般就是仓库地址（github.com/xxx/yyy）。go 指令写的是这份代码允许使用的最低 Go 版本：写高了就用不了更新的语法，写低了而依赖要求更高版本时，go 命令会提示你升级 go.mod。"
+    },
+    {
+      "title": "go.mod 与 go.sum 各管什么",
+      "description": "go.mod 记依赖清单（谁、什么版本），go.sum 记校验和（下载到的依赖有没有被改过）。两个文件都要提交进 git。",
+      "code": "// go.mod   模块清单：模块路径、Go 版本、依赖及版本\n// go.sum   校验和：验证依赖源码没被篡改或替换\n//\n// 两个文件都是 go 命令自动维护的，别手改 go.sum",
+      "lang": "go",
+      "notes": "go.mod 一般由 go mod tidy 生成，go.sum 在下载依赖时自动写入。CI 里可以用 go mod verify 检查依赖是否完整。"
+    },
+    {
+      "title": "go get / go mod tidy / go mod download",
+      "description": "管依赖的三个命令：go get 拉新依赖，go mod tidy 收拾干净，go mod download 只下载不编译。",
+      "code": "// go get github.com/gin-gonic/gin   拉一个新依赖，写进 go.mod\n// go mod tidy                        删掉用不上的、补上漏写的依赖\n// go mod download                    只把依赖拉到本地缓存，不编译",
+      "lang": "go",
+      "notes": "Go 1.16 起 go get 只管下载和写 go.mod，不再编译安装，装命令用 go install。go mod tidy 提交前跑一遍，CI 常加一条「跑完 go.mod 有没有变」的检查。"
+    },
+    {
+      "title": "internal 目录的特殊限制",
+      "description": "目录名是 internal 的包，只有以它的父目录为根的那棵子树里的代码能 import，模块外的项目用不了。",
+      "code": "package main\n\n// myapp/\n// ├── go.mod              module example.com/myapp\n// ├── main.go             package main\n// └── internal/\n//     └── store/\n//         └── store.go    package store\n//\n// 别的模块 import example.com/myapp/internal/store 会被拒绝：\n// use of internal package not allowed\n\nfunc main() {\n}",
+      "lang": "go",
+      "notes": "本模块里的其它包随便用，模块外的项目用不了——这是编译器强制的，不是口头约定。GOROOT/src 下的 internal 更严，只给标准库自己用。"
+    },
+    {
+      "title": "vendor 目录",
+      "description": "go mod vendor 把所有依赖的源码复制进项目里的 vendor/，之后编译优先用它，不再联网。",
+      "code": "package main\n\n// myapp/\n// ├── go.mod\n// ├── main.go\n// └── vendor/                   所有依赖的源码\n//     └── github.com/gin-gonic/gin/\n//\n// 之后 go build ./... 直接用 vendor 里的代码，不再联网\n\nfunc main() {\n}",
+      "lang": "go",
+      "notes": "适合离线构建或要求构建可复现的场景。Go 1.14 起只要有 vendor 目录就自动用 vendor 模式；vendor 目录要不要提交看团队约定。"
+    },
+    {
+      "title": "常用命令",
+      "description": "写代码最常用的几个命令：编译、运行、测试、安装、静态检查、格式化。",
+      "code": "// go build ./...      编译当前模块的所有包\n// go run .            运行当前目录的 main 包\n// go test ./...       跑所有测试\n// go install ./cmd/x  把命令装到 $GOPATH/bin\n// go vet ./...        静态检查：可疑写法、printf 参数对不上\n// gofmt -l .          列出格式不规范的文件，gofmt -w . 就地改",
+      "lang": "go",
+      "notes": "gofmt -l 只报告不改，-w 才写入；提交前跑一遍 gofmt -w .。go vet 只报可疑写法，不管编译错误。go run 每次都重新编译，别拿它跑循环。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：包声明、分组导入、别名导入、导出规则、同包访问未导出标识符。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\tmrand \"math/rand\"\n\t\"math/rand/v2\"\n\t\"strings\"\n)\n\n// Config 里大写字段导出，小写字段只有本包能用\ntype Config struct {\n\tHost string\n\tport int\n}\n\n// 小写开头：包内可见，包外访问不到\nfunc normalize(s string) string {\n\treturn strings.TrimSpace(strings.ToLower(s))\n}\n\nfunc main() {\n\t// 同包内可以直接用未导出的 normalize\n\tc := Config{Host: normalize(\"  LocalHost  \"), port: 8080}\n\n\t// 分组导入用包名引用，别名导入用别名引用\n\tfmt.Println(c.Host, c.port)\n\tfmt.Println(mrand.Intn(100), rand.IntN(100))\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

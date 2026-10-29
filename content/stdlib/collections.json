@@ -1,0 +1,111 @@
+{
+  "id": "collections",
+  "title": "排序与集合操作",
+  "entries": [
+    {
+      "title": "sort 排序基本类型",
+      "description": "sort 包给常见类型准备了现成的排序函数，调用即用，不用自己写比较逻辑。它们是原地排序。",
+      "code": "nums := []int{3, 1, 2}\nsort.Ints(nums)\n\nwords := []string{\"pear\", \"apple\"}\nsort.Strings(words)\n\nprices := []float64{2.5, 1.5}\nsort.Float64s(prices)\n\nfmt.Println(nums, words, prices)",
+      "lang": "go",
+      "notes": "这些函数不返回新切片，直接改传进去的那个。传切片的一段（nums[1:]）就只排那一段。sort.Float64s 会把 NaN 排在所有数字前面，和直觉不太一样。"
+    },
+    {
+      "title": "sort.Slice：按自定义规则排序",
+      "description": "元素类型没有现成排序函数时，用 sort.Slice 传一个 less 函数，告诉它「谁该排在前面」。",
+      "code": "words := []string{\"banana\", \"apple\", \"cherry\"}\nsort.Slice(words, func(i, j int) bool {\n\treturn len(words[i]) < len(words[j])\n})\nfmt.Println(words)",
+      "lang": "go",
+      "notes": "less 返回 true 表示 i 排在 j 前面，这里按长度升序。sort.Slice 内部用反射，元素类型不支持比较会 panic；Go 1.21+ 更推荐 slices.SortFunc。"
+    },
+    {
+      "title": "sort.SliceStable：相同元素保持原顺序",
+      "description": "普通排序不稳定：两个元素比不出高下时，谁在前面是随机的。要「同分的仍按原来的先后排」就用稳定版。",
+      "code": "type Student struct {\n\tName  string\n\tScore int\n}\n\nstudents := []Student{{Name: \"甲\", Score: 90}, {Name: \"乙\", Score: 90}, {Name: \"丙\", Score: 80}}\nsort.SliceStable(students, func(i, j int) bool {\n\treturn students[i].Score > students[j].Score\n})\nfmt.Println(students)",
+      "lang": "go",
+      "notes": "sort.Slice 是快排，不稳定；sort.SliceStable 多花一点开销换顺序可预期。slices 包对应的是 slices.SortStableFunc。"
+    },
+    {
+      "title": "sort.Sort：自己实现 sort.Interface",
+      "description": "sort.Sort 面向实现了 sort.Interface 的类型，要写齐 Len、Less、Swap 三个方法。适合要复用一套排序规则、或类型已经是自己定义的时候。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\ntype Person struct {\n\tName string\n\tAge  int\n}\n\ntype ByAge []Person\n\nfunc (a ByAge) Len() int           { return len(a) }\nfunc (a ByAge) Less(i, j int) bool { return a[i].Age < a[j].Age }\nfunc (a ByAge) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }\n\nfunc main() {\n\tpeople := []Person{{Name: \"张三\", Age: 30}, {Name: \"李四\", Age: 25}}\n\tsort.Sort(ByAge(people))\n\tfmt.Println(people)\n}",
+      "lang": "go",
+      "notes": "sort.Sort 不稳定，要稳定版是 sort.Stable。和 sort.Slice 比：sort.Slice 写个 less 函数就行，sort.Sort 要多写两个方法还多定义一个类型；日常用 sort.Slice 或 slices.SortFunc 更省事。"
+    },
+    {
+      "title": "slices.Sort 与 slices.SortFunc",
+      "description": "slices 是 Go 1.21 起的泛型版本，一个 Sort 顶三个 sort.Ints/Strings/Float64s；要按自定义规则排就用 SortFunc。",
+      "code": "nums := []int{3, 1, 2}\nslices.Sort(nums)\n\nscores := []int{60, 90, 75}\nslices.SortFunc(scores, func(a, b int) int {\n\treturn cmp.Compare(b, a) // 降序\n})\nfmt.Println(nums, scores)",
+      "lang": "go",
+      "notes": "SortFunc 的比较函数返回负数表示 a 在前、0 表示相等、正数表示 b 在前，用 cmp.Compare 就不用自己写一堆 if。slices.Sort 和 sort.Ints 一样不稳定。"
+    },
+    {
+      "title": "slices.Contains 与 slices.Index",
+      "description": "查元素在不在切片里用 Contains，要它的位置用 Index。比手写 for 循环短，也不会有「漏判最后一个元素」的错误。",
+      "code": "fruits := []string{\"apple\", \"banana\", \"orange\"}\nhas := slices.Contains(fruits, \"banana\")\nidx := slices.Index(fruits, \"orange\")\nmissing := slices.Index(fruits, \"grape\")\nfmt.Println(has, idx, missing)",
+      "lang": "go",
+      "notes": "Index 找不到时返回 -1，不是报错也不 panic。要区分「键存在但值是零值」用 map 的 _, ok := m[k]。"
+    },
+    {
+      "title": "slices.Max 与 slices.Min",
+      "description": "求切片里的最大值、最小值，不用自己遍历一遍。字符串也能比大小，同样适用。",
+      "code": "nums := []int{4, 9, 2}\nfmt.Println(slices.Max(nums), slices.Min(nums))\n\nnames := []string{\"pear\", \"apple\"}\nfmt.Println(slices.Max(names), slices.Min(names))",
+      "lang": "go",
+      "notes": "空切片会 panic（index out of range），先判 len(s) > 0。要按自定义规则比大小用 slices.MaxFunc / slices.MinFunc。"
+    },
+    {
+      "title": "slices.Reverse：原地反转",
+      "description": "把切片前后颠倒，不额外申请新切片。",
+      "code": "nums := []int{1, 2, 3}\nslices.Reverse(nums)\n\nwords := []string{\"a\", \"b\", \"c\"}\nslices.Reverse(words)\nfmt.Println(nums, words)",
+      "lang": "go",
+      "notes": "slices.Reverse 原地改切片，没有返回值；想留着原切片就先 slices.Clone 一份。它反转的是元素顺序，[]byte 会被逐字节反转。"
+    },
+    {
+      "title": "slices.Compact 与 slices.Delete",
+      "description": "Compact 去掉相邻的重复元素，Delete 按下标区间删掉一段。两者都返回新的切片，记得接回去。",
+      "code": "nums := []int{1, 2, 2, 3, 3, 3}\nnums = slices.Compact(nums)\nfmt.Println(nums)\n\nnums = slices.Delete(nums, 1, 2)\nfmt.Println(nums)",
+      "lang": "go",
+      "notes": "Compact 只去「相邻」的重复，数组没排序时去不掉分散的重复值。Delete 的区间是左闭右开，而且结果必须赋值回去；只写 slices.Delete(nums, 1, 2) 不赋值等于什么都没做。"
+    },
+    {
+      "title": "slices.BinarySearch：二分查找",
+      "description": "切片已经排好序时，二分查找比逐个比对快得多（O(log n)）。",
+      "code": "nums := []int{1, 3, 5, 7, 9}\nidx, found := slices.BinarySearch(nums, 5)\nmiss, notFound := slices.BinarySearch(nums, 4)\nfmt.Println(idx, found, miss, notFound)",
+      "lang": "go",
+      "notes": "切片必须已经升序排序，否则结果没意义。找不到时 found 是 false，idx 给的是「应该插入的位置」，不是 -1。要按自定义规则查用 slices.BinarySearchFunc。"
+    },
+    {
+      "title": "maps.Keys、maps.Values 与 maps.Clone",
+      "description": "从 map 里取出键、值做成切片，或者复制一份 map 常用于「先备份再改」的写法。",
+      "code": "scores := map[string]int{\"alice\": 90, \"bob\": 80}\nkeys := slices.Sorted(maps.Keys(scores))\nvalues := slices.Sorted(maps.Values(scores))\nbackup := maps.Clone(scores)\nfmt.Println(keys, values, backup)",
+      "lang": "go",
+      "notes": "Go 1.23 起 maps.Keys / maps.Values 返回的是迭代器 iter.Seq，要变成切片得配 slices.Collect 或 slices.Sorted（Go 1.21/1.22 里它们直接返回切片）。maps.Clone 是真复制，改副本不影响原 map；直接赋值两个 map 变量却是共享同一份数据。"
+    },
+    {
+      "title": "maps.Keys 的顺序是随机的",
+      "description": "Go 的 map 遍历顺序是随机化的，同一个 map 每次 for range 出来的顺序都可能不一样。需要稳定顺序，就得先把键取出来排序。",
+      "code": "scores := map[string]int{\"c\": 3, \"a\": 1, \"b\": 2}\nkeys := slices.Collect(maps.Keys(scores))\nslices.Sort(keys)\nfmt.Println(keys)",
+      "lang": "go",
+      "notes": "别把 map 的遍历顺序当成有意义的顺序，它只是被随机打乱的。要按固定顺序遍历，就用 slices.Sorted(maps.Keys(m)) 一步到位。"
+    },
+    {
+      "title": "cmp.Compare 与 cmp.Or",
+      "description": "cmp 包（Go 1.21+）提供统一的比较函数，可以直接喂给 slices.SortFunc；cmp.Or 用来给多个候选值挑出第一个「有值」的。",
+      "code": "fmt.Println(cmp.Compare(3, 5))\nfmt.Println(cmp.Compare(\"b\", \"a\"))\n\nname := cmp.Or(\"\", \"默认名称\")\nlevel := cmp.Or(0, 3)\nfmt.Println(name, level)",
+      "lang": "go",
+      "notes": "cmp.Compare 返回 -1 / 0 / 1，任何可比较类型都能用。cmp.Or 返回第一个非零值，全是零值时返回零值；参数类型必须可比较。"
+    },
+    {
+      "title": "排序自定义类型",
+      "description": "自己定义的结构体没有现成的排序函数，要用 slices.SortFunc 传比较函数（Go 1.21+），或用 sort.Slice 传 less 函数。",
+      "code": "type Task struct {\n\tName  string\n\tScore int\n}\n\ntasks := []Task{{Name: \"甲\", Score: 90}, {Name: \"乙\", Score: 80}}\nslices.SortFunc(tasks, func(a, b Task) int {\n\treturn cmp.Compare(a.Score, b.Score)\n})\nfmt.Println(tasks)",
+      "lang": "go",
+      "notes": "比较函数里用 cmp.Compare 比字段，不用自己算差值——差值可能溢出，而且 cmp.Compare 的语义更清楚。要排序的是指针切片（[]*Task）时，把元素类型写成 *Task 即可。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：sort 排基本类型，slices 排自定义类型、查最值、二分查找，maps 取键值并复制，cmp 做比较。",
+      "code": "package main\n\nimport (\n\t\"cmp\"\n\t\"fmt\"\n\t\"maps\"\n\t\"slices\"\n\t\"sort\"\n)\n\ntype Task struct {\n\tName  string\n\tScore int\n}\n\nfunc main() {\n\tnums := []int{3, 1, 2, 2}\n\tsort.Ints(nums)\n\tfmt.Println(\"排序后:\", nums)\n\n\tnums = slices.Compact(nums)\n\tfmt.Println(\"去重后:\", nums)\n\n\twords := []string{\"pear\", \"apple\"}\n\tslices.Sort(words)\n\tfmt.Println(\"字符串排序:\", words)\n\n\ttasks := []Task{{Name: \"甲\", Score: 90}, {Name: \"乙\", Score: 80}}\n\tslices.SortFunc(tasks, func(a, b Task) int {\n\t\treturn cmp.Compare(a.Score, b.Score)\n\t})\n\tfmt.Println(\"按分数排序:\", tasks)\n\n\tfmt.Println(\"最高分:\", slices.Max(nums), \"最低分:\", slices.Min(nums))\n\n\tidx, found := slices.BinarySearch(nums, 2)\n\tfmt.Println(\"二分查找 2:\", idx, found)\n\n\tscores := map[string]int{\"bob\": 80, \"alice\": 90}\n\tkeys := slices.Sorted(maps.Keys(scores))\n\tfmt.Println(\"键（已排序）:\", keys)\n\n\tbackup := maps.Clone(scores)\n\tdelete(backup, \"bob\")\n\tfmt.Println(\"副本:\", len(backup), \"原 map:\", len(scores))\n\n\tlabel := cmp.Or(\"\", \"默认名称\")\n\tfmt.Println(\"名称:\", label)\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

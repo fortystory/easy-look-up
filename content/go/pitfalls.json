@@ -1,0 +1,98 @@
+{
+  "id": "pitfalls",
+  "title": "初学者常踩的坑",
+  "entries": [
+    {
+      "title": "包名、文件名、目录名不是一回事",
+      "description": "Go 里三者互相独立：目录名决定别人用哪条路径 import 你，包名决定你在文件里写什么，文件名可以随便起。唯一的硬规矩是同一个目录里的所有普通文件必须写同一个包名。",
+      "code": "package main\n\nimport \"fmt\"\n\n// 文件叫 main.go，包名是 main，所在目录名又不是 main。\n// 三者不必一致：目录名只决定别人用哪条路径 import 你。\n// 唯一硬规矩是——同一个目录里所有普通文件必须写同一个包名。\n\nfunc main() {\n\tfmt.Println(\"包名、文件名、目录名三者独立\")\n}",
+      "lang": "go",
+      "notes": "同一目录里 a.go 写 package foo、b.go 写 package bar，编译报错：found packages foo (a.go) and bar (b.go)。目录名用小写单词，别用下划线或驼峰。"
+    },
+    {
+      "title": "大小写敏感",
+      "description": "Go 的标识符严格区分大小写，标准库的类型名都是大写开头的缩写（FS、HTTP、ID、URL）。写错一个字母编译器不会提示你，只会说找不到。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io/fs\"\n\t\"os\"\n)\n\nfunc main() {\n\t// 接口名是 fs.FS，不是 fs.Fs\n\tvar f fs.FS = os.DirFS(\".\")\n\tfmt.Println(f != nil)\n}",
+      "lang": "go",
+      "notes": "fs.FS 写成 fs.Fs 报 undefined: fs.Fs (but have FS)。struct 写成 Struct 是语法错误：syntax error: unexpected { at end of statement；string 写成 String 报 undefined: String（除非你自己定义过同名标识符）。"
+    },
+    {
+      "title": "漏掉 import",
+      "description": "标准库的包不会自动可见，用到哪个包就得 import 哪个。包名跟路径最后一段不一致时，可以在 import 后面起个别名。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io/fs\"\n\t\"os\"\n)\n\nfunc main() {\n\t// 用了 fs.ReadFile，就必须 import \"io/fs\"\n\tdata, err := fs.ReadFile(os.DirFS(\".\"), \"go.mod\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(len(data) > 0)\n}",
+      "lang": "go",
+      "notes": "漏掉 import 那一行，编译器报 undefined: fs。路径最后一段不是包名时写 import yaml \"gopkg.in/yaml.v3\"，之后就用 yaml.YAML 调用。"
+    },
+    {
+      "title": "//go:embed 必须带模式",
+      "description": "//go:embed 是编译期指令，必须写在包级变量的正上方，而且后面至少要跟一个文件模式，否则整个包编译不过。",
+      "code": "package main\n\nimport (\n\t\"embed\"\n\t\"fmt\"\n)\n\n//go:embed *.go\nvar files embed.FS\n\nfunc main() {\n\t// 真实项目里常写 //go:embed templates/*.html\n\tdata, err := files.ReadFile(\"main.go\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(len(data) > 0)\n}",
+      "lang": "go",
+      "notes": "只写 //go:embed 不带模式，编译报错：usage: //go:embed pattern...。模式写错、目录里没有匹配文件，报 pattern xxx: no matching files found。指令写在函数里报 go:embed cannot apply to var inside func。"
+    },
+    {
+      "title": "//go:embed 只能嵌入本包目录里的文件",
+      "description": "embed 的模式只能匹配当前包目录下的文件和它的子目录，包外的东西一律够不着。所以要嵌入哪个目录，就把指令写在那个目录所属的包里。",
+      "code": "package main\n\nimport (\n\t_ \"embed\"\n\t\"fmt\"\n)\n\n//go:embed go.mod\nvar modFile string\n\nfunc main() {\n\t// 嵌进来的文件就在本包目录里，路径相对包目录\n\tfmt.Println(len(modFile) > 0)\n}",
+      "lang": "go",
+      "notes": "internal/site 想嵌入仓库根的 content/，报 pattern content: no matching files found；写 //go:embed ../content/*.json 报 pattern ../content/*.json: invalid pattern syntax。正确做法是把 content/ 挪进包目录，或者在 content/ 所在目录建一个包专门做嵌入。"
+    },
+    {
+      "title": "go test 的工作目录是包目录",
+      "description": "跑 go test 时进程的当前目录是包所在的目录，不是仓库根。测试里按相对路径找模板、找测试数据，就会找不到。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"html/template\"\n)\n\nfunc main() {\n\t// 测试里执行这句会失败：go test 的工作目录是包目录，不是仓库根\n\ttmpl, err := template.ParseGlob(\"templates/*.html\")\n\tif err != nil {\n\t\tfmt.Println(\"解析失败:\", err)\n\t\treturn\n\t}\n\tfmt.Println(tmpl.Name())\n}",
+      "lang": "go",
+      "notes": "报 pattern matches no files（gin 的 LoadHTMLGlob 遇到同样的错误会直接 panic）。修法：测试里用 t.Chdir 切到需要的目录，或者用 //go:embed 把模板打进二进制，就不依赖工作目录了。"
+    },
+    {
+      "title": "html/template 会转义内容",
+      "description": "html/template 默认把插进去的数据当纯文本，尖括号会变成 &lt;。想让一段 HTML 原样输出，得显式声明成 template.HTML。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"html/template\"\n\t\"os\"\n)\n\nfunc main() {\n\ttmpl := template.Must(template.New(\"t\").Parse(`<div>{{.}}</div>`))\n\n\t// 普通字符串会被转义\n\t_ = tmpl.Execute(os.Stdout, \"<span>hi</span>\")\n\tfmt.Println()\n\n\t// 声明成 template.HTML 才原样输出\n\t_ = tmpl.Execute(os.Stdout, template.HTML(\"<span>hi</span>\"))\n\tfmt.Println()\n}",
+      "lang": "go",
+      "notes": "语法高亮（chroma）输出的就是 HTML 片段，直接塞进模板会变成 &lt;span&gt;，页面上看不到颜色。转成 template.HTML 之前先确认内容是自己生成的，别把用户输入直接转过去，那是 XSS。"
+    },
+    {
+      "title": "io/fs 的路径用斜杠",
+      "description": "io/fs 里的路径永远是斜杠分隔的，跟操作系统无关。拼路径用 path.Join，不要用 filepath.Join——后者在 Windows 上生成的是反斜杠。",
+      "code": "package main\n\nimport (\n\t\"embed\"\n\t\"fmt\"\n\t\"path\"\n)\n\n//go:embed main.go\nvar files embed.FS\n\nfunc main() {\n\t// io/fs 的路径用斜杠，拼路径用 path.Join\n\tp := path.Join(\"content\", \"go\", \"basic-types.json\")\n\tfmt.Println(p)\n\n\t// 写成反斜杠（Windows 上 filepath.Join 的产物），fs 根本找不到这个文件\n\t_, err := files.ReadFile(`content\\go\\basic-types.json`)\n\tfmt.Println(err)\n}",
+      "lang": "go",
+      "notes": "在 Windows 上 filepath.Join 生成 content\\go\\basic-types.json，fs.ReadFile 找不到它，报 file does not exist。io/fs 只认斜杠，而且路径必须是包目录内的相对路径，不能带 ..。"
+    },
+    {
+      "title": "未使用的局部变量会编译报错",
+      "description": "Go 要求函数内的局部变量必须被使用，否则整个包编译不过。这是有意设计的，不让你留一堆没用的变量。",
+      "code": "count := 1\n// count 从未被使用 —— 编译报错：\n// declared and not used: count",
+      "lang": "go",
+      "notes": "确实想丢掉一个值就用 _ 接住：_ = someFunc()。这条只针对函数内的局部变量，包级的变量声明了不用不报错。",
+      "expect_error": true
+    },
+    {
+      "title": "json tag 拼错不会报错",
+      "description": "encoding/json 按 tag 里的名字匹配 JSON 的键，对不上就当这个键不存在：既不报错，字段也保持零值。",
+      "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n)\n\ntype Entry struct {\n\tTitle string `json:\"title\"`\n\tNotes string `json:\"notes\"`\n}\n\nfunc main() {\n\tvar e Entry\n\t// JSON 里写的是 \"titel\"，少个 t：不报错，Title 还是零值\n\tif err := json.Unmarshal([]byte(`{\"titel\":\"整型\"}`), &e); err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Printf(\"title=%q notes=%q\\n\", e.Title, e.Notes)\n}",
+      "lang": "go",
+      "notes": "json.Unmarshal 也不检查多余的键，拼错的键会被整个忽略（只是大小写不同倒是对得上，Go 的匹配不区分大小写）。想要必填字段得自己校验，比如解出来 Title == \"\" 就当数据有问题。"
+    },
+    {
+      "title": "多返回值要全部接住",
+      "description": "一个函数返回几个值，调用时就得接几个，不想用的用 _ 占位。漏接一个直接编译不过。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"strconv\"\n)\n\nfunc main() {\n\t// strconv.Atoi 返回两个值，都要接住\n\tn, err := strconv.Atoi(\"42\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tfmt.Println(n)\n}",
+      "lang": "go",
+      "notes": "只接一个编译报错：assignment mismatch: 1 variable but strconv.Atoi returns 2 values。确实不需要 error 就写 n, _ := strconv.Atoi(s)。"
+    },
+    {
+      "title": "大写开头才是导出的",
+      "description": "包级标识符首字母大写才对包外可见，小写开头只在本包里能用。跨包用到小写标识符，编译器只会说找不到。",
+      "code": "package main\n\nimport \"fmt\"\n\n// 首字母大写才是导出给包外的\nfunc Add(a, b int) int {\n\treturn a + b\n}\n\nfunc main() {\n\tfmt.Println(Add(1, 2))\n}",
+      "lang": "go",
+      "notes": "别的包里用 p.add 报 undefined: p.add (but have Add)。首字母小写的标识符也不会出现在 godoc 里。"
+    },
+    {
+      "title": "组合示例：把这些坑都绕开",
+      "description": "一个完整的小程序：写出 JSON 配置文件，用 io/fs 按斜杠路径读回来，按 json tag 解析并自己校验必填字段，最后渲染成 HTML。",
+      "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"html/template\"\n\t\"io/fs\"\n\t\"os\"\n\t\"path\"\n)\n\n// Entry 是导出的结构体，字段上的 json tag 决定 JSON 怎么对上它\ntype Entry struct {\n\tTitle string `json:\"title\"`\n\tNotes string `json:\"notes\"`\n}\n\n// Load 解析一段 JSON，缺字段就返回 error\nfunc Load(raw []byte) (Entry, error) {\n\tvar e Entry\n\tif err := json.Unmarshal(raw, &e); err != nil {\n\t\treturn Entry{}, err\n\t}\n\tif e.Title == \"\" {\n\t\t// tag 拼错不会报错，只能自己查\n\t\treturn Entry{}, fmt.Errorf(\"没有 title 字段，检查 json tag 拼写\")\n\t}\n\treturn e, nil\n}\n\n// pageView 是模板要的数据，Body 是 template.HTML 所以不会被转义\ntype pageView struct {\n\tTitle string\n\tBody  template.HTML\n}\n\nfunc main() {\n\t// 先落一个配置文件\n\tif err := os.MkdirAll(\"data\", 0o755); err != nil {\n\t\tpanic(err)\n\t}\n\traw := []byte(`{\"title\":\"整型\",\"notes\":\"溢出会绕回成负数\"}`)\n\tif err := os.WriteFile(\"data/entry.json\", raw, 0o644); err != nil {\n\t\tpanic(err)\n\t}\n\n\t// 再用 io/fs 按斜杠路径读回来（别用 filepath.Join）\n\tdata, err := fs.ReadFile(os.DirFS(\".\"), path.Join(\"data\", \"entry.json\"))\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\n\te, err := Load(data)\n\tif err != nil {\n\t\tfmt.Fprintln(os.Stderr, \"加载失败:\", err)\n\t\tos.Exit(1)\n\t}\n\n\ttmpl := template.Must(template.New(\"entry\").Parse(`<h2>{{.Title}}</h2><p>{{.Body}}</p>`))\n\t_ = tmpl.Execute(os.Stdout, pageView{\n\t\tTitle: e.Title,\n\t\tBody:  template.HTML(\"<em>\" + e.Notes + \"</em>\"),\n\t})\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

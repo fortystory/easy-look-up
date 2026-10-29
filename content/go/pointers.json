@@ -1,0 +1,112 @@
+{
+  "id": "pointers",
+  "title": "指针",
+  "entries": [
+    {
+      "title": "取地址 & 与解引用 *",
+      "description": "&x 拿到变量 x 的地址，*p 顺着地址把值取回来。地址本身也是值，可以存起来传给函数。",
+      "code": "x := 10\np := &x\nfmt.Println(p, *p)",
+      "lang": "go",
+      "notes": "& 和 * 是成对的：& 把变量变地址，* 把地址变回值。*p 写在赋值左边（*p = 20）表示改 p 指向的那个变量。"
+    },
+    {
+      "title": "指针的零值是 nil",
+      "description": "指针变量不初始化就是 nil，表示「还没指向任何东西」。想知道一个指针有没有指向东西，只能拿它跟 nil 比。",
+      "code": "var p *int\nvar q *int = p\nfmt.Println(p == nil, q == nil)",
+      "lang": "go",
+      "notes": "nil 指针不能解引用，会 panic。指针常来自 map 查询或函数参数，拿到之后先判 nil 再用。"
+    },
+    {
+      "title": "通过指针修改原变量的值",
+      "description": "解引用表达式可以出现在赋值左边，改的就是指针指向的那个变量本身，不是副本。",
+      "code": "x := 10\np := &x\n*p = 20\nfmt.Println(x)",
+      "lang": "go",
+      "notes": "输出 20。传参时同理：把 &x 传进函数，函数里改的就是调用方的 x。"
+    },
+    {
+      "title": "&value 和 &value.Field",
+      "description": "结构体是值类型，但它的字段有地址。&v.X 指向 v 里面那块内存，改它 v.X 跟着变。",
+      "code": "type Point struct {\n\tX, Y int\n}\nv := Point{X: 1, Y: 2}\np := &v.X\n*p = 100\nfmt.Println(v.X)",
+      "lang": "go",
+      "notes": "&v 是整个结构体的地址（类型 *Point），&v.X 是字段的地址（类型 *int）。两者类型不同，不能互相赋值。"
+    },
+    {
+      "title": "不能取结构体字面量的字段地址",
+      "description": "结构体字面量没有名字，取不到它字段的地址。要先把它存进一个变量再取。",
+      "code": "type Point struct{ X int }\np := &Point{X: 1}.X\nfmt.Println(*p)",
+      "lang": "go",
+      "notes": "报错是「invalid operation: cannot take address of Point{…}.X (value of type int)」——字面量是编译期临时造出来的，没有可寻址的存放位置。改成 v := Point{X: 1}，再 p := &v.X 就行。",
+      "expect_error": true
+    },
+    {
+      "title": "指针 vs 结构体值：什么时候用指针接收者",
+      "description": "方法要改接收者的状态，就用指针接收者；只读就用值接收者。结构体大的时候用指针还能省掉一次拷贝。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Counter struct {\n\tn int\n}\n\nfunc (c *Counter) Inc() {\n\tc.n++\n}\n\nfunc (c Counter) Value() int {\n\treturn c.n\n}\n\nfunc main() {\n\tc := &Counter{}\n\tc.Inc()\n\tc.Inc()\n\tfmt.Println(c.n, c.Value())\n}",
+      "lang": "go",
+      "notes": "输出 2 2：Inc 是指针接收者，c.n 加了两次；Value 是值接收者，拿到的是副本，读到的值一样。这里是为了对照才并排写，真实项目里同一个类型只固定用一种接收者。"
+    },
+    {
+      "title": "解引用 nil 会 panic",
+      "description": "解引用 nil 指针是运行时 panic，编译期发现不了。指针来自函数参数或 map 查询时，用之前先判 nil。",
+      "code": "var p *int\nif p != nil {\n\tfmt.Println(*p)\n}\nfmt.Println(\"p 为 nil，跳过解引用\")",
+      "lang": "go",
+      "notes": "真去解引用会报「invalid memory address or nil pointer dereference」。防御的写法就是先判 nil 再解引用。"
+    },
+    {
+      "title": "new(T) 分配并返回指针",
+      "description": "new(T) 分配一块类型为 T 的零值内存，返回它的地址 *T。写构造函数返回指针时常用。",
+      "code": "p := new(int)\n*p = 42\nfmt.Println(*p)\nq := new(bool)\nfmt.Println(*q)",
+      "lang": "go",
+      "notes": "等价于先 var v T 再返回 &v，只是写法更短。new 只给零值，想要别的值还得自己赋值。多数场景 var p T 就够用。"
+    },
+    {
+      "title": "指针比较",
+      "description": "两个指针用 == 比的是地址，不是它们指向的值。只有拿指针跟 nil 比，才是在问「有没有指向东西」。",
+      "code": "x := 10\np := &x\nq := &x\nvar np *int\nfmt.Println(p == q, p == np, np == nil)",
+      "lang": "go",
+      "notes": "p == q 是 true，因为两个指针指向同一个 x。想比指向的值得写 *p == *q。不同类型的指针不能比，编译报错 mismatched types。"
+    },
+    {
+      "title": "指针作为 map 的键",
+      "description": "指针可比较，所以能当 map 的键。同一个指针（同一个地址）才算同一个键。",
+      "code": "type Point struct{ X, Y int }\np := &Point{X: 1}\nm := map[*Point]string{}\nm[p] = \"原点\"\nfmt.Println(m[p])",
+      "lang": "go",
+      "notes": "另一个指针哪怕内容一样，也是不同的键。反过来「值是指针」更常用：map[string]*User，取出来直接改指向的对象，不用写回。"
+    },
+    {
+      "title": "指针指向数组元素",
+      "description": "数组里的每个元素都有地址。&arr[i] 指向数组内部那块固定位置，改它 arr 跟着变。",
+      "code": "arr := [3]int{10, 20, 30}\np := &arr[1]\n*p = 200\nfmt.Println(arr)",
+      "lang": "go",
+      "notes": "数组本身是值类型（赋值会整份拷贝），但元素是可寻址的。指针也能指向任何普通变量和结构体字段。"
+    },
+    {
+      "title": "切片元素取地址的坑",
+      "description": "&s[i] 指的是底层数组里那一格。切片扩容换了底层数组之后，这个指针还指着旧的。",
+      "code": "s := []int{1, 2, 3}\np := &s[0]\ns = append(s, 4, 5, 6)\ns[0] = 100\nfmt.Println(*p, s[0])",
+      "lang": "go",
+      "notes": "输出 1 100：p 还连着旧的底层数组，s[0] 已经是新数组里的值。想长期持有元素地址，就别指望它跟着切片走。"
+    },
+    {
+      "title": "for 循环里取切片元素的地址",
+      "description": "想在循环里拿到每个元素的地址，用 &s[i] 取下标，别取循环变量的地址。",
+      "code": "s := []int{1, 2, 3}\nvar ps []*int\nfor i := range s {\n\tps = append(ps, &s[i])\n}\nfmt.Println(*ps[0], *ps[1], *ps[2])",
+      "lang": "go",
+      "notes": "Go 1.22 起 range 的循环变量每次迭代都新建，&v 不再共用同一个变量；1.21 及更早所有 &v 都指向同一个变量，最后全变成最后一个元素的值。老代码要兼容就写 &s[i]。"
+    },
+    {
+      "title": "指针和 GC",
+      "description": "Go 自带 GC，不用手动释放内存，也没有 free。只要指针还能被找到，它指向的对象就不会被回收。",
+      "code": "type Node struct {\n\tVal  int\n\tNext *Node\n}\nn := &Node{Val: 1}\nn.Next = &Node{Val: 2}\nfmt.Println(n.Val, n.Next.Val)",
+      "lang": "go",
+      "notes": "别把 C 里 malloc/free 的习惯搬过来。Go 的 GC 按可达性回收，循环引用的对象照样能收（引用计数才会泄漏）。反过来，指针挂在全局变量上，就会一直让那个对象活着。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：取地址与解引用、通过指针改值、指针接收者、nil 检查、new、指针作 map 的键、指向数组和切片元素。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype Counter struct {\n\tName string\n\tn    int\n}\n\nfunc (c *Counter) Inc() {\n\tc.n++\n}\n\nfunc (c *Counter) Get() int {\n\treturn c.n\n}\n\nfunc main() {\n\t// 指针接收者改状态\n\tc := &Counter{Name: \"点击\"}\n\tc.Inc()\n\tc.Inc()\n\tfmt.Println(c.Name, c.Get())\n\n\t// 取地址与解引用\n\tx := 10\n\tp := &x\n\t*p = 20\n\tfmt.Println(x, *p)\n\n\t// nil 要先判再解引用\n\tvar np *int\n\tif np != nil {\n\t\tfmt.Println(*np)\n\t} else {\n\t\tfmt.Println(\"np 为 nil\")\n\t}\n\n\t// new 分配零值并返回指针\n\tq := new(int)\n\t*q = 7\n\tfmt.Println(*q)\n\n\t// 指针作 map 的键\n\tm := map[*Counter]string{}\n\tm[c] = \"同一个计数器\"\n\tfmt.Println(m[c])\n\n\t// 指向数组元素\n\tarr := [3]int{1, 2, 3}\n\tap := &arr[1]\n\t*ap = 200\n\tfmt.Println(arr)\n\n\t// 指向切片元素\n\ts := []int{4, 5, 6}\n\tsp := &s[0]\n\t*sp = 40\n\tfmt.Println(s)\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

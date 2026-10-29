@@ -1,0 +1,104 @@
+{
+  "id": "middleware",
+  "title": "中间件",
+  "entries": [
+    {
+      "title": "中间件是什么",
+      "description": "中间件就是一个普通函数 func(c *gin.Context)，签名固定，没有返回值。把它注册进路由，gin 就会在 handler 前后插进它的逻辑——鉴权、计时、日志这类横切的东西都靠它。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 中间件就是一个普通函数，参数是 *gin.Context，没有返回值\nfunc before(c *gin.Context) {\n\tfmt.Println(\"中间件：请求进来\", c.Request.URL.Path)\n\tc.Next() // 把控制权交给后面的 handler\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(before)\n\tr.GET(\"/hello\", func(c *gin.Context) {\n\t\tfmt.Println(\"handler：处理 /hello\")\n\t\tc.String(200, \"hello\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/hello\", nil))\n\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "中间件只有 func(c *gin.Context) 一种形态，不会像 net/http 那样给你一个 next 回调；要给它传参数就用闭包把参数捕获进去。"
+    },
+    {
+      "title": "中间件函数的类型 gin.HandlerFunc",
+      "description": "gin 给中间件这种形态起了个名字：gin.HandlerFunc。普通函数和函数字面量都能直接传给它，写成这个类型主要是为了能塞进 []gin.HandlerFunc 这样的切片里统一管理。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc auth(c *gin.Context) {\n\tfmt.Println(\"鉴权中间件\")\n\tc.Next()\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// HandlerFunc 就是 func(*gin.Context) 的具名类型\n\tvar mw gin.HandlerFunc = auth\n\tfmt.Printf(\"类型: %T\\n\", mw)\n\n\tr := gin.New()\n\tr.Use(mw)\n\tr.Use(func(c *gin.Context) { // 也可以直接传函数字面量\n\t\tfmt.Println(\"匿名中间件\")\n\t\tc.Next()\n\t})\n\tfmt.Println(\"已注册中间件数:\", len(r.Handlers))\n}",
+      "lang": "go",
+      "notes": "HandlerFunc 是定义出来的新类型，不是别名：它和普通的 func(*gin.Context) 能互相赋值，但做类型断言或反射时两者不是同一个类型。"
+    },
+    {
+      "title": "注册全局中间件 r.Use",
+      "description": "想在所有路由上都生效的逻辑用 r.Use 注册，比如日志、限流、panic 恢复。它挂在 Engine 上，每一条路由都会经过它。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc count(c *gin.Context) {\n\tc.Next()\n\tfmt.Println(\"经过中间件:\", c.Request.URL.Path)\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(count) // 必须在注册路由之前\n\tr.GET(\"/a\", func(c *gin.Context) { c.String(200, \"a\") })\n\tr.GET(\"/b\", func(c *gin.Context) { c.String(200, \"b\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/b\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "r.Use 必须写在注册路由之前：gin 在注册路由时就把当时的中间件链固定下来了，之后再 Use 对已经注册的路由不生效。"
+    },
+    {
+      "title": "路由组中间件",
+      "description": "只对某一批路由生效时，先用 r.Group 建组，再在组上 Use。组可以再嵌套子组，子组的中间件排在父组的中间件之后。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc auth(c *gin.Context) {\n\tfmt.Println(\"鉴权中间件\")\n\tc.Next()\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tapi := r.Group(\"/api\")\n\tapi.Use(auth) // 只对 /api 组里的路由生效\n\tapi.GET(\"/users\", func(c *gin.Context) {\n\t\tc.String(200, \"users\")\n\t})\n\tr.GET(\"/ping\", func(c *gin.Context) {\n\t\tc.String(200, \"ping\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/users\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, httptest.NewRequest(\"GET\", \"/ping\", nil))\n\tfmt.Println(\"响应:\", w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "组中间件只覆盖组内的路由，组外的路由完全不受影响。r.Group 返回 *gin.RouterGroup，除了 Use，上面还有 GET、POST、Group 这些方法。"
+    },
+    {
+      "title": "c.Next()：把控制权交给下一个 handler",
+      "description": "c.Next() 让 gin 继续往下执行链上的下一个 handler。它写在中间件函数的哪个位置，就决定了中间件里「请求前」和「响应后」两段代码怎么分。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc mw(c *gin.Context) {\n\tfmt.Println(\"before\")\n\tc.Next() // 执行到这里，后面的 handler 才跑\n\tfmt.Println(\"after\")\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(mw)\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tfmt.Println(\"handler\")\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "不写 c.Next() 也不会挡住后面的 handler——gin 已经替整条链调过一次 Next()；不写只是让你写在它后面的代码提前到 handler 之前跑。想做「响应后」的处理就必须写 c.Next()。"
+    },
+    {
+      "title": "c.Abort()：终止后续处理",
+      "description": "校验失败、不想让它走到后面的 handler 时，调 c.Abort() 把链掐断。后面的 handler 不再执行，客户端收到的是你在中间件里写的那份响应。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc guard(c *gin.Context) {\n\tc.String(403, \"禁止访问\")\n\tc.Abort() // 阻断后面的 handler\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(guard)\n\tr.GET(\"/secret\", func(c *gin.Context) {\n\t\tfmt.Println(\"不该执行到这里\")\n\t\tc.String(200, \"secret\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/secret\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "Abort 只把链的游标推到末尾，不会终止当前中间件函数：c.Abort() 之后的代码照样会跑，所以写完响应就 Abort 并 return，别再往里追加内容。"
+    },
+    {
+      "title": "中间件和 handler 之间传值：c.Set / c.Get",
+      "description": "中间件算出来的结果要交给 handler 用，就在中间件里 c.Set 存进去，在 handler 里 c.Get 取出来。值只存在当前这次请求的 Context 里，请求结束就没了。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc setUser(c *gin.Context) {\n\tc.Set(\"user\", \"张三\")\n\tc.Next()\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(setUser)\n\tr.GET(\"/me\", func(c *gin.Context) {\n\t\tname, ok := c.Get(\"user\")\n\t\tfmt.Println(\"中间件传来的值:\", name, ok)\n\t\tc.String(200, fmt.Sprint(name))\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/me\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "c.Get 返回两个值：取到的值（any）和是否取到（bool）。取不到时值是 nil、ok 是 false；只想要字符串的话用 c.GetString 更省事。"
+    },
+    {
+      "title": "请求前处理与响应后处理",
+      "description": "c.Next() 之前的代码在请求进来时执行，之后的代码在 handler 跑完、响应写出去之前执行。多套几层中间件，这个前后关系会像洋葱一样一层层套起来。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc around(c *gin.Context) {\n\tfmt.Println(\"1 请求前:\", c.Request.Method, c.Request.URL.Path)\n\tc.Next()\n\tfmt.Println(\"3 响应后: 状态码\", c.Writer.Status())\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(around)\n\tr.GET(\"/order\", func(c *gin.Context) {\n\t\tfmt.Println(\"2 handler 里\")\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/order\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "响应后的代码里能拿到 c.Writer.Status()，但那时响应通常已经写好了，再改就来不及；想在响应后加工内容，要在 c.Next() 之前就准备好。"
+    },
+    {
+      "title": "计时中间件",
+      "description": "想知道每个接口花了多久，在中间件里用 time.Now() 取开始时间，c.Next() 之后再取一次时间，两个时间点相减就是这次请求的耗时。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc timing(c *gin.Context) {\n\tstart := time.Now()\n\tc.Next()\n\tfmt.Printf(\"%s %s 耗时 %v\\n\", c.Request.Method, c.Request.URL.Path, time.Since(start))\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(timing)\n\tr.GET(\"/slow\", func(c *gin.Context) {\n\t\ttime.Sleep(10 * time.Millisecond)\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/slow\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "计时必须跨过 c.Next()：只测前半段等于没测 handler 本身的耗时。算出来的耗时包含 handler 内部花的时间。"
+    },
+    {
+      "title": "日志中间件",
+      "description": "自己写日志中间件能完全控制格式：记下方法、路径、状态码和耗时。方法和路径要在 c.Next() 之前先存到变量里，后面再从请求上取值不一定靠得住。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc logger(c *gin.Context) {\n\tstart := time.Now()\n\tpath := c.Request.URL.Path\n\tc.Next()\n\tfmt.Printf(\"%s %s %d %v\\n\", c.Request.Method, path, c.Writer.Status(), time.Since(start))\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(logger)\n\tr.GET(\"/users\", func(c *gin.Context) {\n\t\tc.JSON(200, gin.H{\"count\": 2})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/users\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "gin.Default() 自带 Logger 和 Recovery 两个中间件；想自己控制日志格式就用 gin.New() 加自己的日志中间件。handler 一个响应都没写时，c.Writer.Status() 返回 200。"
+    },
+    {
+      "title": "认证中间件",
+      "description": "认证中间件典型写法：先从请求头取出 token，不通过就直接回 401 并中止；通过就把用户信息 c.Set 下去，handler 再用 c.Get 取。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc auth(c *gin.Context) {\n\ttoken := c.GetHeader(\"Authorization\")\n\tif token != \"Bearer secret\" {\n\t\tc.AbortWithStatusJSON(401, gin.H{\"error\": \"未认证\"})\n\t\treturn\n\t}\n\tc.Set(\"user\", \"张三\")\n\tc.Next()\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(auth)\n\tr.GET(\"/me\", func(c *gin.Context) {\n\t\tuser, _ := c.Get(\"user\")\n\t\tc.JSON(200, gin.H{\"user\": user})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/me\", nil))\n\tfmt.Println(\"没带 token:\", w.Code, w.Body.String())\n\n\tw2 := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/me\", nil)\n\treq.Header.Set(\"Authorization\", \"Bearer secret\")\n\tr.ServeHTTP(w2, req)\n\tfmt.Println(\"带了 token:\", w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "认证失败要 Abort（gin 的 AbortWithStatusJSON 本身就带 Abort）并 return，否则后面的 handler 还会执行，401 的响应体会被追加成两段。"
+    },
+    {
+      "title": "多个中间件的执行顺序",
+      "description": "r.Use 可以一次传多个中间件，也可以分多次调用。进入请求时按注册顺序正序执行，退出时按相反顺序收尾——这就是洋葱模型。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc first(c *gin.Context) {\n\tfmt.Println(\"1 进入\")\n\tc.Next()\n\tfmt.Println(\"4 退出\")\n}\n\nfunc second(c *gin.Context) {\n\tfmt.Println(\"2 进入\")\n\tc.Next()\n\tfmt.Println(\"3 退出\")\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(first, second) // 分两次 r.Use(first); r.Use(second) 也一样\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tfmt.Println(\"handler\")\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Println(\"响应:\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "顺序只跟注册顺序有关；组中间件排在它从父级继承来的中间件之后，因为 r.Group 会把当时的中间件链复制一份给新组。"
+    },
+    {
+      "title": "中间件里写响应后要 Abort",
+      "description": "中间件自己把响应写出去时，必须紧跟一句 c.Abort()。不 Abort 的话后面的 handler 照样会执行，响应体被追加成两段，状态码还停在中间件写的那个。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 错误写法：写了响应但没 Abort\n\tbad := gin.New()\n\tbad.Use(func(c *gin.Context) {\n\t\tc.String(401, \"未认证\")\n\t})\n\tbad.GET(\"/\", func(c *gin.Context) {\n\t\tc.String(200, \"secret\")\n\t})\n\tw1 := httptest.NewRecorder()\n\tbad.ServeHTTP(w1, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Printf(\"没 Abort: %d %q\\n\", w1.Code, w1.Body.String())\n\n\t// 正确写法：写完响应立刻 Abort\n\tgood := gin.New()\n\tgood.Use(func(c *gin.Context) {\n\t\tc.String(401, \"未认证\")\n\t\tc.Abort()\n\t})\n\tgood.GET(\"/\", func(c *gin.Context) {\n\t\tc.String(200, \"secret\")\n\t})\n\tw2 := httptest.NewRecorder()\n\tgood.ServeHTTP(w2, httptest.NewRequest(\"GET\", \"/\", nil))\n\tfmt.Printf(\"有 Abort: %d %q\\n\", w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "gin 官方提供了 AbortWithStatus、AbortWithStatusJSON 这类「写响应 + 中止」的组合函数，比手写 c.String 再 c.Abort() 更省事。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "一个完整的小服务：全局日志中间件记录每次请求，/api 组上挂认证中间件，认证通过后把用户 c.Set 下去，handler 用 c.Get 取。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 全局中间件：记日志 + 计时\nfunc logger(c *gin.Context) {\n\tstart := time.Now()\n\tpath := c.Request.URL.Path\n\tc.Next()\n\tfmt.Printf(\"[log] %s %s %d %v\\n\", c.Request.Method, path, c.Writer.Status(), time.Since(start))\n}\n\n// 组中间件：认证\nfunc auth(c *gin.Context) {\n\tif c.GetHeader(\"Authorization\") != \"Bearer secret\" {\n\t\tc.AbortWithStatusJSON(401, gin.H{\"error\": \"未认证\"})\n\t\treturn\n\t}\n\tc.Set(\"user\", \"张三\")\n\tc.Next()\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(logger)\n\n\tapi := r.Group(\"/api\")\n\tapi.Use(auth)\n\tapi.GET(\"/me\", func(c *gin.Context) {\n\t\tuser, _ := c.Get(\"user\")\n\t\tc.JSON(200, gin.H{\"user\": user})\n\t})\n\n\tr.GET(\"/ping\", func(c *gin.Context) {\n\t\tc.String(200, \"pong\")\n\t})\n\n\t// 没带 token：被认证中间件拦下\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/me\", nil))\n\tfmt.Println(\"无 token:\", w.Code, w.Body.String())\n\n\t// 带上 token：handler 拿到中间件传来的用户\n\tw2 := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/api/me\", nil)\n\treq.Header.Set(\"Authorization\", \"Bearer secret\")\n\tr.ServeHTTP(w2, req)\n\tfmt.Println(\"有 token:\", w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

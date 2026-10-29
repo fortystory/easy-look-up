@@ -1,0 +1,111 @@
+{
+  "id": "errors",
+  "title": "错误处理",
+  "entries": [
+    {
+      "title": "error 接口",
+      "description": "error 是语言内置的接口，只有一个方法 Error() string。函数把出错信息包成 error 返回，调用方拿到后先判它是不是 nil。",
+      "code": "// error 接口只有一个方法：Error() string\nfind := func(id int) error {\n\tif id == 0 {\n\t\treturn fmt.Errorf(\"id 不能为 %d\", id)\n\t}\n\treturn nil\n}\nfmt.Println(find(0))",
+      "lang": "go",
+      "notes": "error 是预定义的接口类型，不是 interface{}。`var err error = 42` 编译不过。"
+    },
+    {
+      "title": "if err != nil 就提前返回",
+      "description": "Go 没有异常，函数出错就把错误当返回值传出去。调用方拿到 error 第一件事就是判 nil，不是 nil 就原样往上抛，这是 Go 里最常见的写法。",
+      "code": "parse := func(s string) (int, error) {\n\tvar n int\n\tif _, err := fmt.Sscanf(s, \"%d\", &n); err != nil {\n\t\treturn 0, err\n\t}\n\treturn n, nil\n}\nn, err := parse(\"42\")\nfmt.Println(n, err)",
+      "lang": "go",
+      "notes": "err 是接口，`err != nil` 判断的是接口本身。把一个 nil 的 *MyError 装进 error 接口，err != nil 仍然是 true，这是典型的 typed nil 陷阱。"
+    },
+    {
+      "title": "errors.New 创建错误",
+      "description": "标准库 errors 包提供 New，用一段固定文本造一个 error。错误内容固定不变时用它；要带变量或格式就改用 fmt.Errorf。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nfunc main() {\n\terr := errors.New(\"配置文件不存在\")\n\tfmt.Println(err)\n}",
+      "lang": "go",
+      "notes": "errors.New 只接受固定字符串，想带变量就得用 fmt.Errorf。下面几条用到 errors 包，写的是能直接跑的完整小程序。"
+    },
+    {
+      "title": "fmt.Errorf 造带信息的错误",
+      "description": "错误信息里要带变量时用 fmt.Errorf，格式串和 fmt.Printf 一样，可以有多个 %v、%d，返回值同样是 error。",
+      "code": "load := func(name string, code int) error {\n\tif code != 200 {\n\t\treturn fmt.Errorf(\"加载 %s 失败：状态码 %d\", name, code)\n\t}\n\treturn nil\n}\nfmt.Println(load(\"a.txt\", 500))",
+      "lang": "go",
+      "notes": "别把整个响应体塞进错误信息，报错要能一眼看出出了什么事。"
+    },
+    {
+      "title": "自定义错误类型",
+      "description": "错误要带额外信息（错误码、出错的字段）时定义自己的类型，给它加一个 Error() string 方法就自动满足 error 接口。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype ValidationError struct{ Field string }\n\nfunc (e *ValidationError) Error() string {\n\treturn \"字段 \" + e.Field + \" 不合法\"\n}\n\nfunc main() {\n\terr := &ValidationError{Field: \"age\"}\n\tfmt.Println(err)\n}",
+      "lang": "go",
+      "notes": "接收者用指针还是值要前后统一：用值接收者时 T 和 *T 都实现了 error，混用容易在 errors.As 时取不到目标类型。"
+    },
+    {
+      "title": "用 %w 包装错误",
+      "description": "底层错误往上抛时用 fmt.Errorf 的 %w 把它包进去：既补了上下文，又保留错误链，之后还能顺着链找到最初那个错误。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar ErrNotFound = errors.New(\"记录不存在\")\n\nfunc main() {\n\tbase := fmt.Errorf(\"查询数据库失败: %w\", ErrNotFound)\n\terr := fmt.Errorf(\"加载用户失败: %w\", base)\n\tfmt.Println(err)\n\tfmt.Println(errors.Unwrap(err))\n\tfmt.Println(errors.Unwrap(errors.Unwrap(err)))\n}",
+      "lang": "go",
+      "notes": "被 %w 包进去的错误还能被 errors.Is、errors.As 找到。一次要合并多个错误用 errors.Join，别自己拼字符串。"
+    },
+    {
+      "title": "errors.As 取出自定义错误",
+      "description": "要用错误里的具体字段，先声明目标变量的指针，再交给 errors.As：它会沿错误链找第一个类型匹配的错误并填进去。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\ntype ValidationError struct{ Field string }\n\nfunc (e *ValidationError) Error() string {\n\treturn \"字段 \" + e.Field + \" 不合法\"\n}\n\nfunc main() {\n\terr := fmt.Errorf(\"保存用户失败: %w\", &ValidationError{Field: \"age\"})\n\tvar ve *ValidationError\n\tif errors.As(err, &ve) {\n\t\tfmt.Println(\"出错的字段:\", ve.Field)\n\t}\n}",
+      "lang": "go",
+      "notes": "第二个参数必须是指向指针类型的指针（**T），传 T 或 *T 都编译不过；目标类型没实现 error 也编译不过。"
+    },
+    {
+      "title": "哨兵错误配 errors.Is",
+      "description": "把错误做成包级的导出变量（哨兵错误），调用方就能用 errors.Is 判断是不是某个特定错误，不用去解析错误字符串。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar ErrNotFound = errors.New(\"用户不存在\")\n\nfunc findUser(id int) error {\n\tif id == 0 {\n\t\treturn fmt.Errorf(\"查找用户 %d 失败: %w\", id, ErrNotFound)\n\t}\n\treturn nil\n}\n\nfunc main() {\n\terr := findUser(0)\n\tif errors.Is(err, ErrNotFound) {\n\t\tfmt.Println(\"用户不存在，返回 404\")\n\t}\n}",
+      "lang": "go",
+      "notes": "哨兵错误用 ErrXxx 命名并导出。用 == 比较是老写法，但错误被包过一层之后 == 就失效了，得换成 errors.Is。"
+    },
+    {
+      "title": "panic 和 recover",
+      "description": "panic 立刻中止当前 goroutine，沿调用栈往上抛；recover 只能在 defer 里的函数中调用，用来接住 panic，让程序继续跑。",
+      "code": "risky := func() {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tfmt.Println(\"接住了 panic:\", r)\n\t\t}\n\t}()\n\tpanic(\"出错了\")\n}\nrisky()\nfmt.Println(\"程序继续跑\")",
+      "lang": "go",
+      "notes": "recover 必须写在 defer 的函数里才有效。没有 panic 正在传播时，recover 返回 nil。"
+    },
+    {
+      "title": "什么时候该用 panic",
+      "description": "只有「程序没法继续，而且这是程序员写错了」的情况才用 panic，比如下标越界、除以零、必须的初始化没做。panic 表示 bug，不是业务流程错误。",
+      "code": "at := func(items []string, i int) string {\n\tif i < 0 || i >= len(items) {\n\t\tpanic(\"下标越界\")\n\t}\n\treturn items[i]\n}\nfmt.Println(at([]string{\"a\", \"b\"}, 1))",
+      "lang": "go",
+      "notes": "标准库只在包初始化失败这类没法恢复的场景 panic，普通运行时错误（文件读不到、网络超时）都返回 error。"
+    },
+    {
+      "title": "什么时候不该用 panic",
+      "description": "调用方能处理的情况一律用 error 返回：文件读不到、网络超时、参数不合法、查不到记录。这些是正常流程的一部分，不是程序员的 bug。",
+      "code": "load := func(name string) error {\n\tif name == \"\" {\n\t\treturn fmt.Errorf(\"文件名为空: %q\", name)\n\t}\n\treturn nil\n}\nif err := load(\"\"); err != nil {\n\tfmt.Println(\"处理错误:\", err)\n}",
+      "lang": "go",
+      "notes": "在库里 panic 会把整个调用方的进程带崩。除非你明确告诉调用方「这里只能 panic」，否则一律返回 error。"
+    },
+    {
+      "title": "错误信息要不要带 error: 前缀",
+      "description": "不要带。错误信息本身就是个错误值，写成 \"error: xxx\" 之后日志里会变成 \"error: error: ...\"。要标记就让打印的一方加。",
+      "code": "name := \"config.yaml\"\nerr := fmt.Errorf(\"读取 %s 失败\", name)\n// 错误信息里不带前缀，前缀交给打印的一方\nfmt.Println(\"error:\", err)",
+      "lang": "go",
+      "notes": "Go 的约定：错误信息用小写开头、结尾不加标点。「failed to」这类话留给调用方的上下文，错误信息只说结果。"
+    },
+    {
+      "title": "错误往上传还是就地处理",
+      "description": "底层库只加上下文往上抛，不替调用方做业务判断；上层拿到 error 后就地处理：能补就补（重试、默认值），补不了的才继续往上抛。",
+      "code": "validate := func(name string) error {\n\tif name == \"\" {\n\t\treturn fmt.Errorf(\"名称为空: %q\", name)\n\t}\n\treturn nil\n}\nsave := func(name string) error {\n\tif err := validate(name); err != nil {\n\t\treturn fmt.Errorf(\"保存 %s 失败: %w\", name, err)\n\t}\n\treturn nil\n}\nfmt.Println(save(\"\"))",
+      "lang": "go",
+      "notes": "库代码不要自己决定重试、降级这类业务策略，只加上下文往上抛。错误也不能悄悄吞掉：要么处理掉，要么带上下文返回。"
+    },
+    {
+      "title": "defer 里 recover 把 panic 转成 error",
+      "description": "把 recover 写在带命名返回值的 defer 里，就能把 panic 变成一个普通的 error 返回给调用方，调用方照常判 err != nil。",
+      "code": "safe := func() (err error) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\terr = fmt.Errorf(\"接住 panic: %v\", r)\n\t\t}\n\t}()\n\tpanic(\"出错了\")\n}\nfmt.Println(safe())",
+      "lang": "go",
+      "notes": "要用命名返回值 err 才能在 defer 里改掉返回值；panic 的值也要一起带上，否则调用方只拿到一句空错误。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：自定义错误类型、哨兵错误、errors.New、fmt.Errorf 加 %w、errors.Is、errors.As，以及用 defer 里的 recover 把 panic 转成 error。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n)\n\nvar ErrNotFound = errors.New(\"用户不存在\")\n\ntype ValidationError struct{ Field string }\n\nfunc (e *ValidationError) Error() string {\n\treturn \"字段 \" + e.Field + \" 不合法\"\n}\n\nfunc findUser(id int) error {\n\tif id == 0 {\n\t\treturn fmt.Errorf(\"查找用户 %d 失败: %w\", id, ErrNotFound)\n\t}\n\treturn nil\n}\n\nfunc validate(name string) error {\n\tif name == \"\" {\n\t\treturn &ValidationError{Field: \"name\"}\n\t}\n\treturn nil\n}\n\nfunc safe(fn func() error) (err error) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\terr = fmt.Errorf(\"panic 转成 error: %v\", r)\n\t\t}\n\t}()\n\treturn fn()\n}\n\nfunc main() {\n\terr := findUser(0)\n\tfmt.Println(err)\n\tfmt.Println(errors.Is(err, ErrNotFound))\n\n\tvar ve *ValidationError\n\tif errors.As(validate(\"\"), &ve) {\n\t\tfmt.Println(\"校验失败的字段:\", ve.Field)\n\t}\n\n\terr = safe(func() error {\n\t\tpanic(\"数据库连接炸了\")\n\t})\n\tfmt.Println(err)\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

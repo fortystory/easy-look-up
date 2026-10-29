@@ -31,3 +31,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Go 工具链的本地缓存和临时产物
+.gocache/
+.verify_tmp*/
+.tmp*/

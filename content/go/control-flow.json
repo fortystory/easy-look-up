@@ -1,0 +1,104 @@
+{
+  "id": "control-flow",
+  "title": "条件分支",
+  "entries": [
+    {
+      "title": "if 基本形式",
+      "description": "最基础的分支：条件成立就跑一段代码。Go 的 if 只接受布尔条件，数字和指针都不行。",
+      "code": "age := 18\nif age >= 18 {\n\tfmt.Println(\"已成年\")\n}",
+      "lang": "go",
+      "notes": "条件外面不要写小括号，Go 写的是 if age >= 18 { ... }。写成 if (age >= 18) 会编译报错，大括号也必须写。"
+    },
+    {
+      "title": "if / else if / else",
+      "description": "有两三个互斥分支时用 if 链。条件从上往下比，命中第一个就停，后面的分支不再看。",
+      "code": "score := 85\nif score >= 90 {\n\tfmt.Println(\"优秀\")\n} else if score >= 60 {\n\tfmt.Println(\"及格\")\n} else {\n\tfmt.Println(\"不及格\")\n}",
+      "lang": "go",
+      "notes": "else 和 else if 可以省略，但只写 if 时后面的大括号不能省。"
+    },
+    {
+      "title": "else if 链：条件的顺序",
+      "description": "用 if 链时把更严格的条件写在前面。分支是「从上往下第一个命中就生效」，顺序错了再严的条件也走不到。",
+      "code": "score := 85\nif score >= 60 {\n\tfmt.Println(\"及格\")\n} else if score >= 90 {\n\tfmt.Println(\"优秀\")\n}",
+      "lang": "go",
+      "notes": "上面 85 分只会打印「及格」。把 score >= 90 挪到前面，两个分支就都能按预期生效。"
+    },
+    {
+      "title": "if 带初始化语句",
+      "description": "err 只想在这一次判断里用的时候，用 if 带初始化语句，不必把它提到外层。这是 Go 处理错误最常见的写法。",
+      "code": "parse := func(s string) (int, error) { return len(s), nil }\nif v, err := parse(\"42\"); err != nil {\n\tfmt.Println(\"解析失败:\", err)\n} else {\n\tfmt.Println(\"得到\", v)\n}",
+      "lang": "go",
+      "notes": "v 和 err 只活在这个 if/else 块里，出了块就没了，不会污染函数作用域。"
+    },
+    {
+      "title": "if 带条件表达式",
+      "description": "先算一个值再拿它当条件时，把两步并成一条 if。临时变量不用起名字，也漏不到外面。",
+      "code": "if v := 1; v > 0 {\n\tfmt.Println(\"正数\", v)\n} else {\n\tfmt.Println(\"非正数\", v)\n}",
+      "lang": "go",
+      "notes": "初始化语句和条件之间用分号隔开，条件本身必须是布尔表达式；v 只在这个 if 里可见。"
+    },
+    {
+      "title": "分支里的变量会遮蔽外层变量",
+      "description": "分支里的 := 是新声明一个变量，会把外层同名变量盖住。要用外层的值就写 = 赋值，别写 :=。",
+      "code": "score := 60\nif score := 60; score >= 60 {\n\tfmt.Println(\"块内:\", score)\n}\nfmt.Println(\"块外:\", score)",
+      "lang": "go",
+      "notes": "这种遮蔽（shadow）不会有编译报错，值却悄悄换了一个，排查起来很费劲。"
+    },
+    {
+      "title": "switch 基本形式",
+      "description": "拿同一个值跟一组常量比时用 switch，比一长串 if x == 1 { } 清楚得多。",
+      "code": "day := 3\nswitch day {\ncase 1:\n\tfmt.Println(\"周一\")\ncase 2:\n\tfmt.Println(\"周二\")\n}",
+      "lang": "go",
+      "notes": "Go 的 case 不会自动贯穿到下一个 case，命中一个就结束，所以不用写 C 里的那个 break。"
+    },
+    {
+      "title": "一个 case 里列多个值",
+      "description": "几个常量共享同一段处理逻辑时，在 case 里用逗号一次列全，不用写好几个 case。",
+      "code": "day := 6\nswitch day {\ncase 6, 7:\n\tfmt.Println(\"周末\")\ncase 1:\n\tfmt.Println(\"周一\")\n}",
+      "lang": "go",
+      "notes": "列出来的值只要有任意一个相等就命中这一支，值的顺序不影响结果。"
+    },
+    {
+      "title": "default 分支",
+      "description": "所有 case 都不匹配时兜底走 default。可以不写，写了就是「其它情况」的出口。",
+      "code": "day := 7\nswitch day {\ncase 1:\n\tfmt.Println(\"周一\")\ndefault:\n\tfmt.Println(\"不是周一\")\n}",
+      "lang": "go",
+      "notes": "default 最多写一个，习惯放在最后。省略它就表示「都不匹配就什么都不做」。"
+    },
+    {
+      "title": "switch 带初始化语句",
+      "description": "和 if 一样，switch 也能带初始化语句，临时变量只在整个 switch 块里可见。",
+      "code": "n := 3\nswitch v := n * 2; v {\ncase 6:\n\tfmt.Println(\"六\")\ndefault:\n\tfmt.Println(\"其它\", v)\n}",
+      "lang": "go",
+      "notes": "写法和 if 一样是分号隔开：switch v := n * 2; v { ... }。"
+    },
+    {
+      "title": "switch 不带表达式",
+      "description": "没有可比较的单一表达式时，把条件直接写进 case；也可以按 true/false 匹配，等价于 if 链。",
+      "code": "score := 85\npass := score >= 60\nswitch {\ncase !pass:\n\tfmt.Println(\"不及格\")\ncase score >= 90:\n\tfmt.Println(\"优秀\")\n}",
+      "lang": "go",
+      "notes": "没有表达式时，case 写的是条件，为 true 才命中，顺序仍然从上往下。写成 case ok: / case !ok: 这种 true/false 匹配也行。"
+    },
+    {
+      "title": "fallthrough",
+      "description": "想让 case 连着往下走时用 fallthrough，比如某个 case 命中后还要顺带执行下一个 case 的开头。",
+      "code": "n := 2\nswitch n {\ncase 1, 2:\n\tfmt.Println(\"小\")\n\tfallthrough\ncase 3:\n\tfmt.Println(\"中\")\n}",
+      "lang": "go",
+      "notes": "fallthrough 必须写在 case 体最后一行，执行后直接进入下一个 case，不看条件；写在最后一个 case 里会编译报错。"
+    },
+    {
+      "title": "什么时候用 switch，什么时候用 if 链",
+      "description": "同一个值跟多个常量比、或者分支要按类型分的时候用 switch；条件各不相干、逻辑各不相同的时候 if 链更好读。",
+      "code": "code := 404\nif code == 400 {\n\tfmt.Println(\"客户端错误\")\n} else if code == 404 {\n\tfmt.Println(\"找不到\")\n} else {\n\tfmt.Println(\"其它\")\n}",
+      "lang": "go",
+      "notes": "switch 的 case 里只能写可比较的值，写不了复杂表达式——复杂判断还是老老实实写 if 链。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：if 带初始化语句、if / else if / else、switch 带初始化语句、不带表达式的 switch、fallthrough。",
+      "code": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tscore := 85\n\n\t// if 带初始化语句\n\tif v := score * 2; v > 150 {\n\t\tfmt.Println(\"分数很高:\", v)\n\t} else {\n\t\tfmt.Println(\"普通分数:\", v)\n\t}\n\n\t// if / else if / else\n\tif score >= 90 {\n\t\tfmt.Println(\"优秀\")\n\t} else if score >= 60 {\n\t\tfmt.Println(\"及格\")\n\t} else {\n\t\tfmt.Println(\"不及格\")\n\t}\n\n\t// switch 带初始化语句\n\tswitch grade := score / 10; grade {\n\tcase 9:\n\t\tfmt.Println(\"等级 A\")\n\tcase 8:\n\t\tfmt.Println(\"等级 B\")\n\tdefault:\n\t\tfmt.Println(\"等级 C\")\n\t}\n\n\t// switch 不带表达式\n\tswitch {\n\tcase score >= 90:\n\t\tfmt.Println(\"很棒\")\n\tcase score >= 60:\n\t\tfmt.Println(\"还行\")\n\tdefault:\n\t\tfmt.Println(\"加油\")\n\t}\n\n\t// fallthrough\n\tswitch score / 20 {\n\tcase 4:\n\t\tfmt.Println(\"高分档\")\n\t\tfallthrough\n\tcase 3:\n\t\tfmt.Println(\"接近高分\")\n\t}\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

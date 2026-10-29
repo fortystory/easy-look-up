@@ -1,0 +1,105 @@
+{
+  "id": "maps",
+  "title": "映射 map",
+  "entries": [
+    {
+      "title": "声明 map",
+      "description": "map 是键值对容器，声明时就要定好键和值的类型。var 只把变量置为 nil，底层空间要 make 才分配，也可以直接用字面量。",
+      "code": "var m map[string]int\nm = make(map[string]int)\nm[\"a\"] = 1\nn := map[string]int{\"b\": 2}\nfmt.Println(m, n)",
+      "lang": "go",
+      "notes": "var m map[string]int 得到的 m 是 nil map：能读、能遍历、len 是 0，但写入会 panic。要能写就用 make 或字面量。"
+    },
+    {
+      "title": "nil map：能读不能写",
+      "description": "nil map 读键返回零值，不 panic；写键直接 panic。Go 故意这样设计，避免「忘初始化」悄悄丢数据。",
+      "code": "var m map[string]int\n// 读 nil map：返回零值 0\nfmt.Println(m[\"missing\"])\n// 写 nil map：panic: assignment to entry in nil map\nm[\"a\"] = 1",
+      "lang": "go",
+      "notes": "确实想要「暂时还没有」这个语义时，就把 map 声明成 nil，用之前先 make。"
+    },
+    {
+      "title": "取值：单返回值与 comma-ok",
+      "description": "直接取值拿不到「键是否存在」的信息，只能拿到值。要区分「键不存在」和「值恰好是零值」，就用逗号 ok 的双返回值写法。",
+      "code": "m := map[string]int{\"a\": 1}\nv := m[\"a\"]\nv2, ok := m[\"b\"]\nfmt.Println(v, v2, ok)",
+      "lang": "go",
+      "notes": "单返回值时键不存在返回该类型的零值：int 是 0，string 是空串，bool 是 false。"
+    },
+    {
+      "title": "赋值与新增",
+      "description": "给 map 赋值就是写入键，键不存在会自动创建，不用先判断、不用先定长度。写同一个键就是覆盖旧值。",
+      "code": "m := map[string]int{}\nm[\"a\"] = 1\nm[\"a\"] = 2\nm[\"b\"] = 3\nfmt.Println(m, len(m))",
+      "lang": "go",
+      "notes": "map 变量赋值给另一个变量后，两个变量共享同一份底层数据，改一个另一个也变。"
+    },
+    {
+      "title": "delete 删除键",
+      "description": "用内置函数 delete 删掉某个键，删完 len 跟着变。",
+      "code": "m := map[string]int{\"a\": 1, \"b\": 2}\ndelete(m, \"a\")\ndelete(m, \"missing\")\nfmt.Println(m, len(m))",
+      "lang": "go",
+      "notes": "delete 不存在的键不会报错，直接忽略。想拿到被删掉的旧值，得先自己取出来存一份。"
+    },
+    {
+      "title": "遍历 map：顺序是随机的",
+      "description": "用 for range 遍历 map，k 是键、v 是值；只想要键就写 for k := range m。需要稳定顺序就把键先收集到切片里排序。",
+      "code": "m := map[string]int{\"a\": 1, \"b\": 2, \"c\": 3}\nfor k, v := range m {\n\tfmt.Println(k, v)\n}",
+      "lang": "go",
+      "notes": "Go 故意随机化 map 的遍历顺序，同一个 map 遍历两次顺序可能不同。遍历中 delete 某个键是安全的，但这个键本次遍历里可能还会被访问到。"
+    },
+    {
+      "title": "键必须是 comparable 类型",
+      "description": "map 的键必须能用 == 比较，也就是 comparable 类型。切片、map、函数都不能当键。",
+      "code": "m := map[[]int]string{}\nfmt.Println(m)",
+      "lang": "go",
+      "notes": "合法键类型：数值、字符串、布尔、指针、通道、接口，以及字段都可比较的 struct 和数组。",
+      "expect_error": true
+    },
+    {
+      "title": "值可以是任意类型",
+      "description": "值不受 comparable 限制，可以是切片、map、函数。这样取出来的值类型是 any，用之前要先断言成具体类型。",
+      "code": "m := map[string]any{\n\t\"nums\":  []int{1, 2},\n\t\"inner\": map[string]int{\"a\": 1},\n\t\"fn\":    func() int { return 42 },\n}\nfn := m[\"fn\"].(func() int)\nfmt.Println(m[\"nums\"], m[\"inner\"], fn())",
+      "lang": "go",
+      "notes": "断言类型不对会 panic。值类型固定时直接声明成具体类型，比如 map[string]int，比 map[string]any 更安全。"
+    },
+    {
+      "title": "嵌套 map",
+      "description": "map 的值本身可以是另一个 map，用 map[string]map[string]int 表示两层字典。",
+      "code": "m := map[string]map[string]int{}\nm[\"a\"] = map[string]int{\"x\": 1}\nm[\"a\"][\"y\"] = 2\nfmt.Println(m[\"a\"], m[\"b\"])",
+      "lang": "go",
+      "notes": "内层 map 必须先建好才能写，nil map 写入会 panic。也可以写成 map[string]map[string]int{\"a\": {\"x\": 1}}，Go 会自动推断内层类型。"
+    },
+    {
+      "title": "len(map) 取键的个数",
+      "description": "len 对 map 返回键的数量，是 O(1)，不会真去遍历一遍。",
+      "code": "m := map[string]int{}\nfmt.Println(len(m))\nm[\"a\"] = 1\nm[\"b\"] = 2\nfmt.Println(len(m))",
+      "lang": "go",
+      "notes": "nil map 的 len 也是 0，不会 panic。len 只数键，不管值里装了多少东西。"
+    },
+    {
+      "title": "用 struct 和数组作键",
+      "description": "struct 和数组做键适合表示「多个字段组合」的唯一标识，比如二维坐标或者棋盘位置。",
+      "code": "type Point struct {\n\tX, Y int\n}\nm := map[Point]string{{0, 0}: \"原点\"}\narr := map[[2]int]bool{{1, 2}: true}\nfmt.Println(m[Point{0, 0}], arr[[2]int{1, 2}])",
+      "lang": "go",
+      "notes": "struct 的所有字段都可比较、数组的元素都可比较，才能作键。数组长度固定又是值类型，整个数组可以直接做键，切片不行。"
+    },
+    {
+      "title": "map 和 struct 怎么选",
+      "description": "字段固定、数量已知、想按字段名访问，就用 struct；键不固定、要按 key 查、要动态增删，就用 map。",
+      "code": "type User struct {\n\tName string\n\tAge  int\n}\nu := User{Name: \"张三\", Age: 18}\nm := map[string]User{\"张三\": u}\nfmt.Println(u.Name, m[\"张三\"].Age)",
+      "lang": "go",
+      "notes": "struct 的字段在编译期就定好了，写错字段名编译就报错；map 的键名是字符串，写错要到运行时才发现。"
+    },
+    {
+      "title": "修改 map 里的结构体值要写回",
+      "description": "map 存的是值的副本。从 map 里取出的结构体改字段只改副本，想真正生效必须再赋值写回 map。",
+      "code": "type User struct {\n\tName string\n}\nm := map[string]User{\"a\": {Name: \"张三\"}}\nu := m[\"a\"]\nu.Name = \"李四\"\nm[\"a\"] = u\nfmt.Println(m[\"a\"].Name)",
+      "lang": "go",
+      "notes": "想原地修改，就把指针或切片放进 map，比如 map[string]*User，取出来直接改它指向的对象，不用写回。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：声明 map、写入和删除、comma-ok 取值、改结构体后写回、len 和遍历。",
+      "code": "package main\n\nimport \"fmt\"\n\ntype User struct {\n\tName string\n\tAge  int\n}\n\nfunc main() {\n\tusers := map[string]User{\n\t\t\"张三\": {Name: \"张三\", Age: 18},\n\t\t\"李四\": {Name: \"李四\", Age: 25},\n\t}\n\tusers[\"王五\"] = User{Name: \"王五\", Age: 30}\n\tdelete(users, \"李四\")\n\n\tu, ok := users[\"张三\"]\n\tif ok {\n\t\tu.Age = 19\n\t\tusers[\"张三\"] = u\n\t}\n\n\tfmt.Println(\"人数：\", len(users))\n\tfor name, user := range users {\n\t\tfmt.Println(name, user.Age)\n\t}\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

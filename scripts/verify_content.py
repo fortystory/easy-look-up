@@ -20,11 +20,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTENT_DIR = os.path.join(ROOT, "content")
-# 临时目录按进程隔离：多个校验同时跑时不会互相覆盖 main.go
-TMP = os.path.join(ROOT, ".verify_tmp-%d" % os.getpid())
 
 REQUIRED_ENTRY_FIELDS = ("title", "description", "code", "lang")
 REQUIRED_GROUP_FIELDS = ("id", "title", "entries")
@@ -253,9 +252,10 @@ def main():
         if os.path.isdir(os.path.join(CONTENT_DIR, d))
     )
 
-    if os.path.isdir(TMP):
-        shutil.rmtree(TMP)
-    os.makedirs(TMP)
+    # 临时目录放在仓库外：仓库里的 go.work 会让嵌套模块的构建失败，
+    # 而放在仓库外就完全不跟项目的模块设置打架。目录按进程隔离，
+    # 多个校验同时跑也不会互相覆盖 main.go。
+    TMP = tempfile.mkdtemp(prefix="verify_content_")
     run(["go", "mod", "init", "verifytmp"], TMP)
 
     total_ok = 0
