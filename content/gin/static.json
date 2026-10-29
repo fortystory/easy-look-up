@@ -1,0 +1,111 @@
+{
+  "id": "static",
+  "title": "静态文件与错误处理",
+  "entries": [
+    {
+      "title": "挂静态目录 r.Static",
+      "description": "把磁盘上的一个目录整体挂到 URL 前缀下，请求 /static/xxx.txt 就直接去读 static/xxx.txt。图片、CSS、离线包这类不需要写 handler 的资源用它。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 静态目录要真实存在，先建好再挂\n\tif err := os.MkdirAll(\"./static\", 0o755); err != nil {\n\t\tpanic(err)\n\t}\n\tif err := os.WriteFile(\"./static/hello.txt\", []byte(\"hello\"), 0o644); err != nil {\n\t\tpanic(err)\n\t}\n\n\tr := gin.New()\n\tr.Static(\"/static\", \"./static\")\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/static/hello.txt\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "r.Static 内部注册的是 /static/*filepath 通配路由，所以挂完这个前缀就不能再注册 /static/xxx 这种具体路径，否则注册时 panic。"
+    },
+    {
+      "title": "挂 fs.FS 资源 r.StaticFS",
+      "description": "静态资源不在磁盘上（在内嵌 FS、内存 FS 或对象存储的适配器里）时，用 StaticFS 挂一个 fs.FS。gin 的 StaticFS 收的是 http.FileSystem，标准库的 fs.FS 用 http.FS 包一层就能传。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t_ = os.MkdirAll(\"./assets\", 0o755)\n\t_ = os.WriteFile(\"./assets/app.js\", []byte(\"console.log(1)\"), 0o644)\n\n\tr := gin.New()\n\t// gin.StaticFS 要 http.FileSystem，标准库的 fs.FS 用 http.FS 包一层\n\tr.StaticFS(\"/assets\", http.FS(os.DirFS(\"./assets\")))\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/assets/app.js\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "别忘了 http.FS：os.DirFS 返回的是 fs.FS，直接传给 StaticFS 会编译不过（类型不匹配）。"
+    },
+    {
+      "title": "挂单个文件 r.StaticFile",
+      "description": "只想暴露一个文件（favicon.ico、robots.txt、下载用的安装包）时用 StaticFile，它只注册一条固定路径，不会挡住同级的其它路由。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t_ = os.WriteFile(\"./favicon.ico\", []byte(\"icon\"), 0o644)\n\n\tr := gin.New()\n\tr.StaticFile(\"/favicon.ico\", \"./favicon.ico\")\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/favicon.ico\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "文件不存在不会 panic，请求时返回 404。路径里带 : 或 * 也会 panic，StaticFile 不允许 URL 参数。"
+    },
+    {
+      "title": "加载模板 r.LoadHTMLGlob",
+      "description": "服务端渲染 HTML 模板时用 LoadHTMLGlob 把一个目录下的模板全加载进来，之后用 c.HTML 渲染。模板名是文件名，不含目录。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t_ = os.MkdirAll(\"./templates\", 0o755)\n\t_ = os.WriteFile(\"./templates/index.html\", []byte(\"<h1>{{.title}}</h1>\"), 0o644)\n\n\tr := gin.New()\n\tr.LoadHTMLGlob(\"./templates/*.html\")\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"index.html\", gin.H{\"title\": \"首页\"})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "glob 匹配不到任何文件会直接 panic（template.Must）：pattern matches no files。模板放错目录时服务起不来，报错就指向这里。"
+    },
+    {
+      "title": "按文件加载模板 r.LoadHTMLFiles",
+      "description": "只想加载几个指定模板时用 LoadHTMLFiles，路径要写完整；LoadHTMLGlob 是按通配符把整个目录都收进来。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t_ = os.MkdirAll(\"./templates\", 0o755)\n\t_ = os.WriteFile(\"./templates/hello.html\", []byte(\"<p>hello</p>\"), 0o644)\n\t_ = os.WriteFile(\"./templates/bye.html\", []byte(\"<p>bye</p>\"), 0o644)\n\n\tr := gin.New()\n\tr.LoadHTMLFiles(\"./templates/hello.html\", \"./templates/bye.html\")\n\tr.GET(\"/hello\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"hello.html\", nil)\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/hello\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "LoadHTMLFiles 里同样是 template.Must，路径写错会 panic（no such file or directory）。"
+    },
+    {
+      "title": "自定义 404 r.NoRoute",
+      "description": "没有任何路由匹配上时走 NoRoute，在那里统一返回 JSON 错误，前端就不用去解析 gin 默认的纯文本 404。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\tr.NoRoute(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusNotFound, gin.H{\n\t\t\t\"error\": \"资源不存在\",\n\t\t\t\"path\":  c.Request.URL.Path,\n\t\t})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/nope\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "gin 默认的 404 响应体是空的，只有状态码，前端拿不到任何错误信息。"
+    },
+    {
+      "title": "自定义 405 r.NoMethod",
+      "description": "路径存在但方法不对（只支持 GET 的接口收到 POST）时走 NoMethod，返回 405 和统一的错误体。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\t// 默认是关着的，不打开的话 NoMethod 永远不会触发\n\tr.HandleMethodNotAllowed = true\n\tr.GET(\"/users\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\tr.NoMethod(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusMethodNotAllowed, gin.H{\"error\": \"方法不被允许\"})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodPost, \"/users\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "必须先打开 r.HandleMethodNotAllowed = true，默认是关的；关着的话 NoMethod 根本不触发，方法不对也只回 404。"
+    },
+    {
+      "title": "路由冲突会 panic",
+      "description": "gin 的路由树不允许同一层里通配段和普通段并存。Static 挂 /static 时占的是 /static/*filepath，同级再注册 /static/:name 就会在注册时 panic。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\t// 注册路由时的 panic 由这里接住\n\tdefer func() {\n\t\tif rec := recover(); rec != nil {\n\t\t\tfmt.Println(\"路由冲突 panic:\", rec)\n\t\t}\n\t}()\n\n\tr := gin.New()\n\tr.GET(\"/static/:name\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\t// Static 注册的是 /static/*filepath，和上面的 :name 在同一层，冲突\n\tr.Static(\"/static\", \"./static\")\n\tfmt.Println(\"没有冲突\")\n}",
+      "lang": "go",
+      "notes": "顺序换过来也一样 panic（conflicts with existing wildcard）。这类问题只在启动时暴露，进程直接退出，不会变成 500。"
+    },
+    {
+      "title": "目录不存在时的两种结果",
+      "description": "静态目录不存在不会 panic，只是请求时返回 404；模板目录不存在（glob 匹配不到文件）才是启动时直接 panic。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 静态目录不存在：注册时不 panic，请求时返回 404\n\tr := gin.New()\n\tr.Static(\"/static\", \"./missing\")\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/static/a.txt\", nil))\n\tfmt.Println(\"静态目录不存在 ->\", w.Code)\n\n\t// 模板目录不存在：加载时直接 panic\n\tdefer func() {\n\t\tif rec := recover(); rec != nil {\n\t\t\tfmt.Println(\"模板目录不存在 panic:\", rec)\n\t\t}\n\t}()\n\tr2 := gin.New()\n\tr2.LoadHTMLGlob(\"./templates/*.html\")\n\tfmt.Println(\"不会走到这里\")\n}",
+      "lang": "go",
+      "notes": "静态目录缺失时的 404 是 gin 静态处理器写的空响应，不会走你的 NoRoute JSON，排查时容易以为 NoRoute 没生效。"
+    },
+    {
+      "title": "返回 JSON 错误 c.AbortWithStatusJSON",
+      "description": "要提前结束请求并回 JSON 错误，用 AbortWithStatusJSON：写状态码和响应体，再 Abort 掉后面的 handler 和中间件。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.GET(\"/admin\", func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{\"error\": \"缺少令牌\"})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/admin\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "Abort 不能省：只写响应不 Abort，同一个 handler 里后面的代码还会继续跑。"
+    },
+    {
+      "title": "统一错误响应中间件",
+      "description": "让 handler 只管 c.Error 抛错，把响应格式收敛到一个中间件里统一出，这样所有接口的错误体都是同一个结构。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 统一错误响应中间件：handler 只管 c.Error，响应格式交给中间件\nfunc ErrorMiddleware() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tc.Next()\n\t\tif len(c.Errors) == 0 || c.Writer.Written() {\n\t\t\treturn\n\t\t}\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\n\t\t\t\"code\":    \"INTERNAL_ERROR\",\n\t\t\t\"message\": c.Errors.Last().Err.Error(),\n\t\t\t\"path\":    c.Request.URL.Path,\n\t\t})\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(ErrorMiddleware())\n\tr.GET(\"/users/:id\", func(c *gin.Context) {\n\t\tif c.Param(\"id\") != \"1\" {\n\t\t\t_ = c.Error(errors.New(\"用户不存在\"))\n\t\t\tc.Abort()\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, gin.H{\"id\": 1})\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/users/2\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "中间件要在 c.Next() 之后处理错误，并先判断 c.Writer.Written()，否则已经写过响应的请求会再写一次，报 headers were already written。"
+    },
+    {
+      "title": "自己写 Recovery 中间件",
+      "description": "不想用 gin 自带的 Recovery，就自己写一个中间件：defer 里 recover 接住 panic，记下日志再回 500 JSON。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"runtime/debug\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 自己写的 Recovery：接住下游 handler 的 panic，记日志再回 500\nfunc RecoveryMiddleware() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tdefer func() {\n\t\t\tif rec := recover(); rec != nil {\n\t\t\t\tlog.Printf(\"panic: %v\\n%s\", rec, debug.Stack())\n\t\t\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\"error\": \"服务器内部错误\"})\n\t\t\t}\n\t\t}()\n\t\tc.Next()\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(RecoveryMiddleware())\n\tr.GET(\"/boom\", func(c *gin.Context) {\n\t\tpanic(\"炸了\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/boom\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "recover 必须在 defer 里、且和 panic 在同一条调用链上才接得住；接住之后要 c.AbortWithStatusJSON，否则响应是空的。"
+    },
+    {
+      "title": "用 gin.CustomRecovery",
+      "description": "gin 自带的 CustomRecovery 能接住 handler 里的 panic，并把 panic 的值交给你，由你决定返回什么。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\tr.Use(gin.CustomRecovery(func(c *gin.Context, err any) {\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\n\t\t\t\"error\":  \"服务器内部错误\",\n\t\t\t\"detail\": fmt.Sprint(err),\n\t\t})\n\t}))\n\tr.GET(\"/boom\", func(c *gin.Context) {\n\t\tpanic(\"炸了\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, \"/boom\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "回调签名是 func(c *gin.Context, err any)，err 是 panic 传进来的值，可能是 error 也可能是字符串，用 fmt.Sprint 转字符串最稳。想自己控制日志输出用 CustomRecoveryWithWriter。"
+    },
+    {
+      "title": "静态文件和 API 路由共存",
+      "description": "静态资源挂一个前缀（/static、/favicon.ico），API 用路由组挂在另一个前缀（/api），两边互不干扰，未知路径再由 NoRoute 统一兜底。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t_ = os.MkdirAll(\"./static\", 0o755)\n\t_ = os.WriteFile(\"./static/app.css\", []byte(\"body{}\"), 0o644)\n\t_ = os.WriteFile(\"./favicon.ico\", []byte(\"icon\"), 0o644)\n\n\tr := gin.New()\n\tapi := r.Group(\"/api\")\n\tapi.GET(\"/ping\", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{\"msg\": \"pong\"}) })\n\n\tr.Static(\"/static\", \"./static\")\n\tr.StaticFile(\"/favicon.ico\", \"./favicon.ico\")\n\tr.NoRoute(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusNotFound, gin.H{\"error\": \"资源不存在\"})\n\t})\n\n\tfor _, path := range []string{\"/api/ping\", \"/static/app.css\", \"/favicon.ico\", \"/nope\"} {\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))\n\t\tfmt.Printf(\"%s -> %d %s\\n\", path, w.Code, w.Body.String())\n\t}\n}",
+      "lang": "go",
+      "notes": "真正会打架的是同一层：/static/*filepath 和 /static/xxx 不能共存，注册顺序换一下也不行。"
+    },
+    {
+      "title": "组合示例：静态文件与错误处理一起用",
+      "description": "把这一组的东西放在一起：静态目录、模板渲染、API 路由组、统一错误中间件、自定义 Recovery、NoRoute 与 NoMethod。",
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 统一错误响应中间件\nfunc ErrorMiddleware() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tc.Next()\n\t\tif len(c.Errors) == 0 || c.Writer.Written() {\n\t\t\treturn\n\t\t}\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\n\t\t\t\"code\":    \"INTERNAL_ERROR\",\n\t\t\t\"message\": c.Errors.Last().Err.Error(),\n\t\t\t\"path\":    c.Request.URL.Path,\n\t\t})\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 准备静态资源和模板\n\t_ = os.MkdirAll(\"./static\", 0o755)\n\t_ = os.WriteFile(\"./static/logo.txt\", []byte(\"logo\"), 0o644)\n\t_ = os.MkdirAll(\"./templates\", 0o755)\n\t_ = os.WriteFile(\"./templates/index.html\", []byte(\"<h1>{{.title}}</h1>\"), 0o644)\n\n\tr := gin.New()\n\tr.Use(ErrorMiddleware())\n\tr.Use(gin.CustomRecovery(func(c *gin.Context, err any) {\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\"error\": \"服务器内部错误\"})\n\t}))\n\n\tr.LoadHTMLGlob(\"./templates/*.html\")\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"index.html\", gin.H{\"title\": \"首页\"})\n\t})\n\tr.Static(\"/static\", \"./static\")\n\n\tapi := r.Group(\"/api\")\n\tapi.GET(\"/users/:id\", func(c *gin.Context) {\n\t\tif c.Param(\"id\") != \"1\" {\n\t\t\t_ = c.Error(errors.New(\"用户不存在\"))\n\t\t\tc.Abort()\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, gin.H{\"id\": 1, \"name\": \"张三\"})\n\t})\n\n\tr.HandleMethodNotAllowed = true\n\tr.NoRoute(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusNotFound, gin.H{\"error\": \"资源不存在\", \"path\": c.Request.URL.Path})\n\t})\n\tr.NoMethod(func(c *gin.Context) {\n\t\tc.AbortWithStatusJSON(http.StatusMethodNotAllowed, gin.H{\"error\": \"方法不被允许\"})\n\t})\n\n\tfor _, path := range []string{\"/\", \"/static/logo.txt\", \"/api/users/1\", \"/api/users/2\", \"/nope\"} {\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))\n\t\tfmt.Printf(\"GET %-18s -> %d %s\\n\", path, w.Code, w.Body.String())\n\t}\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

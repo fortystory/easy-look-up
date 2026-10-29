@@ -1,0 +1,111 @@
+{
+  "id": "response",
+  "title": "响应",
+  "entries": [
+    {
+      "title": "c.String：返回纯文本",
+      "description": "想回一段纯文本时用它。内容按 fmt 的格式串处理，可以带 %s、%d 这类占位符。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/hello\", func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"你好，%s\", \"Gin\")\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/hello\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "c.String 会把 Content-Type 设成 text/plain; charset=utf-8。"
+    },
+    {
+      "title": "c.JSON：返回 JSON",
+      "description": "返回 JSON 对象的默认选择。它自己会把 Content-Type 设成 application/json; charset=utf-8，并把对象序列化成紧凑的 JSON。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/user\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, gin.H{\"name\": \"张三\", \"age\": 18})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/user\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Header().Get(\"Content-Type\"))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "别再手动 c.Header(\"Content-Type\", \"application/json\")，c.JSON 已经做了。"
+    },
+    {
+      "title": "c.JSON 的状态码写法",
+      "description": "c.JSON 的第一个参数就是 HTTP 状态码，用 net/http 里的常量写，别手写数字。第二个参数才是要序列化的数据。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusCreated, gin.H{\"id\": 1}) // 201 Created\n\t})\n\tr.GET(\"/users/1\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusNotFound, gin.H{\"error\": \"用户不存在\"}) // 404 Not Found\n\t})\n\n\t// 常用状态码：\n\t// 200 OK 成功\n\t// 201 Created 创建成功\n\t// 204 No Content 成功但没有响应体\n\t// 400 Bad Request 参数格式不对\n\t// 401 Unauthorized 没登录或令牌无效\n\t// 403 Forbidden 登录了但没权限\n\t// 404 Not Found 资源不存在\n\t// 409 Conflict 与当前状态冲突，比如重复提交\n\t// 422 Unprocessable Entity 格式对但语义不合法\n\t// 500 Internal Server Error 服务端自己出错\n\n\treq := httptest.NewRequest(http.MethodPost, \"/users\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "两个参数写反了编译不过：c.JSON(data, http.StatusOK) 是错的。"
+    },
+    {
+      "title": "自定义 JSON 结构体",
+      "description": "字段固定、要求类型安全的接口就定义结构体，用 json tag 控制输出成什么字段名。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tID    int    `json:\"id\"`\n\tName  string `json:\"name\"`\n\tEmail string `json:\"email,omitempty\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/user\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, User{ID: 1, Name: \"张三\"})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/user\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "没写 tag 时用的是 Go 字段名（UserID 这种），前端拿到的是大写开头；加上 omitempty 的字段为零值时不会出现在 JSON 里。"
+    },
+    {
+      "title": "返回 map 而不是结构体",
+      "description": "字段不固定或者只是拼几个键值时，直接返回 map 最省事。gin.H 就是 map[string]any 的别名。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/user\", func(c *gin.Context) {\n\t\t// gin.H 就是 map[string]any，不用先定义结构体\n\t\tc.JSON(http.StatusOK, gin.H{\"id\": 1, \"name\": \"张三\"})\n\t})\n\tr.GET(\"/config\", func(c *gin.Context) {\n\t\t// 普通 map 一样能序列化\n\t\tc.JSON(http.StatusOK, map[string]any{\"port\": 8080, \"debug\": false})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/user\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "map 没有字段名约束，键写错编译期发现不了；字段固定时还是用结构体更稳。"
+    },
+    {
+      "title": "c.JSON 和 json.Marshal 的区别",
+      "description": "c.JSON 直接把对象写进 HTTP 响应并顺手设置 Content-Type；json.Marshal 只把对象变成字节切片，返回数据和 error，碰不到响应。",
+      "code": "package main\n\nimport (\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tID   int    `json:\"id\"`\n\tName string `json:\"name\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/user\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, User{ID: 1, Name: \"张三\"})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/user\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"c.JSON 写出的响应头:\", w.Header().Get(\"Content-Type\"))\n\n\t// json.Marshal 只做序列化，不碰响应\n\tb, err := json.Marshal(User{ID: 1, Name: \"张三\"})\n\tfmt.Println(\"json.Marshal 的结果:\", string(b), err)\n}",
+      "lang": "go",
+      "notes": "想在响应里塞原始 JSON 字节（比如已经序列化好的缓存），才用 json.Marshal 配 c.Data。"
+    },
+    {
+      "title": "c.HTML：渲染 HTML 模板",
+      "description": "返回网页时用它。模板要先注册到引擎上（SetHTMLTemplate 或 LoadHTMLGlob），c.HTML 的第二个参数是模板名。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"html/template\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\ttpl := template.Must(template.New(\"index.html\").Parse(\"<h1>你好，{{.}}</h1>\"))\n\tr.SetHTMLTemplate(tpl)\n\tr.GET(\"/\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"index.html\", \"Gin\")\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "模板名没注册会 panic：html/template: \"index.html\" is undefined。"
+    },
+    {
+      "title": "c.Redirect：重定向",
+      "description": "把请求转到别的地址。第一个参数是重定向用的状态码（301 永久、302 临时），第二个参数是目标地址。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/old\", func(c *gin.Context) {\n\t\tc.Redirect(http.StatusMovedPermanently, \"/new\") // 301\n\t})\n\tr.GET(\"/login\", func(c *gin.Context) {\n\t\tc.Redirect(http.StatusFound, \"/home\") // 302\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/old\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Header().Get(\"Location\"))\n}",
+      "lang": "go",
+      "notes": "重定向的响应体由 gin 写成一小段提示文字，真正的地址在 Location 响应头里。"
+    },
+    {
+      "title": "c.Data 与 c.File：原始字节和文件",
+      "description": "c.Data 返回自己给的字节并由你指定 Content-Type；c.File 把磁盘上的文件整个发给客户端。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/data\", func(c *gin.Context) {\n\t\t// 自己指定 Content-Type，返回原始字节\n\t\tc.Data(http.StatusOK, \"text/plain; charset=utf-8\", []byte(\"原始字节\"))\n\t})\n\tr.GET(\"/file\", func(c *gin.Context) {\n\t\tc.File(\"demo.txt\")\n\t})\n\n\t// 先造一个文件给 c.File 用\n\t_ = os.WriteFile(\"demo.txt\", []byte(\"文件内容\"), 0o644)\n\n\treq := httptest.NewRequest(http.MethodGet, \"/data\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n\n\treq2 := httptest.NewRequest(http.MethodGet, \"/file\", nil)\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, req2)\n\tfmt.Println(w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "c.File 的路径相对于进程的工作目录，文件不存在会返回 404；它还会按扩展名猜 Content-Type。"
+    },
+    {
+      "title": "c.Header：设置响应头",
+      "description": "要加自定义响应头（追踪 ID、下载文件名等）时用它。必须写在写响应体之前，否则头已经发出去了。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/download\", func(c *gin.Context) {\n\t\t// 在写响应体之前设置响应头\n\t\tc.Header(\"Content-Disposition\", `attachment; filename=\"a.txt\"`)\n\t\tc.Header(\"X-Request-Id\", \"req-001\")\n\t\tc.Data(http.StatusOK, \"text/plain; charset=utf-8\", []byte(\"文件内容\"))\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/download\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Header().Get(\"X-Request-Id\"))\n\tfmt.Println(w.Header().Get(\"Content-Disposition\"))\n}",
+      "lang": "go",
+      "notes": "c.Header 是设置不是追加，同一个键写两次后者覆盖前者；重复响应头要用 c.Header(key, value) 加 c.Writer.Header().Add。"
+    },
+    {
+      "title": "c.AbortWithStatus 与 c.AbortWithStatusJSON",
+      "description": "写在中间件里用来提前结束请求：Abort 会中止后面的处理函数，AbortWithStatus 只写状态码，AbortWithStatusJSON 再带上一个 JSON 响应体。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc auth() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tif c.GetHeader(\"X-Token\") == \"\" {\n\t\t\t// 中止后面的处理函数，并直接回一个 JSON\n\t\t\tc.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{\"error\": \"未登录\"})\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/secret\", auth(), func(c *gin.Context) {\n\t\tc.String(http.StatusOK, \"机密数据\")\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/secret\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "Abort 只是拦住后面的处理函数，当前函数还会继续往下跑，所以必须自己 return。"
+    },
+    {
+      "title": "204 No Content 的写法",
+      "description": "删除成功这类不需要返回数据的接口，用 204：只有状态码，没有响应体。c.Status 写状态码就够，c.Data 传空内容是等价写法。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.DELETE(\"/users/1\", func(c *gin.Context) {\n\t\t// 204：只有状态码，没有响应体\n\t\tc.Status(http.StatusNoContent)\n\t})\n\tr.GET(\"/ping\", func(c *gin.Context) {\n\t\tc.Data(http.StatusNoContent, \"\", nil) // 等价写法\n\t})\n\n\treq := httptest.NewRequest(http.MethodDelete, \"/users/1\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Code, w.Body.Len())\n}",
+      "lang": "go",
+      "notes": "204 的响应不能带响应体，往里写内容会被忽略；也别用 200 加空字符串来代替，语义不一样。"
+    },
+    {
+      "title": "统一响应格式",
+      "description": "给所有接口定一个统一的响应结构体：状态码、提示语、数据放在一起，前端只认一种格式，不用到处判断。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 所有接口统一返回这个结构\ntype Response struct {\n\tCode    int    `json:\"code\"`\n\tMessage string `json:\"message\"`\n\tData    any    `json:\"data,omitempty\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/users/1\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusOK, Response{\n\t\t\tCode:    0,\n\t\t\tMessage: \"ok\",\n\t\t\tData:    gin.H{\"id\": 1, \"name\": \"张三\"},\n\t\t})\n\t})\n\tr.GET(\"/boom\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusInternalServerError, Response{\n\t\t\tCode:    500,\n\t\t\tMessage: \"服务器开小差了\",\n\t\t})\n\t})\n\n\treq := httptest.NewRequest(http.MethodGet, \"/users/1\", nil)\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, req)\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "注意区分两层含义：HTTP 状态码给客户端看，响应体里的 code 是业务码，两者可以不一样。"
+    },
+    {
+      "title": "c.Stream：流式响应",
+      "description": "边生成边发送，不用先把整个结果攒在内存里。回调返回 true 表示还有下一段，返回 false 就结束这次响应。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/stream\", func(c *gin.Context) {\n\t\tn := 0\n\t\tc.Stream(func(w io.Writer) bool {\n\t\t\tn++\n\t\t\tfmt.Fprintf(w, \"第 %d 段\\n\", n)\n\t\t\treturn n < 3 // 返回 false 表示流结束了\n\t\t})\n\t})\n\n\t// 流式响应要真的有连接，用 httptest 起一个服务器\n\tsrv := httptest.NewServer(r)\n\tdefer srv.Close()\n\n\tresp, err := http.Get(srv.URL + \"/stream\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer resp.Body.Close()\n\tbody, _ := io.ReadAll(resp.Body)\n\tfmt.Print(string(body))\n}",
+      "lang": "go",
+      "notes": "流式响应没有 Content-Length，客户端是边收边显示的；适合大文件下载、日志推送这类场景。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把这一组的东西放在一起：自定义结构体、统一响应格式、状态码、响应头、中止和 204。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tID   int    `json:\"id\"`\n\tName string `json:\"name\"`\n}\n\n// 统一响应体\ntype Response struct {\n\tCode    int    `json:\"code\"`\n\tMessage string `json:\"message\"`\n\tData    any    `json:\"data,omitempty\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\t// 成功：统一响应格式 + 状态码 + 自定义响应头\n\tr.GET(\"/users/1\", func(c *gin.Context) {\n\t\tc.Header(\"X-Request-Id\", \"req-001\")\n\t\tc.JSON(http.StatusOK, Response{\n\t\t\tCode:    0,\n\t\t\tMessage: \"ok\",\n\t\t\tData:    User{ID: 1, Name: \"张三\"},\n\t\t})\n\t})\n\n\t// 创建成功：201\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tc.JSON(http.StatusCreated, Response{\n\t\t\tCode:    0,\n\t\t\tMessage: \"ok\",\n\t\t\tData:    User{ID: 2, Name: \"李四\"},\n\t\t})\n\t})\n\n\t// 未认证：中止处理链并回 JSON\n\tr.GET(\"/admin\", func(c *gin.Context) {\n\t\tif c.GetHeader(\"X-Token\") == \"\" {\n\t\t\tc.AbortWithStatusJSON(http.StatusUnauthorized, Response{\n\t\t\t\tCode:    401,\n\t\t\t\tMessage: \"未登录\",\n\t\t\t})\n\t\t\treturn\n\t\t}\n\t\tc.String(http.StatusOK, \"管理员面板\")\n\t})\n\n\t// 删除成功：204 没有响应体\n\tr.DELETE(\"/users/1\", func(c *gin.Context) {\n\t\tc.Status(http.StatusNoContent)\n\t})\n\n\tfor _, path := range []string{\"/users/1\", \"/admin\", \"/users/1\"} {\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tw := httptest.NewRecorder()\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Println(w.Code, w.Body.String())\n\t}\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

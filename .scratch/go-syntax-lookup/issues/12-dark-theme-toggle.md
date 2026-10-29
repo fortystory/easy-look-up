@@ -1,5 +1,5 @@
 Category: enhancement
-Status: ready-for-agent
+Status: resolved
 
 # 12: 暗色主题与主题切换
 
@@ -11,11 +11,11 @@ Status: ready-for-agent
 
 **Blocked by:** 09 样式与响应式
 
-- [ ] 颜色全部走 CSS 变量，亮色和暗色两套只换变量值
-- [ ] 语法高亮的 token 配色在两套主题下都可读
-- [ ] 页面右上角有一个主题切换按钮，图标反映当前主题
-- [ ] 点击按钮在亮色/暗色之间切换，`<html>` 上出现 `data-theme` 属性
-- [ ] 选择存进 `localStorage`，刷新后仍是上次那个
-- [ ] 没存过选择时跟随系统 `prefers-color-scheme`
-- [ ] `<head>` 里有内联脚本尽早套用已保存的主题，刷新时不闪白
-- [ ] 切换按钮在两套主题下都清晰可见
+- [x] 颜色全部走 CSS 变量，亮色和暗色两套只换变量值
+- [x] 语法高亮的 token 配色在两套主题下都可读
+- [x] 页面右上角有一个主题切换按钮，图标反映当前主题
+- [x] 点击按钮在亮色/暗色之间切换，`<html>` 上出现 `data-theme` 属性
+- [x] 选择存进 `localStorage`，刷新后仍是上次那个
+- [x] 没存过选择时跟随系统 `prefers-color-scheme`
+- [x] `<head>` 里有内联脚本尽早套用已保存的主题，刷新时不闪白
+- [x] 切换按钮在两套主题下都清晰可见

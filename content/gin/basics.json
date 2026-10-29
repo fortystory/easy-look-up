@@ -1,0 +1,111 @@
+{
+  "id": "basics",
+  "title": "基础与路由",
+  "entries": [
+    {
+      "title": "创建引擎：gin.Default() 与 gin.New()",
+      "description": "Default() 直接返回一个装好 Logger 日志和 Recovery 异常恢复的引擎，开箱即用；New() 返回的是干净引擎，中间件要自己挂。",
+      "code": "package main\n\nimport \"github.com/gin-gonic/gin\"\n\nfunc main() {\n\tr := gin.Default() // 自带 Logger 和 Recovery\n\tr.GET(\"/\", func(c *gin.Context) { c.String(200, \"ok\") })\n\n\t// gin.New() 返回一个不带任何中间件的引擎\n\tclean := gin.New()\n\tclean.Use(gin.Logger(), gin.Recovery()) // 想恢复默认行为就自己挂\n\tclean.GET(\"/\", func(c *gin.Context) { c.String(200, \"ok\") })\n}",
+      "lang": "go",
+      "notes": "Default 里的 Recovery 能兜住 handler 里的 panic，返回 500 而不是让整个服务崩掉。用 New() 又不挂 Recovery，panic 会直接带崩进程。"
+    },
+    {
+      "title": "注册路由：r.GET / r.POST / r.Any / r.Handle",
+      "description": "同一个路径可以注册不同方法，gin 按 HTTP 方法分发；Any 一次注册所有方法，Handle 是它们的底层接口。",
+      "code": "package main\n\nimport \"github.com/gin-gonic/gin\"\n\nfunc main() {\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\tr.POST(\"/echo\", func(c *gin.Context) { c.String(200, \"收到 %s\", c.Query(\"msg\")) })\n\tr.Any(\"/any\", func(c *gin.Context) { c.String(200, \"任意方法 %s\", c.Request.Method) })\n\tr.Handle(\"PUT\", \"/handle\", func(c *gin.Context) { c.String(200, \"PUT 请求\") })\n}",
+      "lang": "go",
+      "notes": "r.GET / r.POST / r.Any / r.Handle 都只是包装 r.Handle，方法名不同而已。路径和方法是一组的：只有 GET 的路由收到 POST 请求默认返回 404，把引擎的 HandleMethodNotAllowed 设成 true 才返回 405。"
+    },
+    {
+      "title": "路径参数：/user/:id 与 c.Param",
+      "description": "路径里冒号开头的一段是路径参数，请求 /user/42 时用 c.Param(\"id\") 取出 \"42\"。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.GET(\"/user/:id\", func(c *gin.Context) { c.String(200, \"用户 \"+c.Param(\"id\")) })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/user/42\", nil))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "参数段的名字可以自己取，取不到不存在的参数时返回空字符串，不会 panic。同一个位置不能同时注册两个不同名字的参数段，会 panic。"
+    },
+    {
+      "title": "查询参数：c.Query 与 c.DefaultQuery",
+      "description": "问号后面的是查询参数，用 c.Query 取；想给个兜底值就用 c.DefaultQuery。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.GET(\"/search\", func(c *gin.Context) {\n\t\t// Query 取不到返回空串，DefaultQuery 取不到用默认值\n\t\tq := c.Query(\"q\")\n\t\tname := c.DefaultQuery(\"name\", \"匿名\")\n\t\tc.String(200, \"q=%s name=%s\", q, name)\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/search?q=gin\", nil))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "想知道参数到底传没传，用 c.GetQuery，它返回 (值, 是否存在)；c.Query 传空串和没传是分不清的。"
+    },
+    {
+      "title": "请求体：c.ShouldBindJSON 与 c.BindJSON",
+      "description": "把 JSON 请求体解析进结构体用 ShouldBindJSON；BindJSON 解析失败会直接写 400 并中断当前 handler。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\"`\n\tAge  int    `json:\"age\"`\n}\n\nfunc main() {\n\tr := gin.New()\n\tr.POST(\"/users\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(400, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(200, u)\n\t})\n\n\tw := httptest.NewRecorder()\n\tbody := strings.NewReader(`{\"name\":\"张三\",\"age\":18}`)\n\tr.ServeHTTP(w, httptest.NewRequest(\"POST\", \"/users\", body))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "两个方法都得传结构体的指针，传值编译能过但内容不会填进去。ShouldBindJSON 只返回 error，要不要回 400 自己决定；BindJSON 直接帮你回 400。"
+    },
+    {
+      "title": "路由组：r.Group",
+      "description": "Group 出来的组里的路由自动带上同一个前缀，用来给一批路由统一加路径前缀。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tapi := r.Group(\"/api\") // 组里的路由自动带上 /api 前缀\n\tapi.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/ping\", nil))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "组里的路径写相对路径就行，前缀由组负责。组本身就是个 RouterGroup，还能继续 Group、Use。"
+    },
+    {
+      "title": "路由组嵌套",
+      "description": "组里再 Group 就是嵌套组，前缀一层层拼起来，/api 加 /v1 加 /ping。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tapi := r.Group(\"/api\")\n\tv1 := api.Group(\"/v1\") // 完整路径是 /api/v1/ping\n\tv1.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"v1 pong\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/v1/ping\", nil))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "嵌套组是版本号路由的常规写法：外层组挂通用中间件，内层组按版本细分，组里的中间件对子组同样生效。"
+    },
+    {
+      "title": "路由匹配顺序：静态段优先于参数段",
+      "description": "同一层里静态路由排在参数路由前面，请求 /user/info 命中静态路由，只有 /user/42 这种才落到 /user/:id。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.GET(\"/user/:id\", func(c *gin.Context) { c.String(200, \"参数路由\") })\n\tr.GET(\"/user/info\", func(c *gin.Context) { c.String(200, \"静态路由\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/user/info\", nil))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "优先级跟注册顺序无关，是 gin 路由树的结构决定的。所以 /user/info 这种固定路径一定要写成静态路由，别指望它落到参数路由上。"
+    },
+    {
+      "title": "c.FullPath() 与 c.HandlerName()",
+      "description": "FullPath 返回命中的路由模板，HandlerName 返回处理这个请求的函数名，调试和写日志时很好用。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.GET(\"/user/:id\", showUser)\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/user/42\", nil))\n\tfmt.Println(w.Body.String())\n}\n\nfunc showUser(c *gin.Context) {\n\tc.String(200, \"模板 %s，函数 %s\", c.FullPath(), c.HandlerName())\n}",
+      "lang": "go",
+      "notes": "FullPath 是注册时的模板 /user/:id，不是实际请求的 /user/42。HandlerName 对匿名函数返回的是 main.main.func1 这种名字。"
+    },
+    {
+      "title": "引擎中间件：r.Use",
+      "description": "Use 挂上去的中间件对之后注册的所有路由生效，在 handler 前后加日志、统一加响应头都靠它。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"开始:\", c.Request.URL.Path)\n\t\tc.Next() // 把控制权交给后面的 handler\n\t\tfmt.Println(\"结束:\", c.Request.URL.Path)\n\t})\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/ping\", nil))\n\tfmt.Println(w.Body.String())\n}",
+      "lang": "go",
+      "notes": "gin 在注册路由时就把当时的中间件抄进这条路由，所以 Use 要写在注册路由之前；写在后面只对之后的路由生效。c.Next 之后的代码在 handler 执行完之后才跑。"
+    },
+    {
+      "title": "路由组里的中间件",
+      "description": "组里 Use 的中间件只管这个组和它的子组，给一组路由统一加鉴权、日志用它最合适。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tapi := r.Group(\"/api\")\n\tapi.Use(func(c *gin.Context) {\n\t\tc.Header(\"X-API\", \"v1\")\n\t\tc.Next()\n\t})\n\tapi.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/ping\", nil))\n\tfmt.Println(w.Header().Get(\"X-API\"))\n}",
+      "lang": "go",
+      "notes": "组中间件和引擎中间件会一起执行，顺序是先引擎后组。中间件里忘了写 c.Next，链子就断在那儿，后面的 handler 不会跑。"
+    },
+    {
+      "title": "启动服务：gin.SetMode 与 r.Run",
+      "description": "上线前用 SetMode 切到 Release 关掉调试输出，再用 Run 监听端口启动 HTTP 服务。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode) // 关掉 [GIN-debug] 调试输出\n\tr := gin.Default()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\n\t// Run 会阻塞当前 goroutine，放到后台跑\n\tgo func() {\n\t\tif err := r.Run(\":8080\"); err != nil {\n\t\t\tfmt.Println(\"服务退出:\", err)\n\t\t}\n\t}()\n\ttime.Sleep(200 * time.Millisecond)\n}",
+      "lang": "go",
+      "notes": "Run 里的地址写 :8080 表示监听所有网卡的 8080 端口，写 127.0.0.1:8080 只监听本机。SetMode 只影响 [GIN-debug] 那类调试输出，访问日志是 Logger 中间件打的，要关得自己换 LoggerWithConfig 的 Output。"
+    },
+    {
+      "title": "自定义 404 与 405：r.NoRoute 与 r.NoMethod",
+      "description": "NoRoute 处理路径不存在的请求，NoMethod 处理路径存在但方法不对的请求，可以返回自己的 JSON。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tr := gin.New()\n\tr.HandleMethodNotAllowed = true // 不开这个，方法不对也走 404\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(200, \"pong\") })\n\tr.NoRoute(func(c *gin.Context) { c.JSON(404, gin.H{\"error\": \"没有这个路由\"}) })\n\tr.NoMethod(func(c *gin.Context) { c.JSON(405, gin.H{\"error\": \"方法不允许\"}) })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/nope\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, httptest.NewRequest(\"POST\", \"/ping\", nil))\n\tfmt.Println(w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": "默认的 404 是纯文本 \"404 page not found\"。NoMethod 默认不生效：引擎的 HandleMethodNotAllowed 是 false，方法不对的请求也走 404，得先把它设成 true。"
+    },
+    {
+      "title": "路由冲突会 panic",
+      "description": "同一个位置注册两个名字不同的参数段，gin 在注册阶段就 panic，服务根本起不来。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tdefer func() {\n\t\tif err := recover(); err != nil {\n\t\t\tfmt.Println(\"注册时 panic:\", err)\n\t\t}\n\t}()\n\n\tr := gin.New()\n\tr.GET(\"/user/:id\", func(c *gin.Context) { c.String(200, \"ok\") })\n\tr.GET(\"/user/:name\", func(c *gin.Context) { c.String(200, \"ok\") }) // 和上一条冲突\n}",
+      "lang": "go",
+      "notes": "同一条路径同一个方法注册两次也会 panic：handlers are already registered for path。冲突只在启动时暴露，所以路由表要一次想清楚。"
+    },
+    {
+      "title": "组合示例：把这一组用起来",
+      "description": "把引擎、中间件、嵌套路由组、路径参数、查询参数、请求体绑定和自定义 404 拼成一个能跑的小程序。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\ntype User struct {\n\tName string `json:\"name\"`\n\tAge  int    `json:\"age\"`\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.Default()\n\tr.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"[中间件]\", c.Request.URL.Path)\n\t\tc.Next()\n\t})\n\n\tapi := r.Group(\"/api\")\n\tapi.Use(func(c *gin.Context) {\n\t\tc.Header(\"X-API\", \"v1\")\n\t\tc.Next()\n\t})\n\n\tv1 := api.Group(\"/v1\")\n\tv1.GET(\"/user/:id\", func(c *gin.Context) {\n\t\tc.JSON(200, gin.H{\n\t\t\t\"id\":   c.Param(\"id\"),\n\t\t\t\"name\": c.DefaultQuery(\"name\", \"匿名\"),\n\t\t})\n\t})\n\tv1.POST(\"/user\", func(c *gin.Context) {\n\t\tvar u User\n\t\tif err := c.ShouldBindJSON(&u); err != nil {\n\t\t\tc.JSON(400, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(200, u)\n\t})\n\n\tr.NoRoute(func(c *gin.Context) { c.JSON(404, gin.H{\"error\": \"没有这个路由\"}) })\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/api/v1/user/42?name=张三\", nil))\n\tfmt.Println(w.Code, w.Body.String())\n\n\tw2 := httptest.NewRecorder()\n\tr.ServeHTTP(w2, httptest.NewRequest(\"POST\", \"/api/v1/user\", strings.NewReader(`{\"name\":\"李四\",\"age\":20}`)))\n\tfmt.Println(w2.Code, w2.Body.String())\n}",
+      "lang": "go",
+      "notes": ""
+    }
+  ]
+}

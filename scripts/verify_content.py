@@ -256,7 +256,12 @@ def main():
     # 而放在仓库外就完全不跟项目的模块设置打架。目录按进程隔离，
     # 多个校验同时跑也不会互相覆盖 main.go。
     TMP = tempfile.mkdtemp(prefix="verify_content_")
-    run(["go", "mod", "init", "verifytmp"], TMP)
+    # 复制仓库的 go.mod / go.sum：临时模块才有 gin、chroma 这些依赖，
+    # 离线从模块缓存就能解析，不需要联网补依赖。
+    for name in ("go.mod", "go.sum"):
+        src = os.path.join(ROOT, name)
+        if os.path.exists(src):
+            shutil.copy(src, os.path.join(TMP, name))
 
     total_ok = 0
     total_bad = 0

@@ -192,3 +192,17 @@ func TestNewWithEmptyContent(t *testing.T) {
 		t.Fatal("空内容目录应该返回错误，却返回了 nil")
 	}
 }
+
+// 详情页有几百 KB 的高亮 HTML，带 Accept-Encoding 时要压缩。
+func TestDetailPageIsCompressed(t *testing.T) {
+	h := newRouter(t, fakeFS())
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/go", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	h.ServeHTTP(w, req)
+
+	if w.Header().Get("Content-Encoding") != "gzip" {
+		t.Errorf("Content-Encoding = %q, 期望 %q", w.Header().Get("Content-Encoding"), "gzip")
+	}
+}

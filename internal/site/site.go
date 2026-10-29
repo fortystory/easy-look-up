@@ -87,6 +87,8 @@ func New(fsys fs.FS) (*gin.Engine, error) {
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
+	// 详情页有几百 KB 的高亮 HTML，压缩一下不然首次加载会明显慢
+	r.Use(gzipMiddleware())
 
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
