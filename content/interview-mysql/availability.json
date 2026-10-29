@@ -1,0 +1,201 @@
+{
+  "id": "availability",
+  "title": "MySQL 高可用与运维",
+  "entries": [
+    {
+      "title": "MySQL 主从复制是怎么跑起来的？三个线程分别负责什么？",
+      "description": "复制是读写分离、高可用和备份的共同基础。能讲清 binlog dump、IO thread、SQL thread 三个线程的分工和 relay log 的位置，这一题就拿到基本分了。",
+      "answer": [
+        "主库上的 binlog dump 线程：每个连上来的从库对应一个，负责从 binlog 里读出事件并通过网络发给从库，5.6 之后是每从库一个独立线程",
+        "从库上的 I/O thread：接收主库发来的 binlog 事件，原样写进本地的 relay log（中继日志），同时推进复制位点",
+        "从库上的 SQL thread：读 relay log 并重放成实际的 INSERT/UPDATE/DELETE；5.6.5 起的并行复制把它拆成一个 coordinator 加多个 worker，coordinator 负责读日志和分派",
+        "三者是流水线关系：dump → I/O → relay log → SQL → 从库数据；前一段是网络传输，后一段是执行重放，任何一段断了复制就停在那一步",
+        "主库写 binlog 的格式由 binlog_format 决定，row 格式记录行镜像是复制的事实标准，statement 格式在主从数据不一致时无法自动纠正",
+        "位点记在从库的复制信息里：传统方式是 master.info 文件，8.0 起也可以存表；用 GTID 时从库按 gtid_executed 自动定位，不需要人工记 File/Position"
+      ],
+      "notes": "常见追问：relay log 和 binlog 有什么区别？——binlog 在主库上写，relay log 是从库收到的副本，内容相同但由从库自己落盘。常见追问：SQL thread 怎么知道该重放哪些事件？——按 relay log 的事件顺序和位点依次应用。常见错误回答：「三个线程是 dump、redo、apply」——redo log 是 InnoDB 自己的崩溃恢复日志，和复制线程无关。"
+    },
+    {
+      "title": "MySQL 有哪几种复制方式？异步复制、半同步复制和组复制有什么区别？",
+      "description": "复制方式决定了「主库挂了最多丢多少数据」和「谁来决定谁是主」，是所有高可用方案的地基。",
+      "answer": [
+        "异步复制是默认方式：主库本地提交完就返回客户端，binlog 什么时候送到从库不阻塞主库；性能最好，但主库突然宕机时已提交的事务可能没送到从库，RPO 大于 0",
+        "半同步复制：主库提交时等至少 N 个从库回 ACK（从库已把 binlog 写进 relay log）才返回；插件在 8.0.26 起从 rpl_semi_sync_master/slave 改名为 rpl_semi_sync_source/replica",
+        "半同步有两种等待点：AFTER_COMMIT 是主库先提交再等 ACK，AFTER_SYNC 是先等 ACK 再提交主库事务；8.0 默认 AFTER_SYNC，它避免了「主库已提交但从库没收到」造成的数据缺失窗口，代价是提交延迟更大",
+        "半同步不是强一致：超过 rpl_semi_sync_source_timeout（默认 10 秒）主库会自动降级回异步复制，这是「以为配了半同步就绝不丢数据」最常见的误解",
+        "组复制（Group Replication）是多节点方案：所有节点地位对等，事务要经组内认证（certification）并靠多数派达成一致，既能单主也能多主，自带自动故障转移和一致性读（group_replication_consistency）",
+        "组复制要求至少 3 个节点形成多数派、节点间网络互通；MySQL 官方基于它的落地是 InnoDB Cluster（MySQL Shell + MySQL Router）"
+      ],
+      "notes": "常见追问：半同步算强一致吗？——不算，它只是把 RPO 压到「最多丢超时窗口内的事务」，降级之后照样会丢。常见追问：组复制和半同步能一起开吗？——可以，组复制内部同样支持半同步设置。常见错误回答：「半同步保证主从数据不丢」——超时降级是默认行为，必须配监控才能知道已经降级。"
+    },
+    {
+      "title": "主从延迟了怎么排查？",
+      "description": "延迟排查的难点不在于找到延迟，而在于判断是真延迟还是假延迟——Seconds_Behind_Source 显示 0 不代表没有延迟。",
+      "answer": [
+        "第一步先确认复制线程还活着：SHOW REPLICA STATUS 里 Replica_IO_Running 和 Replica_SQL_Running 任一为 No 就是复制断了，Last_IO_Error / Last_SQL_Error 会直接给出原因（认证失败、磁盘满、从库上表被锁住）",
+        "Seconds_Behind_Source 只是粗粒度指标：值为 0 只说明此刻没有新事件要应用，复制线程停掉时它可能长期为 0 或直接是 NULL，不能作为唯一判据",
+        "精确做法是比位点：主库 SHOW BINARY LOG STATUS 拿 File/Position 或 GTID_EXECUTED，从库比对 Retrieved_Gtid_Set 和 Executed_Gtid_Set，差集就是还没应用的事务",
+        "看从库此刻在干什么：performance_schema.replication_applier_status_by_worker 能看到各 worker 正在应用哪笔事务，information_schema.processlist 能看出是不是被一个大查询占住",
+        "看大事务和长事务：SHOW ENGINE INNODB STATUS 的 TRANSACTION 段与 information_schema.innodb_trx 能看到从库上未提交的老事务，它会拖慢 purge、撑大 undo 版本链",
+        "看锁等待：8.0 的 performance_schema.data_lock_waits / data_locks 能定位 MDL 锁和行锁；一次拿不到 MDL 的 DDL 会把后面所有 DML 一起堵住，从库延迟瞬间飙升"
+      ],
+      "notes": "常见追问：延迟多少算大？——没有绝对值，按业务 SLA 定；从库还兼做报表查询时阈值要收紧。常见追问：延迟突然变大先看什么？——先看 Replica_SQL_Running_State（8.0.22 起的名字，旧版是 Slave_SQL_Running_State），是「Waiting for source to send event」说明问题在网络或主库，是「Applying transaction」说明从库自己慢。常见错误回答：「延迟大就是从库性能不行」——也可能是主库发了个大事务，或从库被报表查询拖住了。"
+    },
+    {
+      "title": "主从延迟怎么解决？",
+      "description": "排查完要落到具体怎么改，并且要分清哪些是治标、哪些是治本，哪些手段会真的丢数据。",
+      "answer": [
+        "治本之一是并行复制：5.6 起按库并行，5.7.6 起支持基于 LOGICAL_CLOCK 的并行，8.0.27 起可用 binlog_transaction_dependency_tracking=WRITESET 提升并行度；8.0.26 起参数名从 slave_parallel_workers 改为 replica_parallel_workers，默认 4",
+        "治本之二是拆大事务：批量 insert/delete 改成分批提交，单笔大事务在从库要整个应用完才能继续，是延迟最常见的来源",
+        "治本之三是硬件和负载对等：从库的 CPU、IOPS、内存与主库同规格，并且不要在从库上跑报表和大范围扫描，重读流量要分流出去",
+        "扩展复制拓扑也能缓解：级联复制（从库下面再挂从库）把扇出压力摊开，代价是延迟会逐级累积",
+        "表结构变更用在线 DDL：gh-ost、pt-online-schema-change 或 8.0 的 INSTANT DDL，避免长时间锁表和大事务",
+        "应急手段要慎用：replica_skip_counter（8.0.26 之前的名字是 sql_slave_skip_counter）跳过卡住的事务会真的丢数据，只能在确认该事务无业务影响时用；半同步只解决丢数据不解决延迟"
+      ],
+      "notes": "常见追问：跳过事务安全吗？——不安全，它直接丢弃该事务并推进复制位点，只有确认那是脏数据才可用。常见追问：并行复制的 worker 开多少合适？——默认 4，worker 越多对单个线程读 relay log 的压力越大，一般按从库 CPU 核数和写入吞吐调。常见错误回答：「打开半同步延迟就小了」——半同步恰恰会多等一个网络往返的确认时间。"
+    },
+    {
+      "title": "写完数据后怎么保证从库能读到最新数据？",
+      "description": "这是读写分离最常被追问的一致性问题。核心思路是拿到自己这笔写的位点，然后等从库追上这个位点。",
+      "answer": [
+        "前提是开启 GTID：主从都要 gtid_mode=ON（8.0 默认 ON，5.7 需要手动开并同时满足 enforce_gtid_consistency=ON），有 GTID 才能精确表达「我要等到哪一步」",
+        "拿到自己的位点：会话里 SET session_track_gtids=OWN_GTID，客户端就能从结果集里取到本次写对应的 GTID",
+        "等从库追上：SELECT WAIT_FOR_EXECUTED_GTID_SET('uuid:1-100', 5)，第一个参数是要等的 GTID 集合，第二个是超时秒数（0 表示无限等）",
+        "返回值语义要记清：0 表示目标 GTID 已被从库执行，1 表示超时，NULL 表示 GTID 集合非法",
+        "它是阻塞调用，会占住当前连接直到超时：超时参数是 5.7 才加的，5.6 只能无限等，不适合放进业务请求；而且必须连到从库上执行，在主库上等自己没有意义",
+        "两个坑：gtid_purged 清理掉老 GTID 后就永远等不到；要更简单的做法就直接写后读回主库，或把这批读标记为强制读主，一致性要求不高时 GTID 等待属于过度设计"
+      ],
+      "notes": "常见追问：普通业务都要等吗？——不用，绝大多数场景能接受秒级延迟，只有「写完立刻读自己」这类才需要等。常见追问：能不能让 ProxySQL 智能路由解决？——ProxySQL 不知道这次写对应哪个 GTID，位点还得由应用层传下去。常见错误回答：「加个中间件就自动一致了」——中间件没有业务语义，一致性策略必须由应用声明。"
+    },
+    {
+      "title": "读写分离有哪些坑？",
+      "description": "读写分离把一致性问题从一个库搬到了多个库。面试里问的是：你会用哪些手段保证用户读到自己刚写的数据。",
+      "answer": [
+        "第一坑是写后读不到自己的写：主库提交完立刻查被路由到从库，读到旧值；提交后跳转详情页、提交后立刻列出列表这类流程上最常见",
+        "第二坑是事务内的读被分流：同一事务里写完再读，如果中间走到从库，读到的数据和事务上下文对不上，事务内的读必须强制走主库",
+        "第三坑是复制断了读还在继续：复制中断或延迟变大期间，从库数据越来越旧，读流量却没停；监控必须覆盖复制状态，异常时把读切回主库",
+        "第四坑是故障切换期间的脑裂窗口：切换后如果读还连在旧主上，会读到已分叉或被回滚的数据，所以切换要有「旧主只读化」的收敛动作",
+        "第五坑是容量翻倍：从库也要扛峰值 QPS，max_connections、内存和 IO 都要重新规划；从库还常被塞了重查询，延迟更难看",
+        "应对手段是分级处理：关键读强制走主库、同一次会话的读亲和到同一个从库、必要时用 GTID 等待、复制异常时熔断回主库；写占比高时读写分离收益有限，得不偿失"
+      ],
+      "notes": "常见追问：读写分离后怎么保证一致性？——按读的一致性要求分级，不是所有读都要等。常见追问：为什么很多团队最后放弃了读写分离？——写占比高、延迟难控、切换复杂时收益抵不过成本。常见错误回答：「上中间件就自动一致了」——中间件不知道哪些读必须强一致，这个策略要应用层配。"
+    },
+    {
+      "title": "主库挂了怎么做主从切换（failover）？脑裂怎么防？",
+      "description": "failover 是高可用的核心动作。面试官重点听的是流程完整度，以及有没有脑裂防护手段。",
+      "answer": [
+        "第一步确认故障：连续多次心跳探测都失败才判定下线，避免网络抖动造成误切换；同时要区分「进程挂了」和「只是不可用」",
+        "第二步选候选：从所有从库里挑数据最新的那个，比的是 GTID 集合（Executed_Gtid_Set）而不是位点；半同步环境下只要从库回过 ACK，就说明它至少收到了那笔事务",
+        "第三步提升：STOP REPLICA、RESET REPLICA ALL、清掉复制配置、关掉 read_only 和 super_read_only，新主才能接受写入",
+        "第四步改拓扑：其它从库用 CHANGE REPLICATION SOURCE TO 指向新主（8.0.23 起的语法，旧版本是 CHANGE MASTER TO），位点或 GTID 要对齐",
+        "第五步切流量：VIP、DNS、注册中心或配置中心让应用连到新主，这一步必须原子，否则会有一段时间部分请求还落在旧主上",
+        "防脑裂的核心是「仲裁 + 隔离」：用 Consul/etcd/ZooKeeper 的多数派选主保证同一时刻只有一个主；旧主恢复时必须先被 fencing（云厂商 API 断电、STONITH、强制只读）才能降级成从库，而且旧主上「已提交但没同步到新主」的事务要先按位点比对后丢弃或人工合并，否则接回去会带回分叉数据"
+      ],
+      "notes": "常见追问：脑裂具体长什么样？——两个节点同时接受写，客户端在不同时刻连到不同节点，数据互相覆盖且无法自动合并。常见追问：旧主恢复后数据怎么办？——以新主为准，旧主的独有事务要么用 pt-table-checksum 比对后人工合并，要么直接丢弃、把旧主重建为从库。常见错误回答：「主库挂了直接把某个从库改成主库就行」——忽略了仲裁、fencing、旧主数据分叉、VIP 原子切换这四件事。"
+    },
+    {
+      "title": "MHA、Orchestrator 和云厂商的 HA 方案各有什么特点，怎么选？",
+      "description": "这题考的是对主流方案的整体视野和取舍依据，不是背命令。",
+      "answer": [
+        "MHA 是最经典的方案：fail-fast 快速故障转移 + VIP 漂移 + 自动改配置；它是 Perl 写的，MHA 1.x 长期不再维护，MySQL 官方文档现在把它标为过时并推荐用 Orchestrator 替代",
+        "Orchestrator 是 GitHub（现 Percona）开源的拓扑管理工具：自己维护集群拓扑，用 Raft 选主做故障检测和自动切换，支持基于 GTID 的拓扑复制，带 Web UI 和 REST API，能看延迟也能做人工切换",
+        "云厂商方案把切换和拓扑都封装掉了：阿里云 RDS 高可用版、腾讯云 CDB、AWS RDS Multi-AZ（主备同步复制、端点自动切换）、Aurora（共享存储 + 多可用区多副本 + 只读副本）",
+        "云方案的代价是数据面多一跳：读写都要经过厂商的代理或端点，延迟更高、跨可用区流量要计费、定制能力受限于厂商接口",
+        "MySQL 官方路线是 InnoDB Cluster：MySQL Shell 管理集群 + Group Replication 保证组内一致 + MySQL Router 做路由，天然支持自动故障转移",
+        "选型维度：RTO/RPO 要求（RPO=0 必须半同步或组复制）、是否多机房、故障域粒度、团队运维能力、成本，以及是否要保留自建方案的定制能力"
+      ],
+      "notes": "常见追问：Orchestrator 相比 MHA 的核心改进是什么？——自带拓扑感知和 Raft 选主，不用 SSH 去改远端配置，对外是 HTTP 接口。常见追问：AWS Multi-AZ 和 Aurora 是一回事吗？——Multi-AZ 是主备同步复制，Aurora 是共享存储架构，两者都不是多主。常见错误回答：「云方案一定比自建好」——厂商锁定、成本、跨云迁移和定制受限都是真实代价。"
+    },
+    {
+      "title": "什么时候该做分库分表？中间件方案和应用层方案怎么选？",
+      "description": "分库分表是架构能力题，面试官看的是你有没有判断标准，而不是会不会用 ShardingSphere。",
+      "answer": [
+        "先别急着分：单库能做的一律先在单库解决——加索引、改 SQL、加缓存、读写分离、上分区表；分片不改变单片的单次查询性能，提升的是总容量和总吞吐",
+        "分片的触发信号：单表行数进入千万级且持续增长、索引撑不进内存、单库写入 IOPS 或磁盘接近上限、备份恢复时间不可接受",
+        "先垂直拆分再水平拆分：按业务模块把库拆开（用户库、订单库）能解决互相影响和容量问题，代价小得多；水平分片是同一张表按规则切开",
+        "分片键决定成败：要用查询最频繁的那个维度，避免低基数造成热点；分片键没带上的查询会退化成全分片广播",
+        "中间件方案（ShardingSphere、MyCAT、PolarDB-X、TiDB）对业务透明，但多一跳网络、SQL 兼容性有坑、跨分片事务能力受限、运维成本高；应用层方案（业务自己按分片键路由、手写 DAO、ORM 分片插件）没有额外跳数、性能可控，但要求每个开发都懂分片规则，写错就是全分片扫描",
+        "配套成本别漏：全局唯一 ID（雪花算法、号段、UUID）、深分页要改成先查 ID 集合再回表、扩容时的数据迁移与双写，扩容方案通常用一致性哈希加预留分片"
+      ],
+      "notes": "常见追问：分片键选错了怎么办？——换分片键通常意味着全量数据迁移，所以要在设计期用真实查询分布来定，而不是拍脑袋。常见追问：中间件方案影响多少性能？——多一跳网络加 SQL 解析改写，通常是几毫秒量级的额外开销。常见错误回答：「数据量大就该分库分表」——分片前先做单库优化和数据归档，盲目分片会带来大量额外复杂度。"
+    },
+    {
+      "title": "分库之后跨库事务和跨库查询怎么处理？",
+      "description": "分库把本地事务变成了分布式事务，把一条 SQL 变成了多个查询的聚合，这两件事是分库的主要代价。",
+      "answer": [
+        "跨库事务的首选是避免：把强一致要求高的写收敛到同一个分片（按同一分片键路由），其余场景用最终一致——消息队列加本地消息表或事务消息",
+        "2PC/XA 提供强一致：MySQL 支持 XA 语句（XA START/PREPARE/COMMIT），但两阶段要等所有参与者确认，锁持有时间长、性能差，协调者故障时还会留下悬挂事务",
+        "TCC 需要每个业务实现 Try/Confirm/Cancel 三段，靠资源预留实现隔离，本质是业务层的补偿而不是数据库的隔离",
+        "Saga 把长事务拆成一串本地事务加补偿动作，适合订单履约这类长流程；Seata 提供了 AT（靠 undo_log 自动生成反向 SQL）、TCC、Saga、XA 四种模式",
+        "跨库查询在应用层做：并行查各分片再归并（scatter-gather），维度表冗余广播到每个库避免跨库 JOIN",
+        "跨库的排序分页不能直接下推：要每个分片取 TopN 再在应用层归并；深分页（offset 很大）要用「先查 ID 集合再回表」的写法，否则每个分片都要扫大量行"
+      ],
+      "notes": "常见追问：AT 模式靠什么实现回滚？——靠同一事务里写的 undo_log 反向生成补偿 SQL。常见追问：什么场景必须用 XA？——强一致且业务无法改造的场景，但要先评估性能。常见错误回答：「用分布式事务框架就等于强一致」——TCC 和 Saga 本质是最终一致，AT 模式在特定并发下也可能读到中间状态。"
+    },
+    {
+      "title": "备份怎么做？逻辑备份和物理备份、全量备份和增量备份分别适合什么场景？",
+      "description": "备份方案要和恢复目标（RTO/RPO）对齐，而且要落到一套能验证、能演练的恢复流程上。",
+      "answer": [
+        "逻辑备份（mysqldump、MySQL Shell 的 dump、mydumper）导出的是 SQL 语句或行数据：可读、可按表按行筛选、能跨大版本恢复；缺点是大库恢复极慢，回放加建索引可能要几小时",
+        "物理备份（Percona XtraBackup、MySQL Enterprise 的 mysqlbackup、存储卷快照）拷贝的是数据文件：恢复快，拷回即可用，大库分钟级；缺点是版本敏感（备份工具版本要匹配服务器）、不可跨大版本恢复、文件级损坏影响面大",
+        "全量备份是完整的一份，恢复简单、耗时固定；增量备份只含上次备份之后的变化（XtraBackup 的物理增量基于 InnoDB 页的 LSN 和 redo log，binlog 是逻辑增量，row 格式记录行变更）",
+        "生产上通常是「全量 + binlog 增量」：全量负责基础状态，binlog 负责把库恢复到任意时间点（PITR），误删数据就是这么找回的",
+        "备份期间的一致性靠锁：XtraBackup 需要短暂 LOCK TABLES FOR BACKUP / FLUSH TABLES WITH READ LOCK，8.0 用 BACKUP LOCK 机制，备份窗口内的变更由 binlog 补齐",
+        "工程要求：3-2-1 原则（3 份副本、2 种介质、1 份异地）、加密、定期做恢复演练、保留期覆盖误删发现的时间窗；做不出恢复演练就等于没有备份"
+      ],
+      "notes": "常见追问：误删的数据能恢复多久？——取决于 binlog 保留时长（8.0 用 binlog_expire_logs_seconds 控制，默认 30 天）和全量备份的保留策略。常见追问：备份会不会影响线上？——物理备份靠短暂锁保证一致性，锁持有时间随库增大而变长，要评估。常见错误回答：「有备份就不会丢数据」——备份没验证过恢复、binlog 已过期、恢复时间超过 RTO，都等于不可用。"
+    },
+    {
+      "title": "binlog 能用来做什么？怎么用 binlog 恢复误删的数据？",
+      "description": "binlog 既是复制的基础，也是数据恢复和变更订阅的基础设施。这题要能说清恢复的操作步骤。",
+      "answer": [
+        "binlog 是 MySQL 服务端的二进制日志，记录所有数据变更；默认格式是 row（记录行镜像），8.0 起 binlog 默认开启，保留时长由 binlog_expire_logs_seconds 控制（默认 30 天）",
+        "用途：作为主从复制的数据来源；配合全量备份做时间点恢复（PITR）；被 canal、Debezium、Flink CDC 订阅做变更同步（ES、数仓、缓存）；用 mysqlbinlog 做历史排查和审计",
+        "恢复误删第一步是止损：先停掉应用写入，避免更多变更覆盖现场，也避免 binlog 被 purge 掉",
+        "定位现场：SHOW BINARY LOGS 看有哪些 binlog 文件，SHOW BINLOG EVENTS IN 'xxx' 看每笔事务的位置；开了 GTID 就直接用 GTID 集合定位，比记 File/Position 靠谱",
+        "生成反向操作：row 格式下 DELETE 事件转成 INSERT、UPDATE 转成反向 UPDATE，用 mysqlbinlog 把误删那笔事务剔除后导出，先在临时实例上回放校验",
+        "确认无误后应用到生产，再校验数据、放开流量；两个硬限制是 binlog 过期就恢复不了，以及 sql_log_bin=0 执行的操作根本不在 binlog 里、也没有任何日志可依"
+      ],
+      "notes": "常见追问：STATEMENT 格式的 binlog 能用来恢复吗？——勉强能，但依赖当时的数据状态，不可靠，误删恢复应该以 row 格式为准。常见追问：binlog 涨得太快怎么办？——按 expire 参数定期清理，配合全量备份做基准点。常见错误回答：「把 binlog 全部重放一遍」——那会把误删也重放一遍，必须先剔除目标事务。"
+    },
+    {
+      "title": "MySQL 监控要盯哪些指标？",
+      "description": "监控分连接、吞吐、延迟、复制、存储五层。回答时要能说出具体的状态变量名，而不只是「QPS 和慢查询」。",
+      "answer": [
+        "连接层：Threads_connected（当前连接数）、Threads_running（正在跑的线程，接近 CPU 核数就是过载）、Max_used_connections（历史峰值）、Connection_errors_max_connections（被 max_connections 拒掉的次数，不为 0 就说明连接数要调）",
+        "吞吐层：Questions（QPS）、Com_select/Com_insert/Com_update/Com_delete、Bytes_sent/Bytes_received，以及 InnoDB 缓冲池命中率（Innodb_buffer_pool_read_requests 与 Innodb_buffer_pool_reads 的比值）",
+        "延迟层：slow_queries 计数、performance_schema 的 events_statements_summary_by_digest（按 SQL 指纹聚合耗时和次数，定位慢 SQL 首选）、Innodb_buffer_pool_pages_dirty（脏页压力）、Innodb_log_waits（redo 刷盘被阻塞的次数）",
+        "复制层：Replica_IO_Running 和 Replica_SQL_Running（8.0.22 起的名字，旧版是 Slave_IO_Running）、Seconds_Behind_Source、Last_IO_Error/Last_SQL_Error、Replica_SQL_Running_State",
+        "存储与主机层：Innodb_data_file_size 与 Innodb_data_free（数据文件大小和剩余空间）、Innodb_history_list_length（长事务导致 undo 堆积、历史版本链变长）、binlog 文件大小、磁盘剩余空间、CPU、内存、IOPS、网卡带宽；磁盘写满和被 OOM killer 杀掉是 MySQL 最经典的两种猝死原因",
+        "告警要用速率和趋势：连接数缓慢爬升是连接泄漏，磁盘使用率按天增长是容量问题，瞬时阈值只会在半夜把你吵醒；工具上 Prometheus 的 mysqld_exporter 加 Grafana、或 Percona PMM 是常见组合"
+      ],
+      "notes": "常见追问：slow_queries 计数够用吗？——不够，它只给数量不给耗时，要配合 long_query_time 和 digest 聚合表看具体哪类 SQL 慢。常见追问：Threads_running 到多少算过高？——接近 CPU 核数就说明开始排队，超过了就是在堆上下文切换。常见错误回答：「监控 QPS 就够了」——复制断了、磁盘满、连接泄漏这三类问题在 QPS 上完全看不出来。"
+    },
+    {
+      "title": "连接数相关参数怎么调？max_connections 和 thread_cache 有什么区别？",
+      "description": "连接数调优是运维面的高频问题，要讲清调大连接数的代价，以及这两个参数管的根本不是一回事。",
+      "answer": [
+        "MySQL 是 thread-per-connection 模型，一条连接一个线程；max_connections 是服务端允许的最大并发连接数，默认 151，8.0 也没改",
+        "调大 max_connections 的代价要讲清楚：每个线程要占 thread_stack（Linux 默认 256KB）加上 per-thread 内存和排序缓冲等，连接拉太满会先耗尽内存被 OOM killer 杀掉，表现为进程直接消失而不是报 Too many connections",
+        "线程总数还受操作系统限制：一条连接一个线程，要看 ulimit -u / max user processes，Too many processes 是另一个层面的错误",
+        "thread_cache_size 缓存的是「连接断开后线程栈的内存块」，下次新建连接直接复用不必重新分配；8.0 默认 9，太小会频繁 malloc/free 线程栈（连接 churn 高时 CPU 开销明显），调大换来的是常驻内存，每条缓存线程约 256KB 起",
+        "别混淆三个 cache：thread_cache_size 缓存线程栈，table_open_cache 缓存打开的表句柄（8.0 默认 4000），table_definition_cache 缓存表结构",
+        "真正的解法在应用侧：连接池（HikariCP 等）加中间件连接池，池大小按「实例数 × 每实例池大小 ≤ 实例能承受的连接数」倒推，再配合 wait_timeout（默认 28800 秒）清理空闲连接、back_log（8.0 默认 151）应对瞬时连接洪峰"
+      ],
+      "notes": "常见追问：看到 Too many connections 就该调大 max_connections 吗？——先看 Connection_errors_max_connections 和 Threads_connected 的趋势，很多时候是应用没做连接池或者有连接泄漏。常见追问：thread_cache_size 调到多少合适？——按连接建立和断开的频率定，churn 高时给到上百，同时盯住内存。常见错误回答：「max_connections 越大越能扛并发」——并发上限最终受 CPU 和内存约束，超配只是把拒绝连接换成了崩溃。"
+    },
+    {
+      "title": "表名大小写敏感和字符集怎么设置？为什么会出现「表不存在」的诡异问题？",
+      "description": "这类问题在跨环境部署时最常见，面试里考的是你知不知道 lower_case_table_names 这个三态开关，以及 utf8 和 utf8mb4 的区别。",
+      "answer": [
+        "表名大小写由 lower_case_table_names 控制，三个取值：0 表示区分大小写、按原样存储（Linux 默认）；1 表示统一转小写存储和比较（Windows 默认）；2 表示按原样存储但比较时转小写（macOS 默认，也是同一实例不能同时存在 Foo 和 foo 的原因）",
+        "0 和 1 是互斥的，建库之后不能直接改，只能用 mysqldump --lower-case-table-names=1 导出再导入新实例；另外列名和索引名在任何平台都不区分大小写，区分的只有库名和表名",
+        "字符集分三层：服务器级 character_set_server、库级 character_set_database、表和列级，低优先级覆盖高优先级，实际生效的是表上的字符集",
+        "统一用 utf8mb4：utf8 实际是 utf8mb3 的别名，最多 3 字节，存不了 emoji（4 字节）和部分生僻字，线上踩坑基本都出在这里",
+        "典型故障：库是 utf8mb4、表是 utf8mb3，插入 emoji 报 Incorrect string value；客户端连接字符集不对时中文乱码；utf8mb3 的表之间 JOIN 报 Illegal mix of collations",
+        "排序规则也要统一：utf8mb4_general_ci 大小写不敏感、utf8mb4_bin 敏感，混用会让 JOIN 走不上索引；8.0 默认排序规则是 utf8mb4_0900_ai_ci，老库沿用 general_ci 时要注意差异"
+      ],
+      "notes": "常见追问：从 Linux 迁到 Windows 报错说表不存在？——表名在 Linux 上是驼峰且比较时区分大小写，Windows 上统一转小写，导出时带上 --lower-case-table-names=1 就一致了。常见追问：utf8mb4_general_ci 和 utf8mb4_0900_ai_ci 怎么选？——8.0 默认 0900_ai_ci 更准确、性能也更好，老库沿用 general_ci 要留意排序规则差异带来的索引失效。常见错误回答：「utf8 就是 UTF-8」——它是 utf8mb3，和 utf8mb4 不是一回事。"
+    }
+  ]
+}

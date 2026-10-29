@@ -1,0 +1,201 @@
+{
+  "id": "engine",
+  "title": "MySQL 存储引擎与日志",
+  "entries": [
+    {
+      "title": "InnoDB 和 MyISAM 有什么区别？各自适合什么场景？",
+      "description": "存储引擎是 MySQL 的第一层分家。面试里这题考的不是背表，而是看你知不知道「能力差异」背后的取舍。",
+      "answer": [
+        "事务：InnoDB 支持 ACID 事务和回滚；MyISAM 完全不支持事务，一条 INSERT 中途失败就会留下部分写入，只能手工修",
+        "锁：InnoDB 是行锁（锁到索引记录，另有间隙锁、next-key lock）；MyISAM 是表级锁，一个写操作会把整张表的读和写全堵住",
+        "崩溃恢复：InnoDB 有 redo log 和 undo log，宕机重启后能自动恢复到一致状态；MyISAM 靠写入顺序和校验和，损坏后要靠 REPAIR TABLE 手工修",
+        "存储组织：InnoDB 是聚簇索引，数据行和主键索引放在一起；MyISAM 数据和索引分开存放，索引叶子存的是数据行的物理地址，不是聚簇的",
+        "附加能力：InnoDB 支持外键、行级 MVCC、change buffer；MyISAM 支持压缩表，语法简单但几乎不提供并发能力",
+        "适用场景：MyISAM 只适合只读或读多写少的归档、静态字典、日志类数据；业务表、OLTP、需要事务和行锁的场景一律用 InnoDB"
+      ],
+      "notes": "常见追问：MySQL 8.0 还能建 MyISAM 表吗？——能，语法和引擎都还在，但只建议用于归档，新系统不要选。常见追问：MyISAM 查询也要加锁吗？——要，加的是表级共享锁，写入互斥。常见错误回答：说「MyISAM 更快」——小表全表扫描确实快，但并发写入和需要事务的场景完全不适用。"
+    },
+    {
+      "title": "为什么 MySQL 5.5 之后默认存储引擎改成了 InnoDB？",
+      "description": "版本号是结果，能力才是原因。这题要能从「默认切换」推到「为什么该切换」。",
+      "answer": [
+        "历史背景：5.5 之前 MyISAM 是默认引擎，因为它开发最早、成熟稳定；那时的 InnoDB 功能不全、性能也吃亏",
+        "版本事实：MySQL 5.5.5 起 InnoDB 成为默认引擎（5.5.3 曾短暂改成默认但很快回退），也可以用 --default-storage-engine=InnoDB 显式指定",
+        "能力补齐：InnoDB 陆续拿到了事务、行锁、外键、崩溃恢复、MVCC 这些「数据库标配」，同时性能追上并超过 MyISAM",
+        "生态推动：绝大多数互联网业务都需要事务和行锁，InnoDB 变成了事实上的唯一选择；MySQL 5.7 起默认引擎已经完全定型",
+        "今天的口径：MySQL 8.0 里 InnoDB 是唯一推荐引擎，MyISAM 只作为遗留格式保留在发行版中",
+        "答题要点：说「5.5 之后默认 InnoDB」时必须补一句「因为它才有事务和行锁」，只背版本号会显得没理解"
+      ],
+      "notes": "常见追问：老库怎么把 MyISAM 表转成 InnoDB？——ALTER TABLE 表名 ENGINE=InnoDB;，会锁表并重建索引，操作前必须备份。常见追问：转换后有什么风险？——表变大、外键和数据类型需要重新校验、没有主键的表会生成隐藏 row_id。常见错误回答：说「因为 InnoDB 性能更好」——默认切换的直接原因是事务和行锁这些能力缺失，性能只是同时被补齐。"
+    },
+    {
+      "title": "redo log 是什么？它到底解决什么问题？",
+      "description": "redo log 是 InnoDB 的发动机，也是持久性的唯一来源。回答时先讲清它是「什么形态的日志」。",
+      "answer": [
+        "redo log 是 InnoDB 引擎层的物理日志，记录的是「某个数据页的某个位置被改成了什么」，不是记录 SQL 语句",
+        "它负责持久性：利用 WAL（Write-Ahead Logging）规则，先写日志后改数据页，让「提交过」这件事在数据落盘前就有据可查",
+        "WAL 的含义是——修改一个页之前，先把对应的 redo 记录写进 redo log 文件；等这个页真正刷到磁盘之前，redo 已经把这次改动记了账",
+        "崩溃恢复靠它：重启时把 redo log 重放一遍，把「已提交但还没落进数据文件」的修改补上，数据因此不丢",
+        "写入路径：事务的 redo 先进入 log buffer（innodb_log_buffer_size，默认 16MB），再按刷盘策略写到 redo log 文件",
+        "分工上要分清：redo 只服务本机的崩溃恢复，复制、归档、CDC 这些事是 binlog 的活"
+      ],
+      "notes": "常见追问：redo log 和 undo log 的方向相反吗？——是，redo 是正向的「重做」，undo 是反向的「撤销」。常见追问：redo 是物理日志还是逻辑日志？——物理日志，记的是页和偏移上的字节变化；undo 记的是逻辑层面的反向操作。常见错误回答：说「redo log 保证事务的原子性」——原子性靠 undo log 和回滚，redo 负责的是持久性。"
+    },
+    {
+      "title": "redo log 为什么会循环写？写满了会怎样？",
+      "description": "「循环写」是 InnoDB 用固定空间换高吞吐的设计，写满时的表现是很多线上事故的起点。",
+      "answer": [
+        "redo log 空间是固定大小的环形缓冲区：5.7 及以前由 innodb_log_file_size（默认 48MB）乘 innodb_log_files_in_group（默认 2）决定",
+        "MySQL 8.0.30 起改由 innodb_redo_log_capacity 统一控制总容量，默认 100MB，不再需要手工配文件个数和大小",
+        "两个指针在跑：write_lsn 顺序往尾部写新日志，checkpoint_lsn 指向最早还没被刷进数据文件的那段日志；写指针追上检查点指针就说明空间用尽",
+        "日志能被覆盖复用的前提是：checkpoint_lsn 之前的修改对应的数据页都已经落盘，那段 redo 才可以安全丢弃",
+        "写满时既不丢数据也不直接报错，而是 InnoDB 阻塞所有写事务——后台线程拼命刷脏页推进 checkpoint，写事务排队等待，现象是「insert 全部超时、数据库像卡住」",
+        "调优方向：redo 配太小容易触发写停顿；配太大则崩溃恢复要重放的日志更多、恢复时间更长"
+      ],
+      "notes": "常见追问：redo 写满时事务会失败吗？——不会主动失败，而是被挂起等待 checkpoint 推进，最终以锁等待超时结束。常见追问：为什么调大 redo 能缓解？——空间大了就有缓冲余地，脏页刷盘跟不上时不必立刻阻塞写入。常见错误回答：说「日志写满会直接报磁盘满」——磁盘还有空间，堵住的是 redo 空间而不是数据文件。"
+    },
+    {
+      "title": "binlog 是什么？它和 redo log 有什么区别？",
+      "description": "两份日志是面试里的经典对比题，答的时候按「层次、形式、用途、生命周期」四条线拆开最清楚。",
+      "answer": [
+        "层次不同：binlog 是 MySQL Server 层的逻辑日志，redo log 是 InnoDB 引擎层的物理日志；换成 MyISAM 就没有 redo，binlog 照样在",
+        "内容不同：binlog 记的是「做了什么变更」的事件流（SQL 或行变更），redo 记的是「数据页的某个字节被改成了什么」",
+        "范围不同：所有引擎的写操作都会进 binlog，DDL 也在里面；redo 只记 InnoDB 内部数据页和元数据页的物理改动",
+        "用途不同：redo 只用于本机崩溃恢复，用完即被覆盖；binlog 用于主从复制、增量备份、CDC 订阅和审计，可以长期归档",
+        "生命周期不同：redo 的空间固定循环复用；binlog 按文件追加滚动，靠 binlog_expire_logs_seconds 控制过期删除",
+        "可重放性不同：binlog 能用来重放或反向生成 SQL，redo 依赖崩溃瞬间的状态，没法单独拿出去重放"
+      ],
+      "notes": "常见追问：binlog 里有没有事务概念？——有，一个事务的变更在 binlog 里是一组连续事件，提交时写入 COMMIT 事件。常见追问：能用 binlog 回滚数据吗？——不能直接回滚，但可以由 binlog 反向生成回滚 SQL。常见错误回答：说「redo log 是 binlog 的一份子集」——两者是并列体系，靠两阶段提交来保持一致。"
+    },
+    {
+      "title": "binlog 有哪三种格式？各自有什么优缺点？",
+      "description": "三种格式是主从一致性问题的核心。要能说出每种格式在什么语句上会出问题。",
+      "answer": [
+        "statement（SBR）：记录原始 SQL，从库重放 SQL。优点是日志小；缺点是 NOW()、RAND()、UUID()、LAST_INSERT_ID() 这类非确定性函数在从库重放结果可能不同",
+        "row（RBR）：记录每一行的变更前后镜像。优点是从库重放的结果与主库严格一致，MySQL 8.0 默认就是 row",
+        "mixed（MBR）：MySQL 5.7.7 引入，能安全用 statement 的语句就用 statement，其余自动退化成 row；5.7.7 到 8.0 之间它是默认值",
+        "DDL 语句无论哪种格式都以 statement 方式记录",
+        "row 的代价是日志量大：只 UPDATE 一个字段也会写入整行的前后镜像，可以用 binlog_row_image=MINIMAL 只记变更列和主键（8.0 默认是 FULL）",
+        "生产建议：统一固定为 row，不要在不同实例上混用 statement 和 mixed，否则排障和一致性排查会非常痛苦"
+      ],
+      "notes": "常见追问：statement 格式下哪些语句会出问题？——带 NOW()/RAND()/UUID() 的、带 LIMIT 又没有 ORDER BY 的、子查询结果顺序不确定的。常见追问：怎么改？——SET GLOBAL binlog_format='ROW'，或启动参数 --binlog-format=ROW。常见错误回答：说「row 格式一定最好」——row 的代价是日志量和恢复时间，批量更新时 binlog 会暴涨。"
+    },
+    {
+      "title": "为什么需要 binlog？它到底用来做什么？",
+      "description": "这题考的是对 binlog 生态的理解，能列出复制、备份、CDC 三条线就足够了。",
+      "answer": [
+        "主从复制：MySQL 的异步复制完全依赖 binlog——从库的 IO 线程拉主库 binlog，SQL 线程重放，位点和 GTID 都靠 binlog 文件名加偏移量定位",
+        "数据同步与订阅：Canal、Debezium、Flink CDC、各云厂商的 DTS 都是伪装成从库连上来读 binlog，把变更推给下游系统",
+        "增量备份与时间点恢复：有了 binlog 才能做 PITR——先用全量备份恢复到某个时间点，再用 binlog 重放到崩溃前的最后一刻",
+        "审计与找回数据：binlog 是最完整的变更流水，误删表、误删库时可以靠它找回那段数据",
+        "边界要说清：binlog 只记录变更、不记录查询，做全量快照还得配快照机制或定时全量导出",
+        "它是复制链路的底座：没有 binlog 就做不了主从复制、做不到时间点恢复，很多云上的备份方案也依赖它"
+      ],
+      "notes": "常见追问：不开 binlog 会怎样？——不能做主从复制、不能做时间点恢复，实例也无法接入大多数 CDC 工具。常见追问：binlog 能代替备份吗？——不能，binlog 只有增量而且会过期，误删数据时它只能救回误删之后的时间段。常见错误回答：把 binlog 当成「业务审计表」——它是 Server 层的变更日志，不是审计系统。"
+    },
+    {
+      "title": "两阶段提交是怎么回事？redo log prepare 和 binlog commit 的顺序是什么？",
+      "description": "从存储引擎角度看两阶段提交，重点是 redo 和 binlog 如何保证「同生共死」。",
+      "answer": [
+        "顺序固定为三步：写 redo log 并标记为 prepare → 写 binlog 并按 sync_binlog 策略落盘 → 把 redo log 标记为 commit",
+        "为什么需要两阶段：redo 和 binlog 分处引擎层和 Server 层，如果只写了一边就宕机，主库恢复出来的状态就会和从库分叉",
+        "崩溃恢复的判定规则：重启发现 redo 处于 prepare 状态，就去 binlog 里查这个事务对应的完整记录（按 XID 匹配），binlog 完整就提交，binlog 不完整就回滚",
+        "结果是每个事务在 redo 和 binlog 里同时存在或同时消失，不可能只出现在一边",
+        "实现上由 Server 层当协调者，InnoDB 提供 prepare/commit 接口；MySQL 5.6 之后这套机制才保证了 crash-safe replication，5.5 及之前存在「主库回滚了但 binlog 已写」的窗口",
+        "提交路径上还会做 group commit：多个事务的日志攒成一批一次 fsync，兼顾吞吐和持久性"
+      ],
+      "notes": "常见追问：这是分布式事务的 2PC 吗？——思想一致，但它是 MySQL 内部两个模块之间的协议，没有跨系统的协调者，也不涉及资源阻塞。常见追问：redo prepare 之后、binlog 写之前宕机会怎样？——重启时发现 binlog 里没有这个事务，直接回滚。常见错误回答：说「先写 binlog 再写 redo」——顺序反了，那样会出现 binlog 有、redo 没有，主库恢复后从库多出这笔数据。"
+    },
+    {
+      "title": "undo log 是什么？回滚和 MVCC 分别怎么靠它实现？",
+      "description": "undo log 有两个用途，面试时要能拆开讲，别只说一句「用来回滚」。",
+      "answer": [
+        "undo log 记录的是「修改前长什么样」的逆向信息：插入对应删除，删除对应插入，更新对应旧值",
+        "回滚：ROLLBACK 时按 undo log 反向执行，把数据恢复到事务开始之前的状态，这是原子性的落地方式",
+        "MVCC：每行记录带两个隐藏列——DB_TRX_ID（最后修改它的事务 ID）和 DB_ROLL_PTR（指向 undo 里的上一个版本），undo 记录串起版本链",
+        "快照读沿版本链往回找，用 ReadView 判断哪个版本对自己可见，所以读不加锁也能拿到一致的数据",
+        "undo 分两类：insert undo 回滚时直接删行、且不进入版本链（未提交的行对别人不可见）；update undo 记录旧版本，是 MVCC 版本链的来源",
+        "清理靠后台 purge 线程：只有确认没有任何活跃事务的 ReadView 还需要这个旧版本才能删掉；长事务会让 undo 无限膨胀，MySQL 8.0.20 起可用 innodb_undo_log_truncate 回收空间"
+      ],
+      "notes": "常见追问：undo log 会写进 redo log 吗？——undo 本身不写 redo，但 undo 表空间里为它分配空间的信息会写 redo，保证重启后还能定位到这些 undo 记录。常见追问：回滚会慢吗？——会，undo 是逐条反向执行的，大事务回滚期间锁还一直占着。常见错误回答：说「undo log 是给崩溃恢复用的」——它的主职是回滚和 MVCC，崩溃恢复只是顺带用它回滚未提交事务。"
+    },
+    {
+      "title": "Buffer Pool 是什么？脏页是怎么刷到磁盘上的？",
+      "description": "Buffer Pool 是 InnoDB 的内存命脉，脏页刷不出去会导致整个引擎写停顿。",
+      "answer": [
+        "Buffer Pool 是 InnoDB 缓存数据页和索引页的内存区域，默认 128MB（innodb_buffer_pool_size），它是 InnoDB 自己的页缓存",
+        "缓存的单元是页不是行，页的唯一标识是「表空间 id + 页号」，所以同一个页被不同表使用也能对应上",
+        "页淘汰用改良的 LRU：链表分成新子链（占 3/8）和旧子链（占 5/8），新读入的页先进旧子链，避免一次全表扫描把热点页全冲掉",
+        "脏页是内存里被改过但还没写回磁盘的页；InnoDB 不会直接淘汰脏页，只能先刷盘再释放，所以脏页积压会把写请求一起拖住",
+        "刷盘由后台 page cleaner 线程做（MySQL 8.0.20 起 innodb_page_cleaners，默认 4 个），速率受 innodb_io_capacity 限制（8.0.20 起默认 2000）；用户线程提交时也会顺带刷一部分",
+        "非唯一二级索引的修改在页不在内存时先放进 change buffer，等这个页被读进来时再合并，避免随机写"
+      ],
+      "notes": "常见追问：Buffer Pool 满了会怎样？——按 LRU 淘汰干净页腾地方，没有干净页可淘汰时写事务就会被阻塞。常见追问：怎么观察命中率？——SHOW ENGINE INNODB STATUS 里的 buffer pool hit rate，或 performance_schema 的 innodb_buffer_pool_stats_*。常见错误回答：说「Buffer Pool 缓存的是行」——InnoDB 的 I/O 单位是页，默认 16KB。"
+    },
+    {
+      "title": "innodb_flush_log_at_trx_commit 的几个取值分别是什么意思？和 sync_binlog 怎么搭配？",
+      "description": "这是「数据到底能丢多少」的开关，面试常和主从延迟、写入吞吐一起问。",
+      "answer": [
+        "取值 0：commit 时不写也不刷，master thread 每秒把 redo 写到操作系统缓存并刷盘一次；MySQL 进程崩溃会丢最近一秒的事务",
+        "取值 1：每次 commit 都把 redo log 写到操作系统文件缓存并 fsync 到磁盘，是默认值，也是最安全的取值",
+        "取值 2：每次 commit 都写到操作系统缓存，但每秒才刷盘一次；MySQL 进程崩溃不丢数据（缓存由操作系统持有），机器断电会丢最近一秒",
+        "sync_binlog 管的是 binlog 的落盘：0 表示交给操作系统决定何时落盘，1 表示每次 commit 都 fsync（最安全），N 表示攒够 N 个事务 fsync 一次",
+        "持久性组合：innodb_flush_log_at_trx_commit=1 且 sync_binlog=1 才有最强保证——事务提交后既不丢，主从数据也一致",
+        "取舍：改成 2 或 0 能明显提高写吞吐，但等于接受「最多丢最近一秒事务」的风险；订单、账务这类场景不建议动"
+      ],
+      "notes": "常见追问：MySQL 8.0 文档怎么定义持久性？——它用 innodb_flush_log_at_trx_commit 和 sync_binlog 的组合列表说明，1+1 是最强的一档。常见追问：innodb_flush_log_at_trx_commit=1、sync_binlog=100 会怎样？——主库事务不丢，但 binlog 可能还没落盘，主库重启后这笔数据在从库就缺失了。常见错误回答：把取值 2 说成「和 1 一样安全」——它只在操作系统不崩溃时安全。"
+    },
+    {
+      "title": "double write buffer 解决什么问题？",
+      "description": "这是 InnoDB 少有人知但很关键的一块机制，核心是「部分页写」这个故障场景。",
+      "answer": [
+        "要解决的问题是部分页写（partial page write）：InnoDB 的数据页默认 16KB，一次写盘写到一半断电，磁盘上留下半新半旧的页，这个页就损坏了",
+        "为什么 redo log 救不回来：redo 记录的是页内某个偏移的增量改动，基线页本身已经损坏，重放增量只会得到错误的数据",
+        "做法是所有脏页先写进 double write buffer（InnoDB 自己管理的独立区域，落在 doublewrite 文件里），这块 buffer 完整落盘后，再把里面的页写到真正的表空间文件",
+        "崩溃恢复时如果发现表空间里的页损坏，就从 double write buffer 里找出那份完整的页拷贝回去，再重放 redo",
+        "代价是多一次写：写 double write buffer 加写表空间，写延迟和 IO 量都上升；buffer 默认是 16MB 量级的独立区域，不占 innodb_buffer_pool_size（8.0.20 起可自动调整）",
+        "收益是换来「不会因为一次半页写就让表空间出现无法自动恢复的坏页」"
+      ],
+      "notes": "常见追问：double write buffer 在 Buffer Pool 里吗？——不在，它是 InnoDB 单独管理的落盘区域。常见追问：它和 redo log 是一回事吗？——不是，redo 记「改了什么」，double write 存「页的完整副本」，解决的是不同问题。常见错误回答：说「double write 是每个页都写两遍表空间，所以慢一倍」——写进表空间数据文件的仍然只有一份。"
+    },
+    {
+      "title": "崩溃恢复是怎么回事？WAL 机制讲一下？",
+      "description": "把 WAL 讲透，这一串日志题就串起来了：先写日志后写数据，靠重放还原。",
+      "answer": [
+        "WAL = Write-Ahead Logging，规则只有一句：先写日志，后写数据页；只要 redo 已经落盘，对应数据页即使还没刷盘也能被重放补上",
+        "恢复分两步：第一步 redo，把崩溃前已提交但未落盘的修改重放一遍，让数据页追上日志；第二步 undo，用 undo log 反向回滚崩溃时未提交的事务",
+        "顺序不能反：必须先 redo 再 undo，否则回滚掉的修改会被后面的 redo 又重放一遍",
+        "恢复起点是 checkpoint_lsn：checkpoint 之前的 redo 对应的数据页都已落盘不必重放，所以恢复时间取决于最后一次 checkpoint 之后积压了多少 redo",
+        "redo 记录带 CRC32 校验和，用来判断哪些日志完整可用；每个 redo block 的格式随版本变化，靠校验判断可解析性",
+        "MySQL 8.0.30 起 redo log 放在 #innodb_redo 目录下，由 32 个等大文件组成，总容量由 innodb_redo_log_capacity 控制（默认 100MB）"
+      ],
+      "notes": "常见追问：为什么 redo 一定要先于数据落盘？——只有先记账，才能在数据页没写完时也有办法还原，这就是持久性的全部来源。常见追问：恢复慢怎么排查？——看 redo 总量、innodb_redo_log_capacity 和脏页刷盘能力，8.0 里还要看 innodb_read_io_concurrency（默认 4）。常见错误回答：说「崩溃恢复就是把数据文件回滚到备份点」——恢复靠 redo 重放加 undo 回滚，跟备份无关。"
+    },
+    {
+      "title": "什么是 checkpoint？",
+      "description": "checkpoint 是 redo 日志生命周期的刻度，它同时决定了「日志能覆盖到哪」和「恢复要重放多少」。",
+      "answer": [
+        "checkpoint 是一个位置标记，记录「到这个 LSN 为止的修改已经完整写进数据文件了」，这个 LSN 就是 checkpoint_lsn",
+        "它有两个作用：划出 redo log 中可以安全覆盖复用的部分；决定崩溃恢复需要重放多少日志——从 checkpoint_lsn 开始重放",
+        "运行期间做的是 fuzzy checkpoint（增量检查点）：脏页比例超过阈值就挑一批最老的脏页刷盘，阈值由 innodb_max_dirty_pages_pct 和 innodb_max_dirty_pages 控制",
+        "版本细节：innodb_max_dirty_pages_pct 在 MySQL 5.7 默认 75，8.0 起提高到 90；innodb_max_dirty_pages 默认 0 表示不限制页数",
+        "关闭时（innodb_fast_shutdown=0）做的是 sharp checkpoint：把所有脏页全部刷干净，代价是关机慢，好处是崩溃时需要恢复的内容少",
+        "checkpoint 是脏页刷盘的结果而不是定时动作：某个页落盘后对应的 redo 才允许被覆盖，checkpoint_lsn 才能往前挪"
+      ],
+      "notes": "常见追问：checkpoint 多久做一次？——没有固定周期，由脏页比例和 IO 能力触发；innodb_io_capacity（8.0.20 起默认 2000）就是给刷脏用的 IOPS 配额。常见追问：checkpoint 和 redo 写满什么关系？——redo 写满时写指针追上 checkpoint_lsn，只能等 checkpoint 推进，写事务被阻塞。常见错误回答：把 checkpoint 说成「定时任务」——它是刷脏页的结果。"
+    },
+    {
+      "title": "MySQL 8.0 之后 redo log 的容量和文件管理有什么变化？",
+      "description": "这题考版本细节，能说清 8.0.30 的参数替换就算过关。",
+      "answer": [
+        "8.0.30 之前 redo log 由 innodb_log_file_size（单文件大小，默认 48MB）和 innodb_log_files_in_group（文件个数，默认 2）共同决定",
+        "8.0.30 起这两个参数被废弃，改用 innodb_redo_log_capacity 统一控制 redo 总容量，默认 100MB；文件被拆成 32 个等大文件放在 #innodb_redo 目录",
+        "好处是可以在线调整：按四分之一逐步扩容，扩完再逐个缩回，避免一次改动过大导致崩溃恢复时间变长",
+        "刷脏能力方面 8.0.20 起 innodb_io_capacity 默认从 100 提到 2000，innodb_page_cleaners 默认 4 个后台刷脏线程",
+        "崩溃恢复速度还受 innodb_read_io_concurrency 控制（8.0.20 起默认 4），它决定恢复时并发读 IO 的线程数",
+        "容量怎么估：按「峰值写入速率 × 可接受的刷脏延迟」倒推，而不是拍脑袋给一个 1GB"
+      ],
+      "notes": "常见追问：innodb_log_file_size 现在还能改吗？——8.0.30 起只是废弃、仍可读取，真正生效的是 innodb_redo_log_capacity。常见追问：redo 越大越好吗？——不是，崩溃恢复要重放的 redo 变多，恢复变慢。常见错误回答：说「8.0.30 之后不能改 redo 大小了」——恰恰是 8.0.30 让它更好改了。"
+    }
+  ]
+}

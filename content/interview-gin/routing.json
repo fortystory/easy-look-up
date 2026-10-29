@@ -1,0 +1,210 @@
+{
+  "id": "routing",
+  "title": "Gin 路由与中间件",
+  "entries": [
+    {
+      "title": "Gin 和 net/http 是什么关系？Gin 自己实现了哪些东西？",
+      "description": "Gin 是架在 net/http 上的一层，面试时要说清哪些是框架自研的、哪些是标准库提供的。",
+      "answer": [
+        "Gin 是架在 net/http 上面的一层：*gin.Engine 实现了 http.Handler 的 ServeHTTP，交给 http.Server 就能跑，Gin 不碰 TCP 连接和 HTTP 协议解析。",
+        "Gin 自己实现的是四块：路由树（httprouter 派生的 radix tree）、请求级 Context、路由与中间件链 HandlersChain、响应渲染（c.JSON / c.String 等）。",
+        "底层仍然用标准库的类型：c.Request 就是 *http.Request，c.Writer 包装的是 http.ResponseWriter，c.Params 是自己定义的切片。",
+        "Gin 还做了 Context 池：Engine 用 sync.Pool 复用 *gin.Context，请求结束后 reset 再放回池，这是它比每次 new Context 更快的来源之一。",
+        "所以 Gin 换掉的是「路由 + 中间件 + 请求上下文」这三层，net/http 的连接管理、Keep-Alive、HTTP/2 照单全收。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\n\t// *gin.Engine 实现了 http.Handler，可以直接交给 http.Server\n\tvar h http.Handler = r\n\tfmt.Printf(\"%T 实现了 http.Handler\\n\", h)\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/ping\", nil)\n\th.ServeHTTP(w, req)\n\tfmt.Printf(\"status=%d body=%s\\n\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "常见追问：gin.New() 和 gin.Default() 差在哪？——Default 额外挂了 Logger 和 Recovery 两个中间件。追问：Gin 能挂在 http2 反向代理后面吗？——能，它就是个 http.Handler。追问：Gin 比 net/http 快在哪？——快在路由匹配和 Context 复用，不在 HTTP 协议层。"
+    },
+    {
+      "title": "Gin 的路由树是怎么匹配的？为什么说它比 net/http 的正则路由快？",
+      "description": "路由树的数据结构、匹配顺序，以及对「net/http 用正则」这个说法的纠正。",
+      "answer": [
+        "Gin 的路由表按 HTTP 方法分树（methodTrees），每棵树都是 httprouter 派生的 radix tree：公共前缀压成一个节点，节点里的 indices 记录下一段的分支字符。",
+        "匹配是逐段下钻：先在 indices 里找静态子节点，命中就走静态分支；静态没有才落到参数节点 :name（吃掉一段）；再不行才是 catch-all *name（吃掉剩下所有）。",
+        "单次匹配的代价只跟路径段数有关，跟注册了多少条路由无关——路由加到几千条也不会让单次匹配变慢。",
+        "要纠正「net/http 用正则匹配路由」这个说法：http.ServeMux 从来没用过正则。Go 1.22 之前它是 map 加逐条 pattern 匹配，Go 1.22 之后标准库自己也换成了路由树（net/http/routing_tree.go）。",
+        "所以真正的差别在能力而不是速度：Gin 原生支持 :param 和 *catch-all，标准库 1.22 起是 {name} 写法且没有 catch-all；Gin 还提供 c.FullPath() 拿到路由模板。",
+        "匹配失败时 Gin 会给 TSR 建议，比如请求 /user/ 会重定向到 /user，这类细节标准库和 Gin 的实现路径不同。"
+      ],
+      "notes": "常见追问：Gin 的树是谁写的？——julienschmidt/httprouter，Gin 拿过来改了 catch-all 和优先级。追问：路由数量多了会变慢吗？——不会，单次匹配只看路径段数。追问：既然标准库也有树，为什么还有人用 Gin？——Gin 的中间件链、参数绑定、渲染这套东西更顺手。"
+    },
+    {
+      "title": "静态路由、参数路由、通配路由谁的优先级高？",
+      "description": "同一层级下三种路由的匹配顺序，以及参数路由和通配路由各自的边界。",
+      "answer": [
+        "同一层级的匹配顺序是：静态 > 参数（:name）> 通配（*name）。",
+        "所以 /user/new 和 /user/:id 可以共存：请求 /user/new 命中静态那条，请求 /user/42 命中参数那条。",
+        "参数路由只吃一段：/user/:id 匹配 /user/42，但匹配不了 /user/42/profile，要另外注册 /user/:id/profile。",
+        "catch-all 只能放在路径末尾而且必须带名字：/files/*path 能匹配 /files/a/b.txt，捕获到的值是 /a/b.txt（含前导斜杠）。",
+        "通配和静态段不能落在同一位置：先注册 /files/*path 再注册 /files/x 会 panic，因为通配会吃掉后面所有段。",
+        "同名参数不能共存：/user/:id 和 /user/:name 属于同一位置的两个通配，注册第二条就 panic。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/user/new\", func(c *gin.Context) { c.String(200, \"静态路由\") })\n\tr.GET(\"/user/:id\", func(c *gin.Context) { c.String(200, \"参数路由 id=\"+c.Param(\"id\")) })\n\tr.GET(\"/files/*path\", func(c *gin.Context) { c.String(200, \"通配路由 path=\"+c.Param(\"path\")) })\n\n\tfor _, path := range []string{\"/user/new\", \"/user/42\", \"/files/a/b.txt\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(\"GET\", path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-16s -> %s\\n\", path, w.Body.String())\n\t}\n}",
+      "lang": "go",
+      "notes": "常见追问：*path 捕获的值带不带前导斜杠？——带，/files/a/b.txt 捕获到 /a/b.txt。追问：/user/:id 和 /user/new 会冲突吗？——不会，静态是另一个分支。追问：路由冲突是运行时报错还是启动时报错？——注册路由时，也就是启动阶段。"
+    },
+    {
+      "title": "什么情况下注册路由会 panic？",
+      "description": "路由注册阶段的常见 panic 场景，都是启动时暴露而不是线上跑到一半才炸。",
+      "answer": [
+        "同一路径重复注册会 panic：handlers are already registered for path '/a'。",
+        "同一位置注册两个不同名字的参数也 panic：/user/:id 和 /user/:name 冲突，提示 conflicts with existing wildcard。",
+        "通配路由和已有静态段冲突：先注册 /files/*path 再注册 /files/x，提示 '/x' ... conflicts with existing wildcard '/*path'。",
+        "catch-all 不在路径末尾（/files/*path/x）、通配没写名字（/files/*）、同一段里出现两个通配（/a/:b:c），都会 panic。",
+        "HTTP 方法名不合法、整条 handler 链超过 63 个（abortIndex 是 int8 的最大值）同样会 panic。",
+        "这些都是启动期的保护：路由表是启动时建好的，注册阶段就崩掉，好过线上匹配到一条错的路由。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc register(name string, fn func()) {\n\tdefer func() {\n\t\tif err := recover(); err != nil {\n\t\t\tfmt.Printf(\"%s: panic = %v\\n\", name, err)\n\t\t\treturn\n\t\t}\n\t\tfmt.Printf(\"%s: 没有 panic\\n\", name)\n\t}()\n\tfn()\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tregister(\"同名参数\", func() {\n\t\tr := gin.New()\n\t\tr.GET(\"/user/:id\", func(c *gin.Context) {})\n\t\tr.GET(\"/user/:name\", func(c *gin.Context) {})\n\t})\n\n\tregister(\"通配与静态段冲突\", func() {\n\t\tr := gin.New()\n\t\tr.GET(\"/files/*path\", func(c *gin.Context) {})\n\t\tr.GET(\"/files/x\", func(c *gin.Context) {})\n\t})\n\n\tregister(\"同一路径重复注册\", func() {\n\t\tr := gin.New()\n\t\tr.GET(\"/a\", func(c *gin.Context) {})\n\t\tr.GET(\"/a\", func(c *gin.Context) {})\n\t})\n}",
+      "lang": "go",
+      "notes": "常见追问：线上遇到这种 panic 怎么办？——这是代码 bug，应该在启动阶段暴露而不是带着它上线。追问：请求处理时的 panic 呢？——那是另一回事，要用 Recovery 中间件兜住。追问：怎么提前发现冲突？——写单元测试把路由都注册一遍，或用 r.Routes() 打印路由表。"
+    },
+    {
+      "title": "路由组（Group）是什么？组里的中间件是怎么生效的？",
+      "description": "路由组把「路径前缀」和「中间件」绑在一起，是给一批路由批量加中间件的手段。",
+      "answer": [
+        "RouterGroup 是「路径前缀 + 一串中间件」的组合：r.Group(\"/api\", mw...) 返回一个 *RouterGroup，basePath 是前缀，Handlers 是继承来的链加上自己传的那几个。",
+        "组里的中间件只对在这个组上注册的路由生效：api.GET 注册时，整条链被拼成 全局中间件 + 组中间件 + 处理函数。",
+        "链是在注册路由那一刻拷贝并拼好的（combineHandlers 会新建一个切片），所以注册之后再 group.Use(mw) 不会影响已经注册好的路由。",
+        "组可以嵌套：r.Group(\"/api\").Group(\"/v1\") 的前缀是 /api/v1，中间件链是父组链加子组链，一层层叠加。",
+        "同一个父组下面还能再分组，v1 := api.Group(\"/v1\")，v1 和 api 上注册的路由互不干扰，各自带着自己的中间件。",
+        "分组是给「一类路由批量加中间件」用的，比如 /api 组统一加鉴权，/debug 组统一加访问计数。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\tapi := r.Group(\"/api\", func(c *gin.Context) {\n\t\tfmt.Println(\"api 组的中间件\")\n\t\tc.Next()\n\t})\n\tapi.GET(\"/hello\", func(c *gin.Context) {\n\t\tfmt.Println(\"/api/hello 的处理函数\")\n\t\tc.String(200, \"hello\")\n\t})\n\n\t// 组外注册的路由不会经过组里的中间件\n\tr.GET(\"/plain\", func(c *gin.Context) { c.String(200, \"plain\") })\n\n\tfor _, path := range []string{\"/api/hello\", \"/plain\"} {\n\t\tfmt.Println(\"--\", path)\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(\"GET\", path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Println(\"响应:\", w.Body.String())\n\t}\n}",
+      "lang": "go",
+      "notes": "常见追问：组里的中间件能作用于全局路由吗？——不能，组只管自己下面注册的路由。追问：r.Use() 的全局中间件什么时候执行？——早于组中间件。追问：为什么注册后再 Use 不生效？——链在注册时就固定了。"
+    },
+    {
+      "title": "中间件的执行顺序是怎样的？",
+      "description": "全局中间件、组中间件、处理函数三者的先后关系，以及进入/回程的洋葱模型。",
+      "answer": [
+        "顺序是：全局中间件（r.Use 注册的）→ 组中间件 → 路由自己的处理函数。",
+        "同一层级的多个中间件按注册先后依次执行，r.Use(a, b) 就是 a 先 b 后。",
+        "进入是洋葱模型：中间件里 c.Next() 之前算「前半段」，c.Next() 之后算「后半段」，回程是逆序——组的后半段先结束，全局的后半段最后结束。",
+        "没写 c.Next() 的中间件会在自己 return 之后才轮到后面的 handler，所以它写在中间的收尾代码（记日志、算耗时）反而跑在处理函数前面——这正是要显式写 c.Next() 的原因。",
+        "不同组之间互不影响，各自的组中间件只在自己组的路由链里出现。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"全局中间件 前\")\n\t\tc.Next()\n\t\tfmt.Println(\"全局中间件 后\")\n\t})\n\tg := r.Group(\"/api\", func(c *gin.Context) {\n\t\tfmt.Println(\"组中间件 前\")\n\t\tc.Next()\n\t\tfmt.Println(\"组中间件 后\")\n\t})\n\tg.GET(\"/x\", func(c *gin.Context) {\n\t\tfmt.Println(\"处理函数\")\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/api/x\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"状态码:\", w.Code)\n}",
+      "lang": "go",
+      "notes": "常见追问：Logger 和 Recovery 谁先？——按注册顺序，r.Use(Logger(), Recovery()) 就是 Logger 先。追问：怎么让中间件只作用于部分路由？——用路由组。追问：为什么 Recovery 要第一个注册？——它必须兜住后面所有 handler 的 panic。"
+    },
+    {
+      "title": "c.Next() 有什么作用？不写会怎样？",
+      "description": "Gin 里最容易搞错的一个点：不写 c.Next() 后面的 handler 到底会不会执行。",
+      "answer": [
+        "c.Next() 把剩余的 handler 链「就地」执行完：它把 index 往前推，依次调用后面的 handler，全部结束后才回到调用它的地方。",
+        "关键点：Gin 里不写 c.Next()，后面的 handler 照样会执行——因为 Engine.handleHTTPRequest 本身就调了一次 c.Next()，那个循环会把整条链走完。",
+        "不写 c.Next() 的实际后果是顺序反了：后面的 handler 要等当前中间件 return 之后才跑，于是中间件里本该写在 c.Next() 后面的收尾逻辑（记日志、算耗时）跑在了处理函数前面。",
+        "所以只要想在处理函数前后都做事，就必须显式写 c.Next()，把「后半段」放在它后面。",
+        "c.Next() 只在中间件里有意义（源码注释也这么写），在普通处理函数里调它没有意义。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 中间件故意不调用 c.Next()\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"中间件 前\")\n\t\tfmt.Println(\"中间件 后\")\n\t})\n\tr.GET(\"/x\", func(c *gin.Context) {\n\t\tfmt.Println(\"处理函数 依然执行了\")\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/x\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"状态码:\", w.Code)\n}",
+      "lang": "go",
+      "notes": "常见追问：不写 c.Next() handler 就不执行了吗？——会执行，这是 Gin 和 Koa 最容易混的地方。追问：为什么 Gin 里不写也能跑？——引擎入口调了一次 c.Next()，它内部是个 for 循环。追问：Abort 之后 c.Next() 还会往下走吗？——不会，index 被设成 63，循环直接结束。"
+    },
+    {
+      "title": "c.Abort() 是什么语义？和 c.AbortWithStatus 有什么区别？",
+      "description": "中止链和写响应是两件不同的事，混用会得到 200 空响应。",
+      "answer": [
+        "c.Abort() 只做一件事：把 c.index 设成 abortIndex（int8 的 63），链上后面的 handler 一个都不会再跑。",
+        "它不写任何响应：只调 Abort 的话，客户端收到的是 200 加空 body，状态码要等请求结束时才落定。",
+        "c.AbortWithStatus(code) 等于 Status(code) + WriteHeaderNow() + Abort()，立刻把状态码写出去，body 为空。",
+        "c.AbortWithStatusJSON(code, obj) 在此基础上带上 JSON body，是鉴权失败最常用的写法。",
+        "c.AbortWithError(code, err) 会把错误挂到 c.Errors 上再中止，适合交给统一的错误处理中间件输出。",
+        "一句话：Abort 管「还要不要往下走」，写响应管「回什么」，两者要配着用。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 只 Abort：不写响应\n\tr1 := gin.New()\n\tr1.Use(func(c *gin.Context) { c.Abort() })\n\tr1.GET(\"/x\", func(c *gin.Context) { c.String(200, \"不该到这里\") })\n\tw := httptest.NewRecorder()\n\tr1.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/x\", nil))\n\tfmt.Printf(\"Abort: code=%d body=%q\\n\", w.Code, w.Body.String())\n\n\t// AbortWithStatus：立刻写出状态码\n\tr2 := gin.New()\n\tr2.Use(func(c *gin.Context) { c.AbortWithStatus(401) })\n\tr2.GET(\"/x\", func(c *gin.Context) { c.String(200, \"不该到这里\") })\n\tw = httptest.NewRecorder()\n\tr2.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/x\", nil))\n\tfmt.Printf(\"AbortWithStatus: code=%d body=%q\\n\", w.Code, w.Body.String())\n\n\t// AbortWithStatusJSON：带上 JSON 体\n\tr3 := gin.New()\n\tr3.Use(func(c *gin.Context) { c.AbortWithStatusJSON(403, gin.H{\"error\": \"forbidden\"}) })\n\tr3.GET(\"/x\", func(c *gin.Context) { c.String(200, \"不该到这里\") })\n\tw = httptest.NewRecorder()\n\tr3.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/x\", nil))\n\tfmt.Printf(\"AbortWithStatusJSON: code=%d body=%q\\n\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "常见追问：Abort 之后还能写响应吗？——能写，但状态码已经定了，改不了（再调 c.Status 只会提示 headers were already written）。追问：Abort 和 return 是一回事吗？——不是，return 只退出当前函数，后面的 handler 仍然会执行。追问：AbortWithStatus 和 JSON 加 Abort 有区别吗？——前者先落状态码，body 是空的。"
+    },
+    {
+      "title": "中间件里怎么提前返回响应？",
+      "description": "鉴权类中间件的标准写法，以及只 return 不 Abort 的坑。",
+      "answer": [
+        "标准写法是「写响应 + Abort」：c.AbortWithStatusJSON(401, ...) 一句搞定，或者 c.JSON(401, ...) 后面紧跟 c.Abort()。",
+        "只 return 是不够的：return 只退出中间件函数，后面的 handler 照样执行，会继续往响应里写 body，客户端拿到的是两份内容拼在一起。",
+        "只要一个状态码、不带内容就用 c.AbortWithStatus(code)；要带业务信息用 c.AbortWithStatusJSON(code, obj)。",
+        "写响应之前可以先 c.Set 一些值，或者 c.Error(err) 把错误挂到 c.Errors 上，交给统一的错误处理中间件输出。",
+        "中间件要「放行」的那条路径别忘了 c.Next()，或者直接 return 让链继续（不写 c.Next() 链也会继续，但顺序会变）。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tif c.GetHeader(\"X-Token\") == \"\" {\n\t\t\t// 写响应 + Abort：后面的处理函数不会再执行\n\t\t\tc.AbortWithStatusJSON(401, gin.H{\"error\": \"缺少 token\"})\n\t\t\treturn\n\t\t}\n\t\tc.Next()\n\t})\n\tr.GET(\"/secret\", func(c *gin.Context) { c.String(200, \"机密内容\") })\n\n\tfor _, token := range []string{\"\", \"abc\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(\"GET\", \"/secret\", nil)\n\t\tif token != \"\" {\n\t\t\treq.Header.Set(\"X-Token\", token)\n\t\t}\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"token=%q -> code=%d body=%s\\n\", token, w.Code, w.Body.String())\n\t}\n}",
+      "lang": "go",
+      "notes": "常见追问：鉴权中间件忘了 Abort 会怎样？——被保护的 handler 照样执行，接口等于裸奔。追问：AbortWithStatus 和 AbortWithStatusJSON 选哪个？——有返回体用 JSON。追问：中间件里能不能 return 一个 error？——不能，中间件没有返回值语义，要么写响应要么交给 handler 处理。"
+    },
+    {
+      "title": "c.Set 和 c.Get 怎么用？有什么限制？",
+      "description": "请求内传值的标准手段，注意它的作用域只有一次请求。",
+      "answer": [
+        "c.Set(key, value) 把值放进当前请求的 c.Keys，c.Get(key) 返回 (value, exists) 两个值，取不到是 (nil, false)。",
+        "键的类型在 gin v1.12 里已经是 any，约定上仍然用字符串键，比如 c.Set(\"request_id\", id)。",
+        "c.MustGet(key) 取不到直接 panic，适合确定一定存在的键；c.GetString / c.GetInt / c.GetDuration 是带类型断言的快捷方法，类型不对返回零值。",
+        "作用域只有当前请求：请求结束时 reset() 会把 c.Keys 清成 nil，下一个请求是全新的 map，别拿它当全局缓存。",
+        "v1.12 的 Set / Get 内部用读写锁保护 Keys，同一个 Context 并发访问是安全的；但 Context 本身一请求一个，不要跨请求共享。",
+        "习惯上：中间件放请求元信息（trace id、用户身份），处理函数用 c.Get 取；不要往里塞大对象，Context 的生命周期只有一次请求。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tc.Set(\"request_id\", \"abc-123\")\n\t\tc.Set(\"user_id\", 42)\n\t\tc.Next()\n\t})\n\tr.GET(\"/who\", func(c *gin.Context) {\n\t\tid, ok := c.Get(\"request_id\")\n\t\tfmt.Println(\"request_id 存在:\", ok)\n\t\t_, missing := c.Get(\"not_exist\")\n\t\tfmt.Println(\"not_exist 存在:\", missing)\n\t\tc.String(200, fmt.Sprintf(\"%v/%d\", id, c.GetInt(\"user_id\")))\n\t})\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/who\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"响应:\", w.Body.String())\n}",
+      "lang": "go",
+      "notes": "常见追问：c.Get 取不到会 panic 吗？——不会，返回 (nil, false)；MustGet 才 panic。追问：能跨请求传数据吗？——不能，Keys 每个请求独立。追问：为什么键的类型改成 any？——为了支持非字符串键，但绝大多数场景用字符串就够。"
+    },
+    {
+      "title": "怎么写一个日志中间件？",
+      "description": "最常用的一类中间件，重点是记路由模板而不是原始路径。",
+      "answer": [
+        "日志中间件至少记四样：请求方法、路由模板、状态码、耗时。",
+        "路由用 c.FullPath()，拿到的是 /user/:id 这种模板而不是原始路径，这样 /user/1 和 /user/2 会聚成一条日志，方便统计。",
+        "状态码要等处理函数跑完才知道，所以日志写在 c.Next() 之后；或者用 defer 包住，保证中途 panic 也能记一条。",
+        "最终状态码用 c.Writer.Status() 取，它返回已经写出的状态码，一个响应都没写时是 200。",
+        "把 logger 当依赖注入（闭包捕获实例），别在中间件里用包级全局变量，测试时才好替换。",
+        "别把完整请求体、Authorization 头这类敏感信息原样打进日志。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"log\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// Logger 记录方法、路由模板、状态码和耗时\nfunc Logger() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tstart := time.Now()\n\t\tc.Next()\n\t\tlog.Printf(\"%s %s -> %d (%s)\",\n\t\t\tc.Request.Method,\n\t\t\tc.FullPath(), // 路由模板，不是原始路径\n\t\t\tc.Writer.Status(),\n\t\t\ttime.Since(start),\n\t\t)\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(Logger())\n\tr.GET(\"/user/:id\", func(c *gin.Context) { c.String(200, \"ok\") })\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/user/7\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"状态码:\", w.Code)\n}",
+      "lang": "go",
+      "notes": "常见追问：为什么用 FullPath() 而不是 Request.URL.Path？——前者是路由模板，便于按接口聚合。追问：panic 了还能记到状态码吗？——能，defer 里读 c.Writer.Status()，Gin 的 Recovery 会把状态码写成 500。追问：怎么加请求 id？——中间件生成后 c.Set(\"request_id\", id) 存进 Context。"
+    },
+    {
+      "title": "怎么写一个耗时统计中间件？",
+      "description": "测耗时的位置很讲究：量的是 handler 链，不是网络 IO。",
+      "answer": [
+        "标准做法是进入时记 start := time.Now()，在 c.Next() 之后算 time.Since(start)。",
+        "用 defer 包住，handler 里 panic 时也能记下耗时（Gin 的 Recovery 会把这次请求变成 500）。",
+        "这个耗时是「整条 handler 链」的耗时，包含下游所有中间件和处理函数，但不含 net/http 读写 socket 的时间；要量端到端耗时得在更外层测。",
+        "想把耗时放进响应头 X-Response-Time，必须在响应写出前设置头部：c.Next() 之后再 c.Header(...) 已经晚了（状态码随第一个 Write 一起发出），得包一层 ResponseWriter，在第一次 Write 之前把头写进去。",
+        "把耗时 c.Set(\"cost\", cost) 存进 Context 这种写法基本没用：Set 发生在链走完之后，同一请求里已经没有代码会再读它，耗时应该直接进日志或指标系统。",
+        "别再用 time.Now().Sub() 这种老写法，Go 1.8 之后用 time.Since()。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// Cost 统计整条 handler 链的耗时\nfunc Cost() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tstart := time.Now()\n\t\tdefer func() {\n\t\t\tcost := time.Since(start)\n\t\t\tc.Set(\"cost\", cost) // 存进 Context，其实链已经走完没人会读\n\t\t\tfmt.Printf(\"%s 耗时 %s\\n\", c.FullPath(), cost)\n\t\t}()\n\t\tc.Next() // 先让后面的处理函数跑完\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(Cost())\n\tr.GET(\"/slow\", func(c *gin.Context) {\n\t\ttime.Sleep(10 * time.Millisecond)\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/slow\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Println(\"状态码:\", w.Code)\n}",
+      "lang": "go",
+      "notes": "常见追问：为什么用 defer？——handler panic 时 defer 仍然会执行。追问：测出来的耗时准吗？——不含网络 IO，而且和机器负载有关。追问：怎么把耗时写进响应头？——包一层 ResponseWriter，在第一次 Write 前写头。"
+    },
+    {
+      "title": "怎么写一个捕获 panic 的中间件？",
+      "description": "defer 加 recover，但位置和写法都有讲究。",
+      "answer": [
+        "恢复 panic 的中间件就是 defer 加 recover()：defer 里判断 recover() 有没有返回值，有就说明发生了 panic。",
+        "它必须待在链的最外层（最早注册的那个），否则兜不住后面 handler 抛出的 panic——recover 只能捕获同一个 goroutine 里、调用栈上更外层函数的 panic。",
+        "recover 之后要写 500 响应并 c.Abort()，否则链会继续往下跑，客户端可能拿到半截响应。",
+        "别把 panic 的内容和堆栈返回给客户端：堆栈打到日志里，返回统一的错误 JSON。",
+        "gin.Default() 自带 Recovery 中间件，它会把堆栈打到 stderr 并返回 500；生产环境通常再包一层自己的实现。",
+        "panic 只用来处理「不该发生」的错误，可预期的失败用 error 返回，不要什么都 panic。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// Recovery 兜住后面所有 handler 抛出的 panic\nfunc Recovery() gin.HandlerFunc {\n\treturn func(c *gin.Context) {\n\t\tdefer func() {\n\t\t\tif err := recover(); err != nil {\n\t\t\t\tfmt.Println(\"捕获到 panic:\", err)\n\t\t\t\tc.AbortWithStatusJSON(500, gin.H{\"error\": \"internal server error\"})\n\t\t\t}\n\t\t}()\n\t\tc.Next()\n\t}\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(Recovery()) // 要放在最前面，才能兜住后面所有 handler\n\tr.GET(\"/boom\", func(c *gin.Context) {\n\t\tpanic(\"boom\")\n\t})\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(\"GET\", \"/boom\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Printf(\"code=%d body=%s\\n\", w.Code, w.Body.String())\n}",
+      "lang": "go",
+      "notes": "常见追问：recover 只能在 defer 里用吗？——是，在普通函数体里直接调 recover() 返回 nil。追问：goroutine 里的 panic 能被外层中间件 recover 吗？——不能，必须在那个 goroutine 内部自己 recover。追问：Gin 自带的 Recovery 够用吗？——够用但输出不友好，通常自己包一层并做好脱敏。"
+    },
+    {
+      "title": "Gin 的 Context 会被复用，这会带来什么问题？",
+      "description": "sync.Pool 复用 Context 换来了性能，也带来了请求之间串数据的风险。",
+      "answer": [
+        "Engine 用 sync.Pool 复用 *gin.Context：一个请求结束后把 c 放回池里，下个请求 reset 后接着用，reset 会清掉 handlers、Keys、Params、Errors 这些字段。",
+        "所以请求结束之后不能再持有 *gin.Context：它随时会被下一个请求改写。实测：第一个请求把 c 存下来，第二个请求进来后，旧 c.Param(\"id\") 已经变成第二个请求的值。",
+        "同理不能把 c 交给 goroutine 异步处理——那是数据竞争，最坏情况是响应写串；真要异步就把需要的值复制成普通结构体再传出去。",
+        "c.Params 这样的切片也是复用的（reset 里是 c.Params[:0]），留存切片同样危险。",
+        "想在请求之外用数据，就自己定义结构体传值，别把 Context 当数据载体。",
+        "这也是 Gin 性能好的原因之一：每个请求不用新分配 Context；但也正因如此，逃逸出去就出鬼。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tvar saved *gin.Context\n\tr.GET(\"/user/:id\", func(c *gin.Context) {\n\t\tif saved == nil {\n\t\t\tsaved = c // 错误示范：把 *gin.Context 存下来\n\t\t}\n\t\tc.String(200, \"ok\")\n\t})\n\n\tw := httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/user/1\", nil))\n\tfmt.Println(\"第一个请求结束\")\n\n\tw = httptest.NewRecorder()\n\tr.ServeHTTP(w, httptest.NewRequest(\"GET\", \"/user/2\", nil))\n\tfmt.Println(\"第二个请求结束\")\n\n\t// saved 是被复用的同一个 Context，内容已经被第二个请求覆盖\n\tfmt.Printf(\"saved.Param(id)=%s saved.Request=%s\\n\", saved.Param(\"id\"), saved.Request.URL.Path)\n}",
+      "lang": "go",
+      "notes": "常见追问：怎么确认是这个问题？——go test -race 或者线上开 -race，能直接报 data race。追问：那我存 c.Request 行不行？——不行，c.Request 也会被换成下一个请求的。追问：怎么在异步任务里用请求数据？——把参数取出来用普通变量传。"
+    }
+  ]
+}
