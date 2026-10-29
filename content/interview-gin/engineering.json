@@ -1,0 +1,199 @@
+{
+  "id": "engineering",
+  "title": "Gin 工程实践与性能",
+  "entries": [
+    {
+      "title": "Gin 在 net/http 之上封装了哪几层？哪些活儿仍然归 net/http 管？",
+      "description": "面试时要说清封装的边界：Gin 换掉了哪几层，哪些能力它根本没碰。",
+      "answer": [
+        "net/http 负责连接层和协议层：TCP 连接的建立与复用、Keep-Alive、HTTP/1.1 与 HTTP/2 的解析、请求体读取、读写超时。Gin 一行都没有重写，它是个 http.Handler 而不是一个服务器。",
+        "Gin 自己实现的是应用层的四块：按 HTTP 方法分的路由树（httprouter 派生的 radix tree）、请求级的 *gin.Context（用 sync.Pool 复用）、HandlersChain 中间件链、以及基于 render 的响应输出（c.JSON / c.String / c.HTML）。",
+        "接口上完全兼容：*gin.Engine 实现了 http.Handler 的 ServeHTTP，c.Request 就是 *http.Request，c.Writer 是包装过的 http.ResponseWriter。所以标准库的能力随时能用：http.MaxBytesReader、http.StripPrefix、http.ServeMux 都直接接得上。",
+        "好处是边界清楚：换框架不换服务器。Gin 可以挂在 http.ServeMux 后面、放在 Nginx 后面、也可以被别的 Go 服务当子路由调用。",
+        "反面就是：Gin 不接管的地方得自己管——http.Server 的超时、连接数、优雅关闭、静态文件缓存头，Gin 全都没有替你做。",
+        "面试里常被追问的坑：Gin 默认把所有代理都当可信（trustedProxies 是 0.0.0.0/0），不显式 SetTrustedProxies 的话 c.ClientIP() 会被伪造的 X-Forwarded-For 骗。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\n\t// gin.Engine 就是个 http.Handler，可以挂到标准库的多路复用器后面\n\tmux := http.NewServeMux()\n\tmux.Handle(\"/api/\", http.StripPrefix(\"/api\", r))\n\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/api/ping\", nil)\n\tmux.ServeHTTP(w, req)\n\tfmt.Printf(\"status=%d body=%s\\n\", w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：Gin 自己实现了 HTTP/2 吗？——没有，标准库 net/http 自带 h2，Gin 只是个 Handler。追问：Gin 能放在 Nginx 后面吗？——能，但记得设 SetTrustedProxies，否则 ClientIP 不可信。追问：Gin 比 net/http 快在哪？——见「Gin 的性能怎么样」那条。追问：为什么说 Context 可以池化？——因为它活在一个请求的生命周期内，请求结束就 reset 后放回 sync.Pool。"
+    },
+    {
+      "title": "gin.Default() 和 gin.New() 有什么区别？Logger 和 Recovery 分别做了什么？",
+      "description": "两个构造函数的差别就是两个中间件；面试常追问这两个中间件到底拦住了什么。",
+      "answer": [
+        "gin.New() 只返回一个空的 Engine（路由表 + Context 池），不带任何中间件；gin.Default() 的源码就是在 New() 之后 Use(gin.Logger(), gin.Recovery())。",
+        "Logger 是访问日志中间件：每个请求结束时打一行，包含状态码、耗时、客户端 IP、方法、路径和 handler 记下的错误信息，输出到 gin.DefaultWriter（默认 os.Stdout），格式是带 ANSI 颜色的控制台文本。",
+        "Recovery 是兜底中间件：recover 掉 handler 链里的 panic，打印堆栈，然后 c.AbortWithStatus(500) 并中止后续 handler；如果连接已经断了（EPIPE / ECONNRESET），它只记日志、不写状态码。",
+        "少了 Recovery 不会让整个进程挂掉——net/http 每个连接自己也会 recover——但客户端收到的是连接被重置而不是 500，堆栈也只进标准库的日志，进不了你的日志系统。",
+        "少了 Logger 只是没有访问日志，但线上排障会瞎：出问题时看不出是哪个请求、耗时多少。",
+        "所以 Default 适合本地起步；生产上更常见的是 gin.New() 配自定义的 LoggerConfig 和 CustomRecovery，输出格式、采样率、告警都能自己定。"
+      ],
+      "code": "package main\n\nimport (\n\t\"bytes\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tvar buf bytes.Buffer\n\n\t// 自己拼等价于 gin.Default() 的两个中间件，但输出可控\n\tr := gin.New()\n\tr.Use(gin.LoggerWithWriter(&buf), gin.RecoveryWithWriter(&buf))\n\tr.GET(\"/ok\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\tr.GET(\"/panic\", func(c *gin.Context) { panic(\"handler 炸了\") })\n\n\tfor _, path := range []string{\"/ok\", \"/panic\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-8s -> status=%d body=%q\\n\", path, w.Code, w.Body.String())\n\t}\n\tfmt.Println(\"--- 中间件写出的日志 ---\")\n\tfmt.Print(buf.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：Logger 记录的时间点是什么时候？——在 handler 链全部返回之后，所以它统计的是完整耗时（含后续中间件的后半段）。追问：Recovery 会不会把 panic 吞掉让人看不见？——会，它自己打印堆栈到 DefaultErrorWriter（os.Stderr）。追问：Logger 打 stdout、Recovery 打 stderr，这个差别重要吗？——重要，采集端常常分开配：stdout 收访问日志，stderr 收错误。"
+    },
+    {
+      "title": "gin.ReleaseMode、DebugMode、TestMode 有什么区别？生产环境该用哪个？",
+      "description": "Gin 的全局模式开关：影响哪些行为、怎么切、线上选哪个。",
+      "answer": [
+        "三种模式是 Gin 的全局开关（gin.SetMode，或环境变量 GIN_MODE）。真正受影响的只有一件事：IsDebugging() 为真时 Gin 才打 [GIN-debug] 那批调试输出。",
+        "DebugMode 是默认值（ginMode 初始值就是 debugCode）：注册路由时会打印整棵路由树和每条路由挂到哪个 handler，LoadHTMLGlob 会打印加载了哪些模板。",
+        "ReleaseMode：所有 [GIN-debug] 输出关闭，同时 Recovery 的日志里不再附带请求 dump（debug 模式下会打印完整请求头，有泄露 Authorization 的风险）。生产用这个。",
+        "TestMode：IsDebugging() 同样为 false，所以不打调试输出；它的意义是让框架知道当前在测试环境——gin.SetMode(\"\") 时如果检测到 flag.Lookup(\"test.v\") 存在就自动进 TestMode，所以 go test 不用手动设置。",
+        "三种模式都不改变路由匹配、参数绑定、校验的行为，也不影响性能——ReleaseMode 少的是「打印」，不是「干活」。",
+        "生产上推荐用环境变量切：GIN_MODE=release 启动，代码里不用写死；这样同一份镜像在测试环境还能切回 debug。注意 SetMode 传了非法值会 panic（gin mode unknown）。"
+      ],
+      "notes": "常见追问：模式能按路由设吗？——不能，是进程级的全局开关。追问：ReleaseMode 下 Recovery 还打堆栈吗？——打，只是不再附带请求 dump。追问：为什么有人线上还用 debug？——多半是忘了 gin.SetMode(gin.ReleaseMode)，结果是启动刷屏 + 每个 panic 打印完整请求头。追问：GIN_MODE 环境变量和代码里 SetMode 哪个优先？——代码里后调用的赢，init 时会先读一次环境变量。"
+    },
+    {
+      "title": "为什么生产环境更推荐 gin.New() 加自定义中间件，而不是直接用 gin.Default()？",
+      "description": "不是 New 比 Default 快，而是 Default 的两个内置中间件在生产环境不满足要求。",
+      "answer": [
+        "格式不可控：gin.Logger() 打的是带 ANSI 颜色的控制台文本，输出到 os.Stdout。线上日志要结构化（JSON）、要进采集器、要带 trace id，Default 给不了。",
+        "目的地不可控：两个中间件都写死到 gin.DefaultWriter / gin.DefaultErrorWriter，想写文件或写管道得换中间件。",
+        "Logger 每请求都写一行，量大时 IO 就是瓶颈：生产常见做法是采样（只记慢请求和错误）或按路径跳过（健康检查、metrics 不记）。",
+        "Recovery 的默认行为太糙：直接把完整堆栈打到 stderr，500 响应就是干巴巴一个空 body；CustomRecovery 才能在 recover 里上报监控、统一错误体、带上业务错误码。",
+        "可观测性是自己加的：请求 ID、trace、耗时打点、Prometheus 指标这些都得自己写中间件，gin.Default() 一个都不带。",
+        "结论：gin.New() + 一套自己的 bootstrap 中间件（请求 ID → 访问日志 → panic 兜底 → 指标）才是生产形态；Default 的价值是让本地起步时少写两行。"
+      ],
+      "code": "package main\n\nimport (\n\t\"bytes\"\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tdef := gin.Default()\n\tfmt.Printf(\"gin.Default() 内置中间件数 = %d\\n\", len(def.Handlers))\n\n\t// 生产形态：gin.New() + 自己配的日志和兜底\n\tvar buf bytes.Buffer\n\tr := gin.New()\n\tr.Use(gin.LoggerWithConfig(gin.LoggerConfig{Output: &buf}))\n\tr.Use(gin.CustomRecovery(func(c *gin.Context, err any) {\n\t\t// 这里可以上报监控、记业务日志\n\t\tc.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{\"code\": 500, \"msg\": \"服务内部错误\"})\n\t}))\n\tr.Use(func(c *gin.Context) {\n\t\tc.Set(\"request_id\", \"req-001\") // 请求 ID 中间件\n\t\tc.Next()\n\t})\n\tfmt.Printf(\"自定义中间件数 = %d\\n\", len(r.Handlers))\n\n\tr.GET(\"/panic\", func(c *gin.Context) { panic(\"handler 炸了\") })\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/panic\", nil)\n\tr.ServeHTTP(w, req)\n\tfmt.Printf(\"status=%d body=%s\\n\", w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：自定义中间件会不会比内置的慢？——同一层函数调用而已，成本几乎全在中间件里干的活（写盘、查库）。追问：LoggerWithConfig 和 Logger 的区别？——前者能配 Formatter、Output、SkipPaths、Skip，Logger 是它的固定配置版。追问：怎么保证 panic 兜底一定在最外层？——它是 Use 的第一个，兜底中间件必须包住所有会 panic 的 handler。"
+    },
+    {
+      "title": "怎么在服务端硬性限制请求体大小？MaxMultipartMemory 和 http.MaxBytesReader 分别管哪一段？",
+      "description": "两个都跟「大小」有关，但管的不是一回事，面试里经常被问混。",
+      "answer": [
+        "gin.Engine.MaxMultipartMemory 是传给 ParseMultipartForm 的内存阈值，默认 32MB：multipart 的文件部分超过它，超出的内容写到临时文件。它限制的是「内存里放多少」，不是「总共能收多少」。",
+        "所以把 MaxMultipartMemory 调小（比如 8MB）并不会拒绝大文件上传，只会让更多内容落磁盘——磁盘写满是另一种事故。",
+        "真正卡总量的是 http.MaxBytesReader(w, r.Body, limit)：它给 Body 套一层限流 reader，超过 limit 之后 Read 直接返回错误，绑定阶段就会失败。它对 JSON 表单和文件上传都有效。",
+        "Gin 里的标准写法是加一个中间件：c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)，然后在 handler 里用 errors.Is(err, http.ErrBodyTooLarge) 判断并返回 413。",
+        "注意 MaxBytesReader 只是「读的时候报错」：客户端可能已经把数据发过来了，流量成本照样付；真正的第一道防线在网关（nginx 的 client_max_body_size）。",
+        "文件上传还要额外留意落盘体积：MaxBytesReader 要放在触发 ParseMultipartForm 之前，否则超大文件可能已经写过一轮临时文件。"
+      ],
+      "code": "package main\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"strings\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tr := gin.New()\n\t// MaxMultipartMemory 只管内存阈值，超出部分落临时文件，不限制总量\n\tr.MaxMultipartMemory = 8 << 20\n\t// 真正限制总量：请求体超过 1KB 就读不出来了\n\tr.Use(func(c *gin.Context) {\n\t\tc.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<10)\n\t\tc.Next()\n\t})\n\tr.POST(\"/echo\", func(c *gin.Context) {\n\t\tdata, err := io.ReadAll(c.Request.Body)\n\t\tif err != nil {\n\t\t\tif errors.Is(err, http.ErrBodyTooLarge) {\n\t\t\t\tc.JSON(http.StatusRequestEntityTooLarge, gin.H{\"error\": \"请求体超过 1KB 限制\"})\n\t\t\t\treturn\n\t\t\t}\n\t\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tc.JSON(http.StatusOK, gin.H{\"size\": len(data)})\n\t})\n\n\tfmt.Printf(\"MaxMultipartMemory = %d 字节\\n\", r.MaxMultipartMemory)\n\n\tw := httptest.NewRecorder()\n\tbody := strings.NewReader(strings.Repeat(\"x\", 2048))\n\treq := httptest.NewRequest(http.MethodPost, \"/echo\", body)\n\tr.ServeHTTP(w, req)\n\tfmt.Printf(\"status=%d body=%s\\n\", w.Code, w.Body.String())\n}\n",
+      "lang": "go",
+      "notes": "常见追问：MaxBytesReader 报错后连接还能复用吗？——不能，body 没读完，连接通常会被关掉。追问：用 ShouldBindJSON 也能拿到 ErrBodyTooLarge 吗？——能，但 JSON 解析器可能先报语法错，要按实际错误判断。追问：413 还是 400？——语义上是 413 Request Entity Too Large。追问：能不能在路由上单独限？——可以，不同路由组用不同的 limit 中间件。"
+    },
+    {
+      "title": "怎么设置服务端的超时？ReadTimeout、WriteTimeout、IdleTimeout 各管什么？",
+      "description": "服务端超时的四个参数怎么分工，以及为什么不能图省事用 r.Run。",
+      "answer": [
+        "先说坑：r.Run(\":8080\") 内部就是 http.ListenAndServe，等价于一个没有任何超时的 http.Server（源码里只设了 Addr 和 Handler）。Slowloris、连接泄漏都是这么来的。",
+        "正确做法是自己建 http.Server：ReadTimeout（从连接建立到读完整个请求，含 body）、WriteTimeout（从读完请求头到写完响应）、IdleTimeout（Keep-Alive 连接空闲多久被回收）、ReadHeaderTimeout（只算读请求头，慢头攻击的重点防线，Go 1.8 起有）。",
+        "经验值：ReadHeaderTimeout 5~10 秒、ReadTimeout 15~30 秒、WriteTimeout 30~60 秒、IdleTimeout 60~120 秒；写接口的 WriteTimeout 要大于最慢的业务耗时。",
+        "WriteTimeout 和流式接口冲突：SSE、WebSocket 用不了它（会把长连接掐断），要么设 0，要么把长连接挪到单独的 server 或交给反向代理。",
+        "注意超时是服务端主动掐断：被掐断的请求客户端看到的是超时错误，服务端这边如果不记日志，就会出现「客户端报错但服务端一片安静」的排查困境。",
+        "超时之外还要配 MaxHeaderBytes（默认 1MB，够用）和 http.Server 的连接数控制——http.Server 本身没有连接池上限，那是反代或 netutil 的活。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/slow\", func(c *gin.Context) {\n\t\ttime.Sleep(200 * time.Millisecond)\n\t\tc.String(http.StatusOK, \"done\")\n\t})\n\n\t// 不要用 r.Run()，自己建 Server 才能设超时\n\tsrv := &http.Server{\n\t\tHandler:           r,\n\t\tReadHeaderTimeout: 5 * time.Second,\n\t\tReadTimeout:       15 * time.Second,\n\t\tWriteTimeout:      30 * time.Second,\n\t\tIdleTimeout:       60 * time.Second,\n\t}\n\n\t// 用 httptest 驱动请求，不用真的占端口\n\tw := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/slow\", nil)\n\tstart := time.Now()\n\tsrv.Handler.ServeHTTP(w, req)\n\tfmt.Printf(\"status=%d 耗时=%v\\n\", w.Code, time.Since(start).Round(time.Millisecond))\n\n\t// 真实监听用的是同一个 srv，跑完立刻关掉\n\tln, err := net.Listen(\"tcp\", \"127.0.0.1:0\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tgo srv.Serve(ln)\n\tresp, err := http.Get(\"http://\" + ln.Addr().String() + \"/slow\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tbody, _ := io.ReadAll(resp.Body)\n\tresp.Body.Close()\n\tfmt.Printf(\"真实服务 status=%d body=%s\\n\", resp.StatusCode, body)\n\tsrv.Close()\n}\n",
+      "lang": "go",
+      "notes": "常见追问：ReadTimeout 和 ReadHeaderTimeout 要同时设吗？——要，前者管整体，后者单独兜住慢头攻击。追问：为什么 WriteTimeout 会影响 SSE？——它是从读完请求头开始算的写入截止时间，长连接必然被切。追问：客户端超时要不要也设？——要，http.Client 的 Timeout 或者按请求的 context.WithTimeout，两端都要。"
+    },
+    {
+      "title": "怎么实现优雅关闭？收到信号后怎么停止收新请求、等完存量请求？",
+      "description": "优雅关闭的三步流程，以及每一步容易漏掉的细节。",
+      "answer": [
+        "标准流程是三步：收到 SIGTERM/SIGINT → 停止接收新连接 → 等存量请求跑完 → 退出。Go 里对应 signal.NotifyContext（Go 1.16 起）加上 http.Server.Shutdown。",
+        "Shutdown 先把 listener 关掉（不再接受新连接），然后轮询等待所有活跃连接变成空闲并关闭它们；它返回 ctx.Err() 就说明超时没关完。",
+        "必须给 Shutdown 一个带超时的 context：ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)。超时就该强杀（os.Exit(1)），否则一个卡住的请求会让进程永远退不出去。",
+        "Shutdown 管不到 hijack 过的连接（WebSocket、长轮询的 hijack）：这类连接要么自己通知关闭，要么靠 IdleTimeout / ReadTimeout 收尾，不能指望 Shutdown。",
+        "关闭顺序有讲究：先停止接新活（Shutdown），再停后台消费者、等消息队列 ack，最后关数据库连接（db.Close()）；反过来会出现「连接已关但请求还在跑」的报错。",
+        "K8s 环境还要配合 preStop hook 和 terminationGracePeriodSeconds：preStop 里 sleep 几秒是让 Endpoints 更新先传播出去，否则滚动更新会先杀 pod 再摘流量，滚动更新期间必然有一批请求失败。"
+      ],
+      "code": "package main\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"net\"\n\t\"net/http\"\n\t\"os\"\n\t\"os/signal\"\n\t\"syscall\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/work\", func(c *gin.Context) {\n\t\ttime.Sleep(100 * time.Millisecond)\n\t\tc.String(http.StatusOK, \"ok\")\n\t})\n\n\tsrv := &http.Server{Handler: r, ReadHeaderTimeout: 5 * time.Second}\n\tln, err := net.Listen(\"tcp\", \"127.0.0.1:0\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\n\t// 第一步：监听信号\n\tctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)\n\tdefer stop()\n\tgo func() {\n\t\t<-ctx.Done()\n\t\t// 第二步：停止收新连接，等存量请求做完，最多等 5 秒\n\t\tshutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)\n\t\tdefer cancel()\n\t\tif err := srv.Shutdown(shutdownCtx); err != nil {\n\t\t\tfmt.Println(\"优雅关闭超时:\", err)\n\t\t\tos.Exit(1)\n\t\t}\n\t\tfmt.Println(\"已优雅关闭，存量请求处理完毕\")\n\t}()\n\n\tgo srv.Serve(ln)\n\n\t// 模拟 K8s 发来的 SIGTERM\n\tp, err := os.FindProcess(os.Getpid())\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tp.Signal(syscall.SIGTERM)\n\n\t// 第三步：等关闭完成后进程自然退出\n\ttime.Sleep(500 * time.Millisecond)\n\tfmt.Println(\"main 结束\")\n}\n",
+      "lang": "go",
+      "notes": "常见追问：为什么不用 Close()？——Close 会直接掐断所有连接，客户端拿到的是连接重置；Shutdown 是「先关门再等」。追问：Shutdown 等待期间还能接新请求吗？——不能，新连接会被拒（连接建立失败或被拒）。追问：监听信号时为什么用 NotifyContext？——它返回一个会被 cancel 的 context，信号一来整条链路（context 派生的下游）都能收到通知。"
+    },
+    {
+      "title": "Gin 的性能怎么样？比标准库快多少？瓶颈通常在哪里？",
+      "description": "性能红利的来源、量级，以及为什么线上慢的很少是 Gin 造成的。",
+      "answer": [
+        "快的来源就三处：路由树匹配（一次 radix tree 下钻，标准库早期是 map 遍历）、Context 用 sync.Pool 复用（省掉每请求一次的 Context 分配）、渲染层少一次拷贝。",
+        "量级：同一台机器、同样轻量的 JSON 接口，Gin 大约是 net/http 的 2 倍上下；具体数字随机器、并发数、payload 大小变化，面试时不要背具体 QPS。",
+        "默认的 JSON 编码器还是标准库的 encoding/json（要 sonic / jsoniter 得自己加 build tag），所以 Gin 的 JSON 加速主要来自省掉了框架层的开销，不是换了编码器。",
+        "Gin 完全不改变 HTTP 协议层：TLS 握手、Keep-Alive、HTTP/2 都是 net/http 的。裸机压测时，这部分经常才是大头。",
+        "更常见的情况是：Gin 省下来的那点 CPU，被业务里的数据库查询、日志写盘、JSON 序列化吃掉了。压测前先看 pprof 的 CPU 火焰图，看时间花在哪，再决定要不要换框架。",
+        "结论一句话：Gin 的性能红利是「省掉框架层的开销」，业务代码写不对，换成 net/http 一样慢。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"sync\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// bench 用固定并发打同一个 handler，返回每秒请求数\nfunc bench(name string, h http.Handler, concurrency, total int) float64 {\n\tsrv := httptest.NewServer(h)\n\tdefer srv.Close()\n\n\tclient := &http.Client{Transport: &http.Transport{\n\t\tMaxIdleConns:        concurrency,\n\t\tMaxIdleConnsPerHost: concurrency,\n\t}}\n\tjobs := make(chan struct{}, total)\n\tvar wg sync.WaitGroup\n\tstart := time.Now()\n\tfor i := 0; i < concurrency; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tfor range jobs {\n\t\t\t\tresp, err := client.Get(srv.URL + \"/api/ping\")\n\t\t\t\tif err != nil {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tio.Copy(io.Discard, resp.Body)\n\t\t\t\tresp.Body.Close()\n\t\t\t}\n\t\t}()\n\t}\n\tfor i := 0; i < total; i++ {\n\t\tjobs <- struct{}{}\n\t}\n\tclose(jobs)\n\twg.Wait()\n\n\telapsed := time.Since(start)\n\tqps := float64(total) / elapsed.Seconds()\n\tfmt.Printf(\"%-10s %d 次请求 / %v = %.0f req/s\\n\", name, total, elapsed.Round(time.Millisecond), qps)\n\treturn qps\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tg := gin.New()\n\tg.GET(\"/api/ping\", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{\"message\": \"pong\"}) })\n\n\tmux := http.NewServeMux()\n\tmux.HandleFunc(\"/api/ping\", func(w http.ResponseWriter, r *http.Request) {\n\t\tw.Header().Set(\"Content-Type\", \"application/json; charset=utf-8\")\n\t\tw.Write([]byte(`{\"message\":\"pong\"}`))\n\t})\n\n\tconst concurrency = 50\n\tconst total = 20000\n\tgqps := bench(\"gin\", g, concurrency, total)\n\tnqps := bench(\"net/http\", mux, concurrency, total)\n\tfmt.Printf(\"gin 大约是 net/http 的 %.2f 倍（同一台机器、同样 handler 逻辑）\\n\", gqps/nqps)\n}\n",
+      "lang": "go",
+      "notes": "常见追问：这个 2 倍是硬指标吗？——不是，机器、并发数、handler 内容一变就不成立，面试里说「量级」别说具体数字。追问：Gin 的 benchmark 是怎么写的？——httptest.NewServer 起真服务 + b.RunParallel + b.ReportAllocs。追问：为什么不用 go test -bench？——也可以，那是框架级微基准；接口级压测要用 hey / wrk 打真实 HTTP。"
+    },
+    {
+      "title": "怎么压测一个 Gin 服务？",
+      "description": "压测方法论：用什么工具、测哪一层、看哪些指标、怎么排除干扰。",
+      "answer": [
+        "分两层测：接口级（打真实 HTTP 接口，看 QPS 和延迟分布）和框架级（httptest + testing.B，只测路由匹配和渲染的固定开销）。前者回答「这个服务能扛多少」，后者回答「框架本身开销多大」。",
+        "接口级用压测工具：hey（Go 写的，参数简单，hey -z 30s -c 50 http://127.0.0.1:8080/api）、wrk / ab（系统自带）、vegeta（自带打点报告和直方图）。别用 shell 循环 curl，压测客户端自己就是瓶颈。",
+        "压测前先排除干扰：压测机和服务同机会抢 CPU；访问日志写盘、pprof 采样、没切 ReleaseMode 都会明显拉低结果。先把这些关掉再压，压完再打开。",
+        "框架级用 Go 的 benchmark：httptest.NewServer 起一个真服务，用 b.RunParallel 并发打，b.ReportAllocs() 看每次请求分配了多少次；Gin 官方仓库的 benchmark 就是这个套路。",
+        "看结果不能只看平均延迟：要看 P99 / P999、错误率，再配合服务端的 CPU、内存、GC 曲线。平均值会把长尾完全藏起来，而用户投诉的往往就是长尾。",
+        "结论要能复现：记下 Go 版本、GOMAXPROCS、机器核数、payload 大小和 handler 逻辑，否则下次没人相信这个数字。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"sort\"\n\t\"sync\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.GET(\"/api/ping\", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{\"message\": \"pong\"}) })\n\n\tsrv := httptest.NewServer(r)\n\tdefer srv.Close()\n\n\tconst concurrency = 20\n\tconst total = 2000\n\tclient := &http.Client{Transport: &http.Transport{\n\t\tMaxIdleConns:        concurrency,\n\t\tMaxIdleConnsPerHost: concurrency,\n\t}}\n\n\tlatencies := make([]time.Duration, 0, total)\n\tvar mu sync.Mutex\n\tvar wg sync.WaitGroup\n\tstart := time.Now()\n\tfor i := 0; i < concurrency; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tlocal := make([]time.Duration, 0, total/concurrency)\n\t\t\tfor j := 0; j < total/concurrency; j++ {\n\t\t\t\tt0 := time.Now()\n\t\t\t\tresp, err := client.Get(srv.URL + \"/api/ping\")\n\t\t\t\tif err != nil {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tio.Copy(io.Discard, resp.Body)\n\t\t\t\tresp.Body.Close()\n\t\t\t\tlocal = append(local, time.Since(t0))\n\t\t\t}\n\t\t\tmu.Lock()\n\t\t\tlatencies = append(latencies, local...)\n\t\t\tmu.Unlock()\n\t\t}()\n\t}\n\twg.Wait()\n\telapsed := time.Since(start)\n\n\tsort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })\n\tp := func(q float64) time.Duration {\n\t\tidx := int(float64(len(latencies))*q) - 1\n\t\tif idx < 0 {\n\t\t\tidx = 0\n\t\t}\n\t\treturn latencies[idx]\n\t}\n\tfmt.Printf(\"%d 次请求 / %v = %.0f req/s\\n\", len(latencies), elapsed.Round(time.Millisecond), float64(len(latencies))/elapsed.Seconds())\n\tfmt.Printf(\"P50=%v P90=%v P99=%v Max=%v\\n\", p(0.50), p(0.90), p(0.99), latencies[len(latencies)-1])\n}\n",
+      "lang": "go",
+      "notes": "常见追问：压测结果多少 QPS 算合格？——没有通用答案，看业务 SLA 和机器规格。追问：压测机和服务同机行不行？——会把结果压低，最好分机压。追问：怎么确认压的是 Gin 而不是网络？——同一台机器上对比 gin 和 net/http 两个 handler 的 QPS（上一条示例就是这么干的）。"
+    },
+    {
+      "title": "静态文件和 HTML 模板怎么挂载？",
+      "description": "静态目录、模板加载、目录列表的安全问题，以及生产上静态资源该放哪。",
+      "answer": [
+        "静态文件用 r.Static(\"/static\", \"./static\")，内部是 http.FileServer 套 http.StripPrefix，Gin 会额外先 Open 一次文件判断存在与否，不存在返回 404。",
+        "r.StaticFS(\"/static\", http.Dir(\"./static\")) 是底层版本；r.StaticFile(\"/favicon.ico\", \"./favicon.ico\") 挂单个文件。",
+        "注意目录列表：r.Static 会允许列出目录内容（暴露文件名结构），要禁掉就用 r.StaticFS(\"/static\", gin.Dir(\"./static\", false))，第二个参数 false 表示不列目录。",
+        "模板用 r.LoadHTMLGlob(\"templates/*.tmpl\")（或 LoadHTMLFiles 指定具体文件）在启动时解析进 engine.HTMLRender，运行时只执行不重复解析；渲染用 c.HTML(http.StatusOK, \"index.tmpl\", obj)。",
+        "模板底层是 html/template，会自动转义，防 XSS；数据传 map[string]any 或结构体都行。注意 HTML 模板不能用于生成 JS/CSS。",
+        "生产建议：静态资源交给 Nginx 或 CDN，Go 服务只管动态接口；带 hash 的文件名配 Cache-Control: public, max-age=31536000, immutable，HTML 页面配 no-cache。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"os\"\n\t\"path/filepath\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\t// 准备静态目录和模板目录\n\tdir, err := os.MkdirTemp(\"\", \"gin-static\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer os.RemoveAll(dir)\n\tstaticDir := filepath.Join(dir, \"static\")\n\ttplDir := filepath.Join(dir, \"templates\")\n\tos.MkdirAll(staticDir, 0o755)\n\tos.MkdirAll(tplDir, 0o755)\n\tos.WriteFile(filepath.Join(staticDir, \"app.css\"), []byte(\"body{color:red}\"), 0o644)\n\tos.WriteFile(filepath.Join(tplDir, \"index.tmpl\"), []byte(`<h1>你好，{{.name}}</h1>`), 0o644)\n\n\tr := gin.New()\n\t// 第二个参数 false：不列目录内容\n\tr.StaticFS(\"/static\", gin.Dir(staticDir, false))\n\t// 启动时一次性解析模板\n\tr.LoadHTMLGlob(filepath.Join(tplDir, \"*.tmpl\"))\n\tr.GET(\"/page\", func(c *gin.Context) {\n\t\tc.HTML(http.StatusOK, \"index.tmpl\", gin.H{\"name\": \"Gin\"})\n\t})\n\n\tfor _, path := range []string{\"/static/app.css\", \"/page\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Printf(\"%-16s -> %d %s\\n\", path, w.Code, w.Body.String())\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：LoadHTMLGlob 找不到文件会怎样？——启动就 panic（模板解析失败会 panic）。追问：模板里怎么用函数？——给 engine.FuncMap 赋值或用 SetFuncTemplate。追问：静态文件怎么防目录穿越？——标准库的 http.FileServer 已经处理了 ../，但自己拼路径就要小心。追问：为什么生产不让 Go 服务发静态文件？——每台机器都要带一份文件，占内存和带宽，交给 CDN 更合适。"
+    },
+    {
+      "title": "Gin 的 Context 为什么不能跨 goroutine 用？异步任务里怎么传数据？",
+      "description": "Context 的生命周期、复用机制，以及异步任务里正确的传参姿势。",
+      "answer": [
+        "*gin.Context 的生命周期只在一次请求内：handler 链执行完，Gin 会 reset 它（清空 Keys、Params、Errors、queryCache 等）并放回 sync.Pool 给下一个请求复用。",
+        "所以在 goroutine 里继续用原来的 c，等于和下一个请求抢同一个对象：数据串台、并发写 map 直接 panic、甚至把响应写到别的请求上。Gin 官方文档明确说 Context 只能在请求作用域内使用。",
+        "需要跨 goroutine 时用 c.Copy()：它复制一份 Context（Keys 深拷贝、Params 复制），可以在 goroutine 里安全读；但 Copy 出来的 Writer 是空的，不能再写响应。",
+        "更稳的做法是压根别把 Context 传进 goroutine：启动前把要用的数据（userID、订单号）取成普通变量传进去，需要取消信号就传 context.Context。",
+        "同一个 Context 上的 c.Set / c.Get 是有锁保护的（c.mu 是 sync.RWMutex），所以并发读写 Keys 本身不会 data race——但这把锁只保护 Keys，保护不了 Writer、Params，更保护不了「整个 Context 被复用」这件事。",
+        "另一个坑：c.Request.Context() 在 handler 返回后会被 cancel，异步任务里别指望它还能用来控制长耗时操作；要跑长任务就用 context.WithoutCancel（Go 1.21 起）或者自己建一个带超时的 context。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\tr.Use(func(c *gin.Context) {\n\t\tc.Set(\"user_id\", c.Param(\"id\"))\n\t\tc.Next()\n\t})\n\tr.GET(\"/order/:id\", func(c *gin.Context) {\n\t\tid := c.Param(\"id\") // 先取成普通变量，再进 goroutine\n\n\t\t// 正确做法一：只传普通变量\n\t\tdone := make(chan string, 1)\n\t\tgo func(v string) { done <- \"处理订单 \" + v }(id)\n\t\tfmt.Println(<-done)\n\n\t\t// 正确做法二：需要 Context 就用 Copy()，且不能在里面写响应\n\t\tcp := c.Copy()\n\t\tgo func(ctx *gin.Context) {\n\t\t\tv, _ := ctx.Get(\"user_id\")\n\t\t\tfmt.Println(\"Copy 里读到的 user_id =\", v)\n\t\t}(cp)\n\n\t\t// 反例：把原 Context 交给 goroutine\n\t\traw := c\n\t\tgo func() {\n\t\t\ttime.Sleep(30 * time.Millisecond)\n\t\t\tv, _ := raw.Get(\"user_id\")\n\t\t\t// 请求已结束，Context 被回收复用，这里可能读到下一个请求的值\n\t\t\tfmt.Println(\"原 Context 在 goroutine 里读到的 user_id =\", v)\n\t\t}()\n\n\t\tc.String(http.StatusOK, \"ok\")\n\t})\n\n\tfor _, id := range []string{\"1\", \"2\"} {\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, \"/order/\"+id, nil)\n\t\tr.ServeHTTP(w, req)\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：c.Copy() 之后还能 c.JSON 吗？——不能，Copy 出来的 Writer 不写到底层，会丢响应。追问：能不能用 c.Set 传数据给 goroutine？——能读，但语义上危险：请求结束后 Keys 会被清空（reset 置 nil），所以只能读不能指望它一直有效。追问：异步任务里怎么拿请求头？——在 goroutine 启动前把需要的头取出来传进去。"
+    },
+    {
+      "title": "Gin 访问数据库时连接池怎么配？",
+      "description": "Gin 自己没有连接池，池在 database/sql 里；四个参数怎么算。",
+      "answer": [
+        "Gin 里没有连接池这回事：连接池是 database/sql 的 db 对象。sql.Open 只创建句柄、不连库，真正建连接是第一次 Query 时懒建立的——所以 sql.Open 返回 nil error 不代表能连上。",
+        "四个关键参数：SetMaxOpenConns（最大打开连接数，默认不限制——这是最容易踩的坑，一个慢查询能把数据库连接打满）、SetMaxIdleConns（空闲连接数，默认 2，太小会让每个请求都重新握手）、SetConnMaxLifetime（连接最长存活，要小于数据库侧的空闲回收时间）、SetConnMaxIdleTime（Go 1.15 起，空闲连接多久回收）。",
+        "经验值：MaxOpenConns 按「数据库允许的最大连接数 ÷ 实例数」倒推（DB 允许 200 连接、你有 10 个实例，就设 15~20），MaxIdleConns 设成和 MaxOpenConns 一样大，省掉反复建连。",
+        "池满了之后的动作是排队等：等待受 context 控制，所以查询要用 QueryContext / ExecContext 并传 c.Request.Context()，别用 db.Query 这种不带 ctx 的版本，否则客户端超时了查询还在跑。",
+        "用 db.Stats() 观察：OpenConnections、InUse、Idle、WaitCount、WaitDuration。WaitCount 持续涨就是池不够或者有慢查询占着连接不放。",
+        "进程退出前要 db.Close()，并且要在优雅关闭的最后一步关：顺序是「停收新请求 → 等存量请求 → 关连接」，反过来就会报「连接已关闭」。"
+      ],
+      "code": "package main\n\nimport (\n\t\"database/sql\"\n\t\"database/sql/driver\"\n\t\"fmt\"\n\t\"io\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"sync\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n// 假驱动：只为演示连接池参数，不真的连数据库\ntype stubDriver struct{}\n\nfunc (stubDriver) Open(string) (driver.Conn, error) { return &stubConn{}, nil }\n\ntype stubConn struct{}\n\nfunc (c *stubConn) Prepare(string) (driver.Stmt, error) { return &stubStmt{}, nil }\nfunc (c *stubConn) Close() error                        { return nil }\nfunc (c *stubConn) Begin() (driver.Tx, error)           { return stubTx{}, nil }\n\ntype stubTx struct{}\n\nfunc (stubTx) Commit() error   { return nil }\nfunc (stubTx) Rollback() error { return nil }\n\ntype stubStmt struct{}\n\nfunc (s *stubStmt) Close() error  { return nil }\nfunc (s *stubStmt) NumInput() int { return 0 }\nfunc (s *stubStmt) Exec([]driver.Value) (driver.Result, error) {\n\treturn driver.RowsAffected(0), nil\n}\nfunc (s *stubStmt) Query([]driver.Value) (driver.Rows, error) { return &stubRows{}, nil }\n\ntype stubRows struct{ done bool }\n\nfunc (r *stubRows) Columns() []string { return []string{\"id\"} }\nfunc (r *stubRows) Close() error      { return nil }\nfunc (r *stubRows) Next(dest []driver.Value) error {\n\tif r.done {\n\t\treturn io.EOF\n\t}\n\tr.done = true\n\tdest[0] = int64(7)\n\treturn nil\n}\n\nfunc init() {\n\tsql.Register(\"stub\", stubDriver{})\n}\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\n\tdb, err := sql.Open(\"stub\", \"\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tdefer db.Close()\n\tdb.SetMaxOpenConns(10)           // 最多同时打开 10 条连接\n\tdb.SetMaxIdleConns(10)           // 空闲连接全部留着复用\n\tdb.SetConnMaxLifetime(time.Hour) // 连接最长活 1 小时\n\tdb.SetConnMaxIdleTime(10 * time.Minute)\n\n\tr := gin.New()\n\tr.GET(\"/db\", func(c *gin.Context) {\n\t\t// 取一条连接占住 50 毫秒，模拟慢查询\n\t\tconn, err := db.Conn(c.Request.Context())\n\t\tif err != nil {\n\t\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": err.Error()})\n\t\t\treturn\n\t\t}\n\t\tdefer conn.Close()\n\t\ttime.Sleep(50 * time.Millisecond)\n\t\ts := db.Stats()\n\t\tc.JSON(http.StatusOK, gin.H{\"open\": s.OpenConnections, \"in_use\": s.InUse, \"idle\": s.Idle})\n\t})\n\n\t// 并发 30 个请求，但池上限只有 10\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 30; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tw := httptest.NewRecorder()\n\t\t\treq := httptest.NewRequest(http.MethodGet, \"/db\", nil)\n\t\t\tr.ServeHTTP(w, req)\n\t\t}()\n\t}\n\twg.Wait()\n\n\ts := db.Stats()\n\tfmt.Printf(\"池上限=10 实际打开=%d 空闲=%d 等待次数=%d 等待总时长=%v\\n\",\n\t\ts.OpenConnections, s.Idle, s.WaitCount, s.WaitDuration.Round(time.Millisecond))\n}\n",
+      "lang": "go",
+      "notes": "常见追问：MaxOpenConns 设多少合适？——按「数据库上限 ÷ 实例数」倒推，再留点余量给运维和定时任务。追问：为什么默认 MaxIdleConns 只有 2？——因为空闲连接会占着数据库资源；调大能减少握手，但要跟数据库侧的 max_idle_connections 对齐。追问：池满了请求会怎样？——排队等，等不到就报 context deadline exceeded 或 too many connections。追问：连接池和 Gin 中间件有关系吗？——没有，池是 database/sql 的事，Gin 只是把请求传下去。"
+    },
+    {
+      "title": "中间件的顺序怎么影响性能？",
+      "description": "顺序既是语义问题也是性能问题，重点是别让每个请求都白跑一遍昂贵中间件。",
+      "answer": [
+        "顺序首先决定语义：Gin 的中间件是洋葱模型，先注册的在最外层。Use(A) 再 Use(B)，执行顺序是 A 前段 → B 前段 → handler → B 后段 → A 后段。",
+        "顺序还决定谁能短路：中间件里 c.Abort() 会直接跳过后面的所有中间件和 handler，所以鉴权、限流必须放在最前面，别让请求先跑完一整圈昂贵逻辑才被拒。",
+        "性能上最大的问题是「全局中间件」：r.Use 挂上的中间件对所有路由生效，包括 /healthz、/metrics、静态文件；把这些路径也拉进鉴权和日志链，是纯浪费。",
+        "贵的从来不是函数调用本身，而是中间件里干的活：查库的鉴权、写盘的结构化日志、dump 请求体、每请求 new 一个 tracker——这些才是压测时的 CPU 大头。",
+        "链的构造成本很小：每条路由在注册时就把「全局链 + 组链 + handler」拷贝成一个新切片（combineHandlers），请求期只是遍历这个切片，不会动态拼接，也就没有额外的分配。",
+        "实践建议：必须每个请求都做的（请求 ID、访问日志、panic 兜底）挂全局；按路径才做的（鉴权、限流、压缩、指标）挂路由组；再用 Skipper 把健康检查、静态文件排除掉。"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"time\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc main() {\n\tgin.SetMode(gin.ReleaseMode)\n\tr := gin.New()\n\n\t// 全局中间件：每条路由都会经过，包括健康检查和静态文件\n\tr.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"  [全局] 前\")\n\t\tstart := time.Now()\n\t\tc.Next()\n\t\tfmt.Printf(\"  [全局] 后 耗时=%v\\n\", time.Since(start).Round(time.Millisecond))\n\t})\n\n\t// 路由组中间件：只有组内路由经过\n\tapi := r.Group(\"/api\")\n\tapi.Use(func(c *gin.Context) {\n\t\tfmt.Println(\"  [组] 前\")\n\t\tc.Next()\n\t\tfmt.Println(\"  [组] 后\")\n\t})\n\tapi.GET(\"/ping\", func(c *gin.Context) { c.String(http.StatusOK, \"pong\") })\n\tr.GET(\"/health\", func(c *gin.Context) { c.String(http.StatusOK, \"ok\") })\n\n\tfor _, path := range []string{\"/api/ping\", \"/health\"} {\n\t\tfmt.Println(\"=== 请求\", path, \"===\")\n\t\tw := httptest.NewRecorder()\n\t\treq := httptest.NewRequest(http.MethodGet, path, nil)\n\t\tr.ServeHTTP(w, req)\n\t\tfmt.Println(\"  响应:\", w.Code, w.Body.String())\n\t}\n}\n",
+      "lang": "go",
+      "notes": "常见追问：中间件多了会不会拖慢框架？——每层就是一次函数调用，几十层以内几乎测不出差别；真正的成本是中间件里做的事。追问：怎么给健康检查开特例？——用 Skipper（LoggerConfig.Skip、鉴权中间件自己判断路径）或者把健康检查放到单独的端口/Engine。追问：为什么鉴权要放最前面？——Abort 能短路，放后面等于先干活再拒绝。"
+    }
+  ]
+}

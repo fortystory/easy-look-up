@@ -1,0 +1,201 @@
+{
+  "id": "security",
+  "title": "Web 安全基础与常见攻击防御",
+  "entries": [
+    {
+      "title": "XSS 是什么？有哪几类？分别怎么防？",
+      "description": "考的是能不能说清三类 XSS 的触发路径，以及知道真正的防线在哪一层。",
+      "answer": [
+        "XSS（跨站脚本）是把攻击者的脚本注入到页面里，让受害者浏览器以受害者身份执行这段代码，本质是代码注入",
+        "存储型（持久型）：payload 存进数据库，任何访问该页面的用户都会中招，影响面最大",
+        "反射型（非持久型）：payload 藏在 URL 参数、表单等请求数据里，服务端把它回显进响应时触发，一次性生效",
+        "DOM 型：完全不经过服务端，攻击者构造的 URL 或页面数据在前端被读进 innerHTML、eval、document.write 这类危险 API 才执行，服务端日志里看不到任何痕迹",
+        "根本防线是按输出上下文编码：HTML 正文、HTML 属性、JS 字符串、URL 各用对应的转义方案，模板引擎默认自动转义就别自己拼 HTML",
+        "前端改用 textContent 和 DOM API 替代 innerHTML、eval；服务端再加 CSP 做纵深防御，会话 Cookie 设 HttpOnly 降低 cookie 被偷后的损失"
+      ],
+      "notes": "常见追问：怎么确认有没有 XSS？——别在生产环境手点，用静态分析加专门的扫描工具，回溯参数从入口到渲染点的完整链路。常见追问：innerHTML 为什么危险？——它会解析并执行里面的 script 标签和事件属性。常见错误回答：「CSP 能彻底防住 XSS」——CSP 只是第二道防线，脚本一旦在同源上下文里跑起来，CSP 未必拦得住。"
+    },
+    {
+      "title": "CSP（Content-Security-Policy）是什么？怎么配？",
+      "description": "这题看的是会不会写策略，以及知不知道哪些写法等于白配。",
+      "answer": [
+        "CSP 通过响应头 Content-Security-Policy 声明「这个页面允许从哪些源加载和执行资源」，用来限制 XSS 的破坏范围，不是用来防 XSS 的",
+        "常用指令：default-src（兜底）、script-src、style-src、img-src、connect-src（XHR/fetch 的目标）、object-src 'none'、base-uri 'none'、frame-ancestors",
+        "典型写法：default-src 'self'; script-src 'self' 'nonce-{每次响应随机的串}'; object-src 'none'; base-uri 'none'，nonce 让内联脚本无法被猜到",
+        "不要用 'unsafe-inline' 和 'unsafe-eval'，这两个指令基本让 script-src 的保护失效；外链脚本用 nonce 加 strict-dynamic 比单纯列域名白名单更难绕过",
+        "上线先发 Content-Security-Policy-Report-Only 观察违规上报，再切成强制模式，避免上线当天把页面全部打挂",
+        "服务端直接在响应里写这个头即可，比如 Go 的 w.Header().Set(\"Content-Security-Policy\", policy)；它和输出编码是叠加关系，不能互相替代"
+      ],
+      "notes": "常见追问：nonce 怎么生成？——每次响应都用密码学随机数生成，绝不能复用。常见追问：script-src 列白名单域名够吗？——攻击者只要能往白名单域名下上传内容就能绕过，strict-dynamic 更稳。常见错误回答：「把 script-src 设成 'unsafe-inline' 就不影响页面」——那等于没配 CSP。"
+    },
+    {
+      "title": "CSRF 是什么？有哪些防御手段？",
+      "description": "考的是能不能说清成立前提，以及知道 token、SameSite、Origin 校验是三条并行的防线。",
+      "answer": [
+        "CSRF（跨站请求伪造）是攻击者诱导已登录用户的浏览器自动带上 Cookie 向目标站点发请求，借用户的登录态完成操作，攻击代码本身不在目标站点里",
+        "成立前提是浏览器会自动附带凭据：Cookie 不受同源策略约束，跨站表单发起的 POST 能以受害者身份打到服务器",
+        "Token 防护：表单里带服务端生成的随机 CSRF token（或用会话密钥 HMAC 签出来的 token），服务端校验不匹配就拒绝，token 要与会话绑定",
+        "SameSite：把会话 Cookie 设成 Lax 或 Strict，跨站请求不再携带 Cookie，从根上断掉这条路，现代浏览器（Chrome 80 起、Firefox 96 起、Safari 13.1 起）默认按 Lax 处理",
+        "校验 Origin/Referer：写操作要求请求头 Origin 等于本站 origin，Referer 作为兜底；GET 不校验，因为图片、预取都可能带 GET 触发",
+        "最彻底的方案是不用 Cookie 认证，把 token 放 Authorization 头，浏览器不会自动附带；代价是 XSS 能读到它，所以 XSS 防护依然不能省"
+      ],
+      "notes": "常见追问：只校验 Referer 行不行？——Referer 可能被隐私策略、代理或 referrer-policy 剥掉，只能当辅助。常见追问：为什么 GET 不校验 Origin？——跨站图片和预取都会带 GET 触发，校验了会误伤且挡不住。常见错误回答：「加了 CORS 就不用管 CSRF」——表单是简单请求，浏览器照样直接发出去。"
+    },
+    {
+      "title": "SameSite 有哪几个取值？Cookie 的安全属性该怎么配？",
+      "description": "考的是三个取值的准确行为，以及 Cookie 那几个安全属性各自防什么。",
+      "answer": [
+        "SameSite 决定 Cookie 在跨站请求中是否携带，三个取值是 Strict、Lax、None",
+        "Strict：任何跨站场景都不带，连从外站点进来的顶级导航 GET 也不带，最严格，适合后台管理这类页面",
+        "Lax：跨站时只在「顶级导航 + 安全方法（GET）」时携带，现代浏览器对未声明 SameSite 的 Cookie 默认按 Lax 处理",
+        "None：任何跨站场景都携带，必须同时设 Secure，否则现代浏览器直接拒收这个 Cookie",
+        "HttpOnly 让 JavaScript 读不到 document.cookie，XSS 偷不走会话 Cookie；Secure 让 Cookie 只在 HTTPS 下发送，防降级窃取；两者要一起上",
+        "再用 Domain、Path 收紧作用范围（尽量 host-only），敏感 Cookie 用 __Host- 前缀（强制 Secure、host-only、Path=/）或 __Secure- 前缀，会话 Cookie 不设 Max-Age 让它随浏览器关闭而失效"
+      ],
+      "notes": "常见追问：SameSite 和跨子域是什么关系？——SameSite 看的是站（可注册域），a.example.com 和 b.example.com 属于同站；但它们不同源，CORS 仍要单独配。常见追问：Lax 挡得住所有 CSRF 吗？——挡不住 POST 表单之外的绕过，尤其是不认 SameSite 的老浏览器，所以还要配 token。常见错误回答：「SameSite=Lax 等于没有跨站限制」——顶级导航的 GET 是被明确放行的。"
+    },
+    {
+      "title": "CORS 是什么？预检请求（OPTIONS）在做什么？",
+      "description": "考的是能不能说清浏览器同源策略之外的放行机制，以及预检到底在问什么。",
+      "answer": [
+        "CORS（跨源资源共享）是 W3C 标准，由服务端用响应头告诉浏览器「哪些来源的跨源请求允许读取响应」，是浏览器强制的跨源读授权机制",
+        "常用响应头：Access-Control-Allow-Origin、Access-Control-Allow-Credentials、Access-Control-Allow-Methods、Access-Control-Allow-Headers、Access-Control-Max-Age、Access-Control-Expose-Headers",
+        "预检 OPTIONS：浏览器在真正发跨源请求前先发一个 OPTIONS 探路，问「这个方法、这个来源、这些头允不允许」，拿到允许的答复后才发真正的请求",
+        "触发预检的条件：方法不是 GET/HEAD/POST、带了自定义请求头、Content-Type 不是 application/x-www-form-urlencoded、multipart/form-data、text/plain 这三种简单类型",
+        "简单请求不预检、直接发，所以表单伪造的 POST 根本不会触发 CORS 检查，这是 CORS 挡不住 CSRF 的根本原因",
+        "预检响应要写 Access-Control-Max-Age 让浏览器缓存一段时间，避免每个请求都探一次；回显 Origin 时必须同时写 Vary: Origin，否则 CDN 缓存会把某个来源的许可串给别的来源"
+      ],
+      "notes": "常见追问：带 Cookie 的跨源请求要满足什么条件？——响应要有 Access-Control-Allow-Credentials: true，且 Allow-Origin 不能是 *，必须是具体来源。常见追问：预检请求本身带 Cookie 吗？——不带，预检是无凭据的。常见错误回答：「Allow-Origin: * 配 Allow-Credentials: true 最省事」——规范禁止这种组合，浏览器会直接拒绝响应。"
+    },
+    {
+      "title": "CORS 和 CSRF 有什么区别？",
+      "description": "这题专门考两者的方向：一个是管读，一个是防写。",
+      "answer": [
+        "CORS 管的是「跨源能不能读取响应」，CSRF 防的是「跨站能不能用别人身份发起写操作」，方向相反",
+        "CORS 是服务端给浏览器的授权规则，靠 Access-Control-Allow-Origin 等响应头表达；CSRF 利用的是浏览器自动带 Cookie 这个行为",
+        "CORS 拦的是读：不合规的跨源响应浏览器不给 JS 读；而 CSRF 的破坏力体现在写，攻击者不需要读响应，所以 CORS 挡不住表单发起的简单请求",
+        "反过来，CSRF 的防御手段（token、SameSite、Origin 校验）也不影响合法跨源 API 的读取，该放行的接口照样放行",
+        "两者都要做：CORS 保证接口数据不被任意站点读取，CSRF 防护保证用户登录态不被跨站滥用",
+        "一个典型错误配置是把 CORS 放开成 *，或者无条件回显 Origin 又带 Allow-Credentials，这比不配更危险，等于把带凭据的跨源读取送给了任何站点"
+      ],
+      "notes": "常见追问：CORS 配错会造成什么后果？——任意站点能带用户 Cookie 读取接口数据，等于数据泄露。常见追问：预检失败会怎样？——浏览器直接不发真正的请求，服务端连真实请求都看不到。常见错误回答：「CORS 是限制服务端之间调用的」——那是网关和服务治理的事，CORS 只作用于浏览器。"
+    },
+    {
+      "title": "XSS 和 CSRF 有什么区别？",
+      "description": "考的是能不能从攻击代码在哪、危害面、防御手段三个维度把两者拆开。",
+      "answer": [
+        "XSS 是把代码注入进目标站点，攻击代码在受害者浏览器里以目标站点的源执行；CSRF 的攻击代码在第三方站点，只是借了受害者的登录凭证",
+        "危害不同：XSS 能读页面数据、偷 token、代替用户发任意请求；CSRF 通常只能做受害者本来就有权限做的操作，比如确认转账、改密码",
+        "触发条件不同：XSS 需要有注入点（内容渲染、URL 参数进 DOM）；CSRF 需要受害者已登录，且请求会自动带 Cookie",
+        "防御手段不同：XSS 靠输出编码、避开危险 DOM API、CSP；CSRF 靠 token、SameSite、Origin/Referer 校验",
+        "两者会互相加成：XSS 能读走 CSRF token，也能直接以受害者身份发同源请求，等于绕过全部 CSRF 防护，所以 XSS 是更根本的问题",
+        "修复位置也不同：XSS 通常在前端渲染逻辑里修，后端补编码和安全响应头；CSRF 通常在后端中间件里统一校验"
+      ],
+      "notes": "常见追问：有了 CSRF 防护还要防 XSS 吗？——要，XSS 能绕过 CSRF 防护。常见追问：CSRF 能演变成 XSS 吗？——单靠 CSRF 不能，它没法往页面注入内容。常见错误回答：「CSRF 危害更大因为能直接转账」——转账类操作一般还有二次确认和业务风控，而 XSS 的持久化影响面更广。"
+    },
+    {
+      "title": "SQL 注入怎么防？",
+      "description": "考的是知不知道参数化才是根本防线，以及哪些位置参数化管不了。",
+      "answer": [
+        "SQL 注入是把用户输入拼进 SQL 字符串，输入里的引号和关键字改变了 SQL 语义，攻击者就能读表、拖库，权限够大时还能执行系统命令",
+        "最有效的手段是参数化查询（预编译）：把 SQL 结构和数据分开传，由驱动负责转义，数据里的引号永远只是普通字符",
+        "用 ORM 时默认是参数化的，但要警惕 raw SQL 和字符串拼接的动态部分，比如把排序字段、列名直接拼进 ORDER BY",
+        "表名、列名、排序方向这些不能参数化的位置，用白名单映射：把外部传的 name 映射成固定列名，非法值直接拒绝",
+        "再叠加输入校验（类型、长度、格式、业务范围）和最小权限：应用账号只给必要的 SELECT/INSERT/UPDATE，不给 DROP、GRANT、FILE",
+        "别把数据库原始报错回显给用户，它会暴露表结构也方便盲注；WAF 只能当补充层，替代不了参数化"
+      ],
+      "notes": "常见追问：手写转义够不够？——不够，不同数据库和字符集的转义规则有差异，历史上多次被宽字节、GBK 编码绕过。常见追问：LIKE 里的 % 怎么办？——参数化管不了 LIKE 的通配符，得自己转义 % 和 _。常见错误回答：「过滤掉 select、drop 这些关键字就安全」——大小写混写、注释符、内联编码都能绕过。"
+    },
+    {
+      "title": "HTTPS 解决了什么，没解决什么？",
+      "description": "考的是能不能说清 HTTPS 的保护边界：只保护链路，不保护端点。",
+      "answer": [
+        "HTTPS 就是 HTTP 跑在 TLS 之上，解决三件事：传输机密性（旁人看不到内容）、完整性（内容被改能发现）、身份认证（证书证明对方确实是这个域名）",
+        "它防的是链路上被动嗅探和主动中间人：公共 WiFi 上抓包、改包、伪造站点这些都失效了",
+        "没解决端点安全：服务器被入侵、SQL 注入、XSS 一个都不会因为上了 HTTPS 而消失，HTTPS 只保护路上，不管屋里",
+        "也没解决身份本身的问题：弱口令、钓鱼、撞库、越权都照旧，它不管你的密码够不够强",
+        "TLS 配置不当等于没上：启用 TLS 1.3，关掉 SSLv3/1.0/1.1 和弱密码套件，开 HSTS（含 preload），否则仍有降级和弱套件攻击",
+        "HTTPS 页面里加载 HTTP 资源属于混合内容，会被降级或拦截，攻击者能替换这些资源注入脚本；第三方脚本要用 SRI 校验完整性"
+      ],
+      "notes": "常见追问：用了 HTTPS 还要防 XSS 吗？——要，两者防护的是完全不同的面。常见追问：HTTPS 对性能影响多大？——TLS 1.3 有会话复用和 0-RTT，开销比想象中小。常见错误回答：「上了 HTTPS 就安全了」——服务器日志、第三方 SDK、内网调用这些环节照样会泄露明文。"
+    },
+    {
+      "title": "TLS 握手的过程是怎样的？证书校验是怎么防中间人攻击的？",
+      "description": "考的是握手的五个步骤能不能串起来，以及说清防中间人靠的是信任链校验。",
+      "answer": [
+        "第一步客户端发 ClientHello：带上支持的 TLS 版本、密码套件、随机数，以及 SNI（域名）、ALPN（HTTP/2、HTTP/3）等扩展",
+        "第二步服务端回 ServerHello：选定版本和套件、给出自己的随机数，并发送证书（通常带中间证书链）；需要校验客户端证书时还会要求客户端出证书",
+        "第三步客户端校验证书：证书必须由自己信任的根 CA 签发、签名验得通、没过期、域名（SAN）与访问的域名一致、用途正确、没被吊销，任何一项不过就断连报错",
+        "第四步协商密钥：TLS 1.3 用 (EC)DHE 交换会话密钥，私钥不出服务器，因此提供前向保密——事后拿到服务器私钥也解不开以前的流量",
+        "第五步交换 Finished 消息：摘要覆盖整个握手记录，任何一步被篡改都会在这里暴露，然后才进入用 AEAD（AES-GCM、ChaCha20-Poly1305）加密的应用数据阶段",
+        "防中间人攻击就靠第三步：攻击者自签的证书链在客户端无法验证到受信任的根 CA，握手直接失败；再叠 HSTS 防降级、CAA 限制哪些 CA 能给你的域名签发、CT 日志监控签发记录"
+      ],
+      "notes": "常见追问：客户端一定要验证主机名吗？——要，只验链不验域名等于没验，Go 的 tls.Config.ServerName 或 http.Transport 会自动带上。常见追问：为什么不用 RSA 密钥传输了？——TLS 1.3 删掉了这种不提供前向保密的方式，只保留 (EC)DHE 和 AEAD 套件。常见错误回答：「测试环境跳过证书校验没关系」——InsecureSkipVerify 一旦带到线上，中间人随时能进来。"
+    },
+    {
+      "title": "Session 和 Token（JWT）有什么区别？各自优缺点是什么？",
+      "description": "考的是能不能从状态存放位置出发，讲清两种方案的取舍。",
+      "answer": [
+        "Session 是服务端存状态：浏览器只拿一个 session id（放 Cookie），每次请求服务端按 id 查存储还原登录信息；JWT 是自包含令牌，把声明签进 token 里，服务端只验签不查库",
+        "Session 的优点：状态在服务端，能随时失效、改权限、踢下线、做单点登录，也能存大对象；缺点：服务端要存，横向扩容得共享存储（Redis）或做粘性会话，每次请求多一次存储查询",
+        "JWT 的优点：服务端无状态，天然水平扩展，多个服务之间互认，微服务、移动端、第三方接入都方便；缺点：难以撤销、体积大（每次请求都带头）、payload 只是编码不是加密",
+        "常见折中是短期访问令牌（十几分钟）加长期刷新令牌，刷新令牌单独存服务端以便撤销",
+        "JWT 结构是 header.payload.signature 三段 base64url，签名盖住前两段；HMAC 用共享密钥验，RS256/ES256 用私钥签、公钥验",
+        "选型看场景：单系统强管控用 Session，多服务和开放 API 用 Token；无论哪种，认证（你是谁）和授权（你能不能做这件事）都要分开做"
+      ],
+      "notes": "常见追问：JWT 里能存密码吗？——不能，payload 任何人可解码，敏感信息一律放服务端。常见追问：JWT 怎么做可撤销？——黑名单、版本号，或者短有效期加刷新令牌。常见错误回答：「JWT 无状态所以比 Session 快」——省掉了查库，但验签之外还要查黑名单或刷新令牌，未必更简单。"
+    },
+    {
+      "title": "JWT 有哪些缺点？",
+      "description": "考的是知不知道 JWT 的代价在撤销和算法上，而不只是「无状态所以好」。",
+      "answer": [
+        "难以撤销：token 在过期前一直有效，签发之后服务端基本管不住，除非引入黑名单或版本号，服务端又要存状态，无状态的优势被抵消掉",
+        "Payload 不是加密：只是 base64url 编码，任何人拿 token 都能解出内容，所以别放密码、身份证号、密钥这类敏感信息",
+        "算法混淆攻击：服务端若不固定允许的算法，攻击者可能把 alg 改成 HS256 并拿公钥当 HMAC 密钥伪造签名，或者直接用 alg=none；必须服务端白名单指定算法并拒绝 none",
+        "体积大：每次请求都带着整个 token，放在 Cookie 里还会和浏览器约 4KB 的 Cookie 上限冲突",
+        "密钥管理难：轮换密钥要靠 kid 头支持多把密钥并存，旧 token 在有效期内还得能被旧公钥验过",
+        "登出和改密码体验差：用户点了退出，服务端要么等 token 自然过期，要么把黑名单逻辑做进来"
+      ],
+      "notes": "常见追问：怎么防算法混淆？——服务端固定算法列表，用库提供的白名单校验，别自己解析 header 就信它。常见追问：JWT 能加密吗？——可以，用 JWE，但那样服务端必须解密，失去只验签不碰业务的好处。常见错误回答：「JWT 无状态所以不用考虑撤销」——泄露的 token 在过期前一直是有效凭证。"
+    },
+    {
+      "title": "点击劫持是什么？X-Frame-Options 和 CSP frame-ancestors 怎么用？",
+      "description": "考的是知不知道点击劫持是诱导点击而不是注入代码，以及两种响应头的取舍。",
+      "answer": [
+        "点击劫持（Clickjacking）是攻击者把目标页面嵌进自己的 iframe，再用透明遮罩诱导用户点击，实际点到的是目标页面里的按钮，比如确认转账",
+        "X-Frame-Options 是老方案：DENY 完全禁止被嵌套，SAMEORIGIN 只允许同源嵌套；ALLOW-FROM 因为语法缺陷已被主流浏览器弃用",
+        "现代做法用 CSP 的 frame-ancestors：frame-ancestors 'none' 禁止任何来源嵌套，frame-ancestors 'self' 只允许同源",
+        "两者同时下发更保险：frame-ancestors 优先，老浏览器回落到 X-Frame-Options",
+        "JS 层的 frame-busting（检测到自己在 iframe 里就跳出）不可靠、容易被绕过，只能当补充；服务端对敏感操作校验 Origin 头更靠谱",
+        "根本上还要防嵌套页面里的诱导操作：敏感操作加二次确认、要求重新输密码或验证码，不能只依赖「页面不被嵌套」这一条"
+      ],
+      "notes": "常见追问：为什么不能只靠 X-Frame-Options？——它只覆盖 frame 和 iframe，ALLOW-FROM 已废弃，标准解法是 frame-ancestors。常见追问：iframe 里的表单提交算不算点击劫持？——算，父页面可以用样式覆盖诱导点击。常见错误回答：「禁止被嵌套就没有点击劫持」——同源 iframe 或用户手动开新窗口仍可能中招。"
+    },
+    {
+      "title": "路径遍历是什么？怎么防？",
+      "description": "考的是知不知道 ../ 只是表象，真正的防线是基目录约束和白名单映射。",
+      "answer": [
+        "路径遍历（Path Traversal）是攻击者把 ../、%2e%2e%2f、绝对路径塞进下载或预览接口的参数，骗服务器去读基目录之外的文件，比如 .env、配置密钥、/etc/passwd",
+        "根因是把用户输入直接拼进文件路径；路径规范化（Clean）能消掉 ../，但前提是别先做别的拼接",
+        "标准做法是拼好路径后做 Clean，再校验结果仍在允许的基目录内（比较前缀），越界就拒绝；Go 里是 filepath.Join 加 filepath.Clean 加前缀检查",
+        "更稳的做法是白名单映射：数据库存相对基目录的路径或固定 id，代码只按 id 查文件名，永远不用用户输入当文件名",
+        "Go 1.24 起可以用 os.OpenRoot 拿到受约束的目录句柄，越界路径和指向外部的符号链接会直接报错，比手写前缀检查更可靠",
+        "配套措施：Web 服务账号权限最小化（读不到密钥文件）、不返回原始系统错误信息、上传目录禁止执行、下载走独立文件服务"
+      ],
+      "notes": "常见追问：为什么要注意 URL 编码的 %2e%2e？——要先解码再判断，只解码一次或解码顺序错都能绕过。常见追问：符号链接怎么处理？——.. 被挡住了，但目录内的软链可能指向外部，需要限制跟随或用 os.Root。常见错误回答：「把路径里的 .. 删掉就行」——删不掉编码变体，也漏掉软链逃逸。"
+    },
+    {
+      "title": "常见的 Web 攻击面有哪些？为什么敏感信息不能放在前端？",
+      "description": "考的是能不能给出一张成体系的清单，而不是零散地背几个漏洞名。",
+      "answer": [
+        "注入类：SQL/NoSQL 注入、命令注入、模板注入（SSTI）、XSS，共同点是外部输入被当成代码或指令执行",
+        "认证与会话类：弱口令与撞库、密码明文或可逆存储、会话固定、JWT 伪造、越权（水平越权改别人的数据、垂直越权调用管理员接口）",
+        "请求伪造类：CSRF、SSRF（常用来打内网和云元数据接口）、开放重定向",
+        "文件类：路径遍历、任意文件上传（上传 webshell）、任意文件读取下载、压缩包解压的 zip slip",
+        "配置与业务类：目录列表、调试模式、.git/.env/备份文件/source map 泄漏、CORS 配成 *、Cookie 缺安全属性、盲信 X-Forwarded-For、竞态超发、前端可改的支付金额、依赖已知 CVE、第三方脚本没做 SRI 校验",
+        "敏感信息绝不能放前端：JS 包、source map、localStorage 全在用户机器上，所谓「藏起来」只是障眼法，打开 DevTools 就能拿走；密钥和密码只能待在服务端，前端只拿范围受限、短时效的令牌，构建时也要扫描产物防止 .env 被打进包里"
+      ],
+      "notes": "常见追问：怎么系统地排查？——按攻击面做一轮安全评审加依赖漏洞扫描（CVE），再补上 SAST/DAST。常见追问：前端藏个密钥算安全吗？——不算，构建产物人人可解，NEXT_PUBLIC_ 这类公开前缀会直接打进包里。常见错误回答：「上了 WAF 就覆盖了这些攻击面」——WAF 挡的是已知特征，业务逻辑漏洞和越权它挡不住。"
+    }
+  ]
+}
