@@ -16,6 +16,9 @@ type Entry struct {
 	Notes       string `json:"notes"`
 	// Answer 是问答类条目的答案要点。代码片段类条目不用这个字段。
 	Answer []string `json:"answer"`
+	// ExpectError 为 true 表示这段代码是故意编译不过的，教学点就是那个报错。
+	// 页面上要标出来，否则用户会以为内容写错了。
+	ExpectError bool `json:"expect_error"`
 }
 
 type Group struct {

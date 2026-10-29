@@ -2,11 +2,16 @@
 """校验 content/ 下的所有内容文件。
 
 对每个分组文件：
-  - 校验 JSON 合法、字段齐全
+  - 校验 JSON 合法、字段齐全、没有未知字段
   - 把每条代码片段包成可编译单元，交给 Go 编译器
   - 标了 "expect_error": true 的条目必须编译失败（这类条目的教学点就是编译报错）
   - 完整程序（以 package main 开头）额外跑一遍
   - 检查 gofmt 规范
+  - 代码片段型分组的「组合示例」必须存在且是最后一条
+  - 每条条目必须有 description
+  - 问答型条目：answer 3–6 点，标题是问句
+  - expect_error 条目的 notes 要写清报错（否则用户不知道这段代码为什么编译不过）
+  - 跨文件检查重复标题
 
 用法：
   python3 scripts/verify_content.py            # 校验全部类别
@@ -28,6 +33,19 @@ CONTENT_DIR = os.path.join(ROOT, "content")
 REQUIRED_ENTRY_FIELDS = ("title",)
 REQUIRED_GROUP_FIELDS = ("id", "title", "entries")
 
+# 允许出现的字段。写错字段名（比如 expect_err）会静默丢失，所以必须显式校验。
+ALLOWED_GROUP_FIELDS = ("id", "title", "entries")
+ALLOWED_ENTRY_FIELDS = (
+    "title", "description", "code", "lang", "notes", "answer", "expect_error",
+)
+
+# 问答型条目的答案要点数量范围。
+ANSWER_MIN, ANSWER_MAX = 3, 6
+
+# 代码片段（非组合示例）的建议行数上限。Gin 需要完整服务骨架，放宽到 30 行；
+# 组合示例是完整小程序，不受这个限制。
+SNIPPET_MAX_LINES = {"gin": 30, "default": 10}
+
 # 顶层 func 声明。函数体内不允许嵌套 func（方法和具名函数都不行），
 # 所以含它们的片段要放到包级。type 声明在函数体内是合法的，不受影响。
 TOP_LEVEL_FUNC = re.compile(r"^func\s", re.M)
@@ -36,12 +54,17 @@ HAS_MAIN = re.compile(r"^func main\(", re.M)
 # 片段里可能用到的标准库包：包名 → 导入路径。
 # 只在代码里真的出现 `pkg.` 时才加进 import，否则会报 unused import。
 STDLIB = {
+    "atomic": "sync/atomic",
     "bufio": "bufio",
     "bytes": "bytes",
     "cmp": "cmp",
     "context": "context",
+    "csv": "encoding/csv",
+    "embed": "embed",
     "errors": "errors",
     "fmt": "fmt",
+    "http": "net/http",
+    "httptest": "net/http/httptest",
     "io": "io",
     "json": "encoding/json",
     "log": "log",
@@ -52,13 +75,19 @@ STDLIB = {
     "filepath": "path/filepath",
     "reflect": "reflect",
     "regexp": "regexp",
+    "sha256": "crypto/sha256",
     "slices": "slices",
+    "slog": "log/slog",
     "sort": "sort",
+    "sql": "database/sql",
     "strconv": "strconv",
     "strings": "strings",
     "sync": "sync",
+    "testing": "testing",
     "time": "time",
+    "tls": "crypto/tls",
     "unicode": "unicode",
+    "url": "net/url",
 }
 
 COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
@@ -205,21 +234,69 @@ def check_entry(entry, tmp):
     return True, "编译通过" + ("，运行通过" if is_program else ""), extra
 
 
-def check_group_file(path, tmp):
+def check_entry_shape(entry, category):
+    """只检查字段和文字规范（不编译），返回 (problems, warnings)。"""
+    problems, warnings = [], []
+    name = entry.get("title", "?")
+    title = str(entry.get("title", ""))
+
+    unknown = [f for f in entry if f not in ALLOWED_ENTRY_FIELDS]
+    if unknown:
+        problems.append((name, False, "未知字段 %s" % ", ".join(unknown), ""))
+
+    if not entry.get("description"):
+        problems.append((name, False, "缺少 description", ""))
+
+    # 问答型条目
+    if entry.get("answer"):
+        n = len(entry["answer"])
+        if not ANSWER_MIN <= n <= ANSWER_MAX:
+            problems.append(
+                (name, False,
+                 "answer 有 %d 点，应为 %d–%d 点" % (n, ANSWER_MIN, ANSWER_MAX), ""))
+        if not title.rstrip().endswith(("？", "?")):
+            problems.append((name, False, "问答条目的标题要写成问句（以？结尾）", ""))
+
+    # 故意编译不过的条目，notes 里必须解释报错，否则用户不知道这是有意的
+    if entry.get("expect_error"):
+        notes = entry.get("notes", "")
+        if not any(k in notes for k in ("报错", "编译不过", "panic")):
+            problems.append(
+                (name, False,
+                 "expect_error 条目的 notes 要写清报错内容/原因", ""))
+
+    # 片段长度只是建议，不判失败。问答型条目的代码是完整示例，不限制。
+    code = entry.get("code")
+    if code and not entry.get("answer") and "组合示例" not in title:
+        limit = SNIPPET_MAX_LINES.get(category, SNIPPET_MAX_LINES["default"])
+        lines = [line for line in code.splitlines() if line.strip()]
+        if len(lines) > limit:
+            warnings.append(
+                (name, "代码 %d 行，超过建议的 %d 行" % (len(lines), limit)))
+
+    return problems, warnings
+
+
+def check_group_file(path, tmp, category):
+    """返回 (problems, warnings)。problems 里的 ok 字段决定是否算失败。"""
     with open(path, encoding="utf-8") as f:
         raw = f.read()
 
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        return [("文件", False, "JSON 解析失败: %s" % e, "")]
+        return [("文件", False, "JSON 解析失败: %s" % e, "")], []
 
-    problems = []
+    problems, warnings = [], []
     for field in REQUIRED_GROUP_FIELDS:
         if field not in data:
             problems.append(("字段", False, "分组缺少字段 %s" % field, ""))
     if problems:
-        return problems
+        return problems, warnings
+
+    for field in data:
+        if field not in ALLOWED_GROUP_FIELDS:
+            problems.append(("字段", False, "分组有未知字段 %s" % field, ""))
 
     expected_id = os.path.splitext(os.path.basename(path))[0]
     problems.append(
@@ -231,10 +308,20 @@ def check_group_file(path, tmp):
     if not entries:
         problems.append(("条目", False, "分组没有任何条目", ""))
 
-    # 代码片段型分组末尾要有「组合示例」；问答型分组（用 answer 而不是 code）不要
-    is_qa = any(e.get("answer") and not e.get("code") for e in entries)
-    if not is_qa and not any("组合示例" in e.get("title", "") for e in entries):
-        problems.append(("组合示例", False, "末尾缺少「组合示例」条目", ""))
+    # 代码片段型分组末尾要有「组合示例」，而且必须是最后一条；
+    # 问答型分组（有 answer 的条目）不要组合示例。
+    is_qa_group = any(e.get("answer") for e in entries)
+    combo = [i for i, e in enumerate(entries) if "组合示例" in str(e.get("title", ""))]
+    if not is_qa_group:
+        if not combo:
+            problems.append(("组合示例", False, "末尾缺少「组合示例」条目", ""))
+        elif combo != [len(entries) - 1]:
+            problems.append(
+                ("组合示例", False,
+                 "「组合示例」必须是最后一条（当前 %s，共 %d 条）"
+                 % ("、".join("第 %d 条" % (i + 1) for i in combo), len(entries)), ""))
+    elif combo:
+        problems.append(("组合示例", False, "问答型分组不应有「组合示例」条目", ""))
 
     for i, entry in enumerate(entries, 1):
         name = entry.get("title", "第 %d 条" % i)
@@ -242,6 +329,10 @@ def check_group_file(path, tmp):
         if missing:
             problems.append((name, False, "缺少字段 %s" % ", ".join(missing), ""))
             continue
+
+        shape_problems, shape_warnings = check_entry_shape(entry, category)
+        problems.extend(shape_problems)
+        warnings.extend(shape_warnings)
 
         has_code = bool(entry.get("code"))
         has_answer = bool(entry.get("answer"))
@@ -258,7 +349,7 @@ def check_group_file(path, tmp):
         else:
             problems.append((name, True, "问答条目", ""))
 
-    return problems
+    return problems, warnings
 
 
 def main():
@@ -281,6 +372,8 @@ def main():
 
     total_ok = 0
     total_bad = 0
+    total_warn = 0
+    titles = {}          # 标题 → ["类别/文件 第 N 条", ...]，用来查重
 
     for category in categories:
         cat_dir = os.path.join(CONTENT_DIR, category)
@@ -293,7 +386,7 @@ def main():
 
         for filename in files:
             path = os.path.join(cat_dir, filename)
-            problems = check_group_file(path, TMP)
+            problems, warnings = check_group_file(path, TMP, category)
             group_bad = [p for p in problems if not p[1]]
             group_ok = [p for p in problems if p[1]]
 
@@ -309,11 +402,37 @@ def main():
                         print("           %s" % extra)
             total_ok += len(group_ok)
 
+            for name, msg in warnings:
+                total_warn += 1
+                print("         ! %s: %s" % (name, msg))
+
+            # 收集标题用于跨文件查重；组合示例的标题本来就重复，跳过
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                continue
+            for i, entry in enumerate(data.get("entries", []), 1):
+                title = str(entry.get("title", "")).strip()
+                if not title or "组合示例" in title:
+                    continue
+                titles.setdefault(title, []).append(
+                    "%s/%s 第 %d 条" % (category, filename, i))
+
         print()
 
     shutil.rmtree(TMP)
 
-    print("通过 %d 项，失败 %d 项" % (total_ok, total_bad))
+    dup = {t: where for t, where in titles.items() if len(where) > 1}
+    if dup:
+        print("=== 重复标题（%d 组）===" % len(dup))
+        for title, where in sorted(dup.items()):
+            print("  ✗ %s" % title)
+            print("      出现位置：%s" % "；".join(where))
+            total_bad += 1
+        print()
+
+    print("通过 %d 项，失败 %d 项，警告 %d 项" % (total_ok, total_bad, total_warn))
     sys.exit(1 if total_bad else 0)
 
 

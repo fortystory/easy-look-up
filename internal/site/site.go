@@ -33,6 +33,7 @@ type entryView struct {
 	RawCode     string
 	Notes       string
 	Answer      []string
+	ExpectError bool
 	SearchText  string
 }
 
@@ -160,6 +161,7 @@ func toView(category content.Category) (detailView, error) {
 				RawCode:     entry.Code,
 				Notes:       entry.Notes,
 				Answer:      entry.Answer,
+				ExpectError: entry.ExpectError,
 				SearchText:  strings.Join(search, " "),
 			})
 		}

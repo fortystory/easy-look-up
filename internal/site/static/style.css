@@ -19,6 +19,9 @@
 	--note-fg: #7d4e00;
 	--note-bg: #fff8c5;
 	--note-border: #d4a72c;
+	--warn-fg: #8b1d1d;
+	--warn-bg: #ffebe9;
+	--warn-border: #cf222e;
 	--shadow: 0 1px 3px rgba(31, 35, 40, 0.12);
 	--radius: 8px;
 	--mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -40,6 +43,9 @@
 	--note-fg: #e3b341;
 	--note-bg: #2b2410;
 	--note-border: #9e6a03;
+	--warn-fg: #ffa198;
+	--warn-bg: #3d1418;
+	--warn-border: #f85149;
 	--shadow: 0 1px 3px rgba(1, 4, 9, 0.5);
 }
 
@@ -298,6 +304,17 @@ main > h1 {
 	color: var(--note-fg);
 	background: var(--note-bg);
 	border-left: 3px solid var(--note-border);
+	border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* 故意编译不过的条目，提醒用户这不是内容写错了 */
+.expect-error {
+	padding: 0.5rem 0.8rem;
+	margin: 0 0 0.6rem;
+	font-size: 0.85rem;
+	color: var(--warn-fg);
+	background: var(--warn-bg);
+	border-left: 3px solid var(--warn-border);
 	border-radius: 0 var(--radius) var(--radius) 0;
 }
 

@@ -151,3 +151,23 @@ func TestLoadSkipsNonJSON(t *testing.T) {
 		t.Errorf("分组标题 = %q, 期望 %q", c.Groups[0].Title, "真分组")
 	}
 }
+
+// expect_error 字段要解析出来，页面才能标出「这段代码故意编译不过」。
+func TestLoadExpectError(t *testing.T) {
+	fsys := fstest.MapFS{
+		"go/e.json": &fstest.MapFile{Data: []byte(`{"id": "e", "title": "E", "entries": [
+			{"title": "故意编译不过", "description": "D", "code": "x := 1", "lang": "go", "expect_error": true},
+			{"title": "普通条目", "description": "D", "code": "y := 2", "lang": "go"}
+		]}`)},
+	}
+	c, err := content.Load(fsys, "go")
+	if err != nil {
+		t.Fatalf("Load 返回错误: %v", err)
+	}
+	if !c.Groups[0].Entries[0].ExpectError {
+		t.Error("expect_error: true 没有解析成 ExpectError=true")
+	}
+	if c.Groups[0].Entries[1].ExpectError {
+		t.Error("普通条目不该被标成 expect_error")
+	}
+}

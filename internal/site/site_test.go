@@ -3,6 +3,7 @@ package site_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -271,5 +272,76 @@ func TestDetailPageQaEntry(t *testing.T) {
 	}
 	if strings.Contains(body, "<pre") {
 		t.Error("没有代码的条目不该渲染出代码块")
+	}
+}
+
+// 故意编译不过的条目要在页面上标出来，否则用户会以为内容写错了。
+func TestDetailPageExpectErrorBadge(t *testing.T) {
+	fsys := fstest.MapFS{
+		"go/e.json": &fstest.MapFile{Data: []byte(`{
+			"id": "e",
+			"title": "错误演示",
+			"entries": [
+				{
+					"title": "未使用的变量",
+					"description": "演示编译报错",
+					"code": "x := 1",
+					"lang": "go",
+					"notes": "报错：declared and not used: x",
+					"expect_error": true
+				}
+			]
+		}`)},
+	}
+	h := newRouter(t, fsys)
+	body := get(t, h, "/go").Body.String()
+
+	if !strings.Contains(body, `class="expect-error"`) {
+		t.Error("故意编译不过的条目没有 expect-error 标记")
+	}
+	if !strings.Contains(body, "故意编译不过") {
+		t.Error("标记文案缺失")
+	}
+}
+
+// 标记颜色要走 CSS 变量，暗色主题才能接管。
+func TestStyleSheetHasExpectErrorBadge(t *testing.T) {
+	h := newRouter(t, fakeFS())
+	body := get(t, h, "/static/style.css").Body.String()
+
+	for _, want := range []string{".expect-error", "--warn-bg", "--warn-fg"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("样式表里没有 %q", want)
+		}
+	}
+}
+
+// 真实内容也要能全部渲染出来：新增分组、新条目不能把模板或高亮搞崩。
+func TestAllRealCategoriesRender(t *testing.T) {
+	r, err := site.New(os.DirFS("../../content"))
+	if err != nil {
+		t.Fatalf("加载真实内容失败: %v", err)
+	}
+
+	categories := []string{
+		"go", "stdlib", "gin",
+		"interview-go", "interview-concurrency", "interview-gin",
+		"interview-mysql", "interview-redis", "interview-web", "interview-network",
+	}
+	for _, id := range categories {
+		t.Run(id, func(t *testing.T) {
+			w := get(t, r, "/"+id)
+			if w.Code != http.StatusOK {
+				t.Fatalf("状态码 = %d, 期望 %d", w.Code, http.StatusOK)
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, "<main>") || !strings.Contains(body, `class="entry"`) {
+				t.Error("页面里没有渲染出条目")
+			}
+			// go 类别里有 expect_error 条目，页面上必须能看到标记
+			if id == "go" && !strings.Contains(body, `class="expect-error"`) {
+				t.Error("故意编译不过的条目没有渲染出标记")
+			}
+		})
 	}
 }

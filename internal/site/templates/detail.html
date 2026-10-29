@@ -52,6 +52,7 @@
 					</ul>
 					{{end}}
 					{{if .Notes}}<aside class="notes">{{.Notes}}</aside>{{end}}
+					{{if .ExpectError}}<p class="expect-error">这段代码是故意编译不过的，教学点就是下面这个报错。</p>{{end}}
 					{{if .Code}}
 					<div class="code">
 						<button class="copy-btn" type="button" data-code="{{.RawCode}}">复制</button>
