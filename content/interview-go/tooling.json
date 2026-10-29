@@ -1,0 +1,204 @@
+{
+  "id": "tooling",
+  "title": "Go 工具链与工程实践",
+  "entries": [
+    {
+      "title": "go.mod 里的 module 路径和 go 指令分别是什么意思？",
+      "answer": [
+        "module 指令声明模块路径，它是这个模块的唯一标识，也是别的模块 import 你的包时用的路径前缀",
+        "module 路径通常就是仓库地址，比如 module github.com/fortystory/easy-look-up；主版本号大于 1 时路径要带版本后缀，比如 /v2",
+        "go 指令声明这个模块用的 Go 语言版本，它既划定了工具链下限，也决定语言语义（比如 go 1.22 及以上，for 循环变量每轮迭代都是新变量）",
+        "Go 1.21 起 go 行是硬约束：依赖要求更高的 go 版本时，go build 直接报错，提示你升级 go.mod 或加 toolchain 指令",
+        "Go 1.21 之前 go 行只是建议性的，工具链不会因为它拦住你",
+        "go.mod 里还有 require（依赖清单）、replace（替换）、exclude（排除）、toolchain（工具链版本）等指令"
+      ],
+      "code": "// module github.com/fortystory/easy-look-up   模块路径：别的模块 import 你时用的前缀\n// go 1.27                                     语言版本下限：决定能用哪些语法和标准库符号\n// require github.com/gin-gonic/gin v1.12.0     直接依赖",
+      "lang": "go",
+      "notes": "常见追问：module 路径能随便改吗？（能改，但改了等于换了个新模块，别人 import 旧路径会拉不到；主版本升级必须改路径加 /v2 后缀。）go 行限制的到底是什么？—— 限制能用的语言特性和标准库符号，比如泛型要 go 1.18。常见错误：以为 go 行只是给人看的注释，Go 1.21 起它会真的挡住构建。"
+    },
+    {
+      "title": "go.sum 是干什么用的？",
+      "answer": [
+        "go.sum 记录每个依赖模块的哈希值，一行一条：模块路径+版本的内容哈希，以及该版本 go.mod 的哈希",
+        "核心作用是校验：go 命令下载依赖后比对哈希，内容被篡改或版本对不上就报错拒绝使用",
+        "配合 go.mod，它让构建可复现：同一个仓库在别的机器上解析出的依赖内容完全一致",
+        "go.sum 由 go 命令自动维护，别手改；go mod tidy 会增删条目，go mod verify 校验本地模块缓存里的内容是否完整",
+        "go.sum 不是锁文件：它不记录「选了哪个版本」，版本选择结果在 go.mod 的 require 里",
+        "私有仓库可以用 GOPRIVATE 匹配路径跳过代理和公共校验库，也可以用 GOSUMDB=off 整体关掉校验库"
+      ],
+      "notes": "常见追问：go.sum 写错了怎么办？—— 删掉重新 go mod tidy 生成。为什么说它不是 lockfile？—— 锁文件记录版本选择结果，go.sum 只记哈希，版本在 go.mod。私有模块能不能进 go.sum？—— 能，只是校验时不查公共校验库。常见错误：以为把 go.sum 删了就能升级依赖版本——版本由 go.mod 决定。"
+    },
+    {
+      "title": "依赖版本是怎么选定的？为什么我的项目用上了我没直接依赖的版本？",
+      "answer": [
+        "Go 用最小版本选择（MVS）：取所有依赖要求里的最高版本作为该模块的版本",
+        "MVS 不只看你直接依赖：选中版本的 go.mod 里对其它模块的要求也会被读进来，迭代计算，直到不再出现更高版本",
+        "所以最终结果是「能满足全部要求的最低版本集合」，不是你写的那个版本——某个依赖要求了更高的传递依赖时，你会跟着被升级",
+        "Go 1.17 起 module graph pruning 让 go.mod 直接列出全部传递依赖（标 // indirect），版本关系一眼可见",
+        "go get -u ./... 把依赖升级到最新的次版本或补丁版本，跨主版本要显式写 go get example.com/mod/v2；go mod tidy 只清理 go.mod，不负责升级",
+        "想强行钉住某个版本用 replace 指令，但 replace 只对当前模块生效，go install pkg@version 不吃它"
+      ],
+      "code": "// go get -u ./...                       升级依赖到最新的次版本/补丁版本\n// go get example.com/mod/v2             跨主版本升级要显式写新路径\n// go mod tidy                           清理 go.mod：删没用的、补漏的，不升级\n// go mod edit -replace=old=new@v1.2.3    用 replace 强行改版本",
+      "lang": "go",
+      "notes": "常见追问：MVS 和 npm 的语义差别？—— npm 尽量用你写的版本、冲突时报错，Go 直接选高的并把它写进 go.mod 让你看见。go.mod 里的 // indirect 是什么意思？—— 间接依赖，代码里没直接 import，但别的依赖需要它。replace 能用来降级吗？—— 能，但别提交到线上，构建就不可复现了。"
+    },
+    {
+      "title": "go build、go run、go install 有什么区别？",
+      "answer": [
+        "go build 编译包：指定单个 main 包时把可执行文件写到当前目录，给多个包（./...）时只做编译检查，不留产物",
+        "go run 编译并立刻运行一个 main 包，用的是临时二进制，跑完就删；参数写在包路径后面，比如 go run . -flag",
+        "go install 有两种用法：go install ./cmd/foo 编译当前模块内的命令并装到 $GOBIN；go install pkg@version 装的是与当前模块无关的独立工具",
+        "go install pkg@version 不读也不改当前 go.mod/go.sum，它自己解析模块，所以你 go.mod 里的 replace 对它无效",
+        "产物装到 $GOBIN（默认 $GOPATH/bin），这个目录必须加进 PATH 才能直接敲命令名",
+        "go build -o 指定输出路径和文件名；go run 每次都会重新链接，别拿它当构建步骤"
+      ],
+      "code": "// go build ./...            编译所有包，只做编译检查，不留产物\n// go build -o app .        编译当前目录的 main 包，产物写到 app\n// go run . -flag           编译并直接运行，用临时二进制，跑完即删\n// go install ./cmd/x       编译并把命令装到 $GOBIN\n// go install pkg@version   装与当前模块无关的工具，不碰 go.mod",
+      "lang": "go",
+      "notes": "常见追问：go install 会污染 go.mod 吗？—— 带 @version 的不会，不带 @version 的装本模块命令也不改 go.mod。go build 的二进制去哪了？—— 指定单个 main 包时写在当前目录。为什么 CI 里用 go build 而不是 go install？—— go build 不需要写 PATH 也不需要安装权限。常见错误：以为 go run 会缓存产物。"
+    },
+    {
+      "title": "怎么交叉编译？GOOS 和 GOARCH 是什么？",
+      "answer": [
+        "交叉编译就是设好目标平台的环境变量再编译：GOOS=windows GOARCH=amd64 go build -o app.exe ./cmd/app",
+        "GOOS 是操作系统，GOARCH 是架构（amd64、arm64、386 等），两个一起决定目标平台",
+        "go tool dist list 列出所有支持的目标组合，go env GOOS GOARCH 看当前默认值",
+        "这两个变量对 go build、go install、go test 都生效；跨平台跑测试要先 go test -c 交叉编译出测试二进制，再拿到目标机上执行",
+        "产物文件名不会自动带平台后缀，要自己用 -o 指定；这类事一般交给 Makefile 或 goreleaser 处理",
+        "开了 cgo 就需要对应平台的 C 交叉编译器；CGO_ENABLED=0 可以纯 Go 交叉编译，代价是 net 包改用纯 Go 的 DNS 解析器"
+      ],
+      "code": "// GOOS=windows GOARCH=amd64 go build -o app.exe ./cmd/app   交叉编译\n// go tool dist list                                          列出所有支持的目标\n// go env GOOS GOARCH                                         看当前默认值\n// CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/app    纯 Go 交叉编译",
+      "lang": "go",
+      "notes": "常见追问：交叉编译出来的程序能在本机跑吗？—— 不能，OS 和 CPU 架构都不同。常见错误：只设 GOARCH 不设 GOOS（默认还是当前系统）；以为产物会自动带上平台后缀。CGO_ENABLED=0 的代价是什么？—— 少了 cgo 特性，DNS 走纯 Go 实现，某些 C 库不能用了。"
+    },
+    {
+      "title": "build tag 怎么用？_test.go、_windows.go 这些文件名约定是怎么回事？",
+      "answer": [
+        "build tag 写在文件开头（package 子句之前）的注释里：//go:build linux && amd64，表达式支持 &&、||、!",
+        "Go 1.17 起用 //go:build 新语法，老的 // +build 仍兼容；gofmt 会帮你把两种写法同步好",
+        "文件名后缀本身就是隐式约束：_windows.go、_linux.go、_amd64.go 只在对应平台编译，后缀必须是文件名最后一段且是已知的 GOOS/GOARCH 名",
+        "_test.go 结尾的文件是测试文件，不进正式构建；_linux_test.go 既是测试文件，又只在 linux 编译",
+        "文件名隐含的约束和文件里的 build tag 是「与」关系，两个都满足这个文件才参与编译",
+        "自定义 tag 用 -tags 打开：go build -tags=integration ./...；常用 //go:build integration 把集成测试隔离出去"
+      ],
+      "code": "// pkg/\n// ├── user.go            所有平台都编译\n// ├── user_windows.go    只在 GOOS=windows 编译\n// ├── user_linux.go      只在 GOOS=linux 编译\n// ├── user_test.go       测试文件，不进正式产物\n// └── user_linux_test.go 既是测试文件，又只在 linux 编译",
+      "lang": "go",
+      "notes": "常见追问：//go:build 写在 package 子句之后会怎样？—— 不生效（约束只认文件头），go vet 的 buildtag 检查会报 misplaced。为什么有些项目里还留着 // +build？—— 兼容老版本 Go 工具链。常见错误：tag 名字写错导致文件静默不编译，人还以为是逻辑问题。"
+    },
+    {
+      "title": "const 和 iota 怎么用？什么是编译期常量？",
+      "answer": [
+        "const 声明的是编译期常量：值必须由常量表达式算出，不能是函数调用或任何运行期才知道的值",
+        "常量在编译期就定型，可以用做数组长度、case 分支的值、常量声明的初始值",
+        "const 块里可以省略重复上一行的表达式，比如 const ( a = 1; b; c ) 里 b 和 c 的值都是 1",
+        "iota 是常量块里的隐式常量，从 0 开始，每行 ConstSpec 递增 1；重复上一行表达式就能让它自动加一",
+        "经典写法是位掩码：const ( FlagA = 1 << iota; FlagB; FlagC ) 得到 1、2、4",
+        "常量没有地址、不可寻址；把常量赋给变量后，那个变量就是普通变量了"
+      ],
+      "code": "// iota 在常量块里从 0 开始，每行加一\nconst (\n\tKB = 1 << (10 * (iota + 1))\n\tMB\n\tGB\n)\n\nfunc main() {\n\tfmt.Println(KB, MB, GB)\n}",
+      "lang": "go",
+      "notes": "常见追问：iota 只能在 const 块里用吗？—— 是，只能出现在常量声明里。无类型常量是什么？—— const 默认不带类型，赋值时才取默认类型（数值默认 int），所以 const x = 1 能赋给 int64；写 const x int64 = 1 才是有类型常量。const 和 var 的差别？—— const 的值必须编译期可算出来，var 可以是运行期的值。"
+    },
+    {
+      "title": "编译期错误和运行期错误有什么区别？",
+      "answer": [
+        "编译期错误是编译器直接拒绝的：类型不匹配、用了没定义的标识符、参数个数不对、const 表达式非法、导入循环，编译不过就没有产物",
+        "运行期错误是编译通过、跑起来才暴露的：空指针解引用、数组越界、除零、类型断言失败",
+        "Go 把编译期能查的问题交给编译器，剩下的运行期失败再分成两路：可预期的失败用 error 返回值返回，不可预期的情况（程序写错了）才 panic",
+        "panic 没被 recover 兜住会让整个进程退出，所以 goroutine 里的 panic 一样会拖垮整个程序",
+        "静态检查卡在中间：代码能编译，但 go vet 会报出可疑写法，比如 printf 的格式串和参数对不上",
+        "所以「编译通过」不等于「代码对」：类型层面的错编译期就抓得到，逻辑错误只能靠测试和 review"
+      ],
+      "notes": "常见追问：panic 和 error 什么时候用哪个？—— 外部输入、IO、网络这类可预期的失败用 error；内部状态被破坏（切片越界、断言失败）用 panic。recover 的正确用法？—— 只在 defer 里把 panic 转成 error，别到处撒。常见错误：以为「编译通过就没事了」，或者以为 panic 能当错误处理机制随便抛。"
+    },
+    {
+      "title": "go vet 检查什么？",
+      "answer": [
+        "go vet 是 Go 官方自带的静态分析器，编译能过的代码它再扫一遍，报出可疑写法",
+        "常见检查：printf 格式串与参数类型不匹配、结构体 tag 拼错、不可达代码、复制含锁的值、context 的 cancel 没被调用",
+        "go test 会自动跑 vet 的一个高置信子集：atomic、bools、buildtag、directive、errorsas、ifaceassert、nilfunc、printf、stdversion、stringintconv、tests",
+        "想跑全量用 go vet ./...；go test 里可以用 -vet=off 关掉，或者用 -vet=all 跑全量",
+        "vet 只报不改，能自动修的用 go fix（或者 golangci-lint run --fix）",
+        "vet 不是编译器：它不查类型错误，只找「能编译但很可能写错了」的地方"
+      ],
+      "notes": "常见追问：vet 会误报吗？—— 会，它基于启发式，报的是可疑点不是确定错误。errcheck 在 vet 里吗？—— 不在，那是 golangci-lint 的 linter。vet 和编译器的顺序？—— 编译之后、测试二进制运行之前，vet 不过测试就不会跑。常见错误：以为 go vet 能查出所有逻辑问题。"
+    },
+    {
+      "title": "golangci-lint 是什么？",
+      "answer": [
+        "golangci-lint 是第三方 linter 聚合器：一个二进制并行跑几十个 linter，覆盖 vet 之外的大量风格与错误检查",
+        "常用 linter：govet、staticcheck（含 gosimple、stylecheck）、errcheck（漏检查 error）、ineffassign（无效赋值）、unused、bodyclose、noctx、revive、gocritic",
+        "配置文件是 .golangci.yml（也可 .yaml），主要分 linters（启哪些）、linters-settings（每个 linter 的参数）、issues（排除规则）、run（超时等）几段",
+        "常用命令：golangci-lint run ./... 跑全量检查，golangci-lint run --fix 自动修一部分",
+        "在 CI 里通常用来替代裸 go vet：一条命令同时拿到格式、错误处理、并发误用等多类问题",
+        "它是工具链之外的补充，不替代编译器和测试；版本要和项目 go 指令匹配，太新的版本可能报出项目还没准备好的新规则"
+      ],
+      "notes": "常见追问：golangci-lint 和 go vet 什么关系？—— 前者包含 vet 且规则更多，但引入了第三方规则、误报也更多。staticcheck 的 SA 检查比 vet 强在哪？—— 它查更严格的正确性问题，比如无效赋值、无意义的 nil 比较。CI 里 lint 挂了该改还是跳过？—— 改；确实是误报就用 nolint 注释或配置里精确排除，别整体关掉。"
+    },
+    {
+      "title": "go test 的 -race、-cover、-bench、-run 分别做什么？",
+      "answer": [
+        "-race 开启数据竞争检测：运行时插桩，检查并发访问同一块内存的竞争，会明显变慢（通常几倍），一般只在 CI 跑",
+        "-cover 统计语句覆盖率并打印每个包的百分比；配 -coverprofile=cover.out 生成 profile，用 go tool cover -html=cover.out 打开看",
+        "-bench 跑基准测试：-bench=. 跑全部，-benchmem 额外打印每次操作的分配次数和字节数，-benchtime=1s 控制每次基准的运行时长",
+        "-run 只跑名字匹配正则的测试，匹配是「包含」不是「完全相等」，-run 'TestA|TestB' 可以一次跑多个",
+        "-bench 和 -run 互不影响：-run TestFoo -bench=. 时基准测试照跑",
+        "其他常用参数：-v 打印每个用例、-count=1 禁用测试结果缓存、-shuffle=on 随机化用例顺序、-timeout 限制整体耗时"
+      ],
+      "code": "// go test -race ./...                 开启数据竞争检测\n// go test -coverprofile=c.out ./...   生成覆盖率文件\n// go test -bench=. -benchmem ./...    跑基准测试并打印分配次数\n// go test -run 'TestA|TestB' ./...   只跑名字匹配的测试\n// go tool cover -html=c.out          在浏览器里看覆盖率",
+      "lang": "go",
+      "notes": "常见追问：-race 能查出所有并发 bug 吗？—— 只能查数据竞争，死锁和逻辑竞态查不出来。测试有缓存吗？—— 有，参数和包都没变时会复用上次结果，加 -count=1 强制重跑。-cover 统计的是语句覆盖吗？—— 是，Go 只有语句覆盖，没有分支覆盖。"
+    },
+    {
+      "title": "测试覆盖率有意义吗？它的局限在哪里？",
+      "answer": [
+        "覆盖率的价值是兜底：找出完全没被执行过的代码（写错的分支、没人调用的函数），防止覆盖率随改动回退",
+        "Go 只有语句覆盖：if 的两条分支只要走过一条就算覆盖，分支覆盖、路径覆盖都不统计",
+        "覆盖率高不等于代码对：断言写错、断言缺失，代码照样被执行，覆盖率还是 100%",
+        "它衡量的是「代码被跑过」，不是「行为被验证」，所以只能当底线指标，不能当质量目标",
+        "统计范围有边界：测试文件自身不计入；被测代码调用到的其它包的代码默认不计入，要 -coverpkg=./... 才算进来",
+        "最难覆盖的往往正是风险最高的部分：并发、错误分支、外部依赖异常，只能靠集成测试和人工设计用例"
+      ],
+      "notes": "常见追问：多少覆盖率算合格？—— 没有统一标准，常见做法是设一个「不低于当前值」的门槛防回退。覆盖率怎么进 CI？—— go test -coverprofile=cover.out ./... 之后解析总百分比跟阈值比。100% 覆盖就一定没 bug 吗？—— 不一定，断言可能什么都没验。"
+    },
+    {
+      "title": "单元测试、集成测试、基准测试有什么区别？",
+      "answer": [
+        "单元测试只测一个函数或类型，外部依赖（数据库、HTTP、时钟）换成假实现，跑得快、可重复，是数量最多的一类",
+        "集成测试让多个真实组件一起跑（真数据库、真 HTTP 服务），验证组件之间的协作和契约，慢而且依赖环境",
+        "基准测试写成 func BenchmarkXxx(b *testing.B)，测的是性能回归而不是绝对值，靠 b.N 控制迭代次数",
+        "集成测试常用 //go:build integration 或环境变量开关隔离，默认不跑，免得拖慢日常测试",
+        "基准测试用 go test -bench=. -benchmem 触发，输出 ns/op、allocs/op 之类的指标",
+        "另外还有端到端测试和模糊测试（Go 1.18 起的 FuzzXxx，用 -fuzz 跑），命名上分别对应 Test、Benchmark、Fuzz 前缀"
+      ],
+      "notes": "常见追问：单元测试要不要把一切都 mock 掉？—— 只 mock 边界（IO、网络、时间），业务逻辑别 mock，否则测的是 mock 自己。集成测试怎么保证可重复？—— 用容器起固定版本的服务、准备固定数据。基准测试的结果能直接比大小吗？—— 看同环境下的相对变化，绝对值受机器影响很大。"
+    },
+    {
+      "title": "表驱动测试（table-driven test）有什么好处？",
+      "answer": [
+        "把输入和期望输出写成一张用例表（通常是匿名 struct 切片），测试函数遍历这张表逐个断言",
+        "一份测试代码覆盖多组输入，少写重复样板；新增用例只加一行数据，不用改测试逻辑",
+        "用例表带 name 字段，用 t.Run(name, ...) 跑成子测试，失败信息里能直接看到是哪个用例挂了",
+        "子测试可以按名字筛选：go test -run 'TestAdd/负数' 只跑其中一个用例",
+        "断言用 t.Errorf 而不是 t.Fatalf 一次性中断，这样一次跑完能看到所有失败的用例",
+        "代价是表格和断言逻辑离得远，可读性依赖字段命名；各用例逻辑差异大时，拆成多个测试函数反而更清楚"
+      ],
+      "code": "// 表驱动：每组输入和期望输出写在一行\ncases := []struct {\n\tname string\n\tin   int\n\twant int\n}{\n\t{\"零\", 0, 0},\n\t{\"翻倍\", 21, 42},\n}\n\nfor _, c := range cases {\n\tif got := c.in * 2; got != c.want {\n\t\tfmt.Printf(\"用例 %s 失败: 得到 %d, 期望 %d\\n\", c.name, got, c.want)\n\t}\n}",
+      "lang": "go",
+      "notes": "常见追问：表驱动和每个用例写一个测试函数怎么选？—— 逻辑相同、只是输入不同用表格；逻辑差异大就分开写。t.Run 里的 t.Fatalf 会终止父测试吗？—— 不会，只终止这个子测试；但在父测试的循环体里用 t.Fatalf 会把后面的用例一起掐掉。常见错误：用 t.Fatalf 导致只看到第一个失败原因。"
+    },
+    {
+      "title": "什么是「可测试的代码」？Go 里怎么用依赖注入？",
+      "answer": [
+        "可测试的代码 = 业务逻辑和副作用分开：不直接 new 数据库客户端、不读全局变量，把外部依赖当参数传进来",
+        "依赖注入在 Go 里就是构造函数注入：结构体里存接口字段，构造时由调用方把实现传进来，测试时传个假实现",
+        "Go 是隐式实现：接口不用声明 implements，方法集对得上就能赋值，所以换假实现不用改生产代码",
+        "要能被替换，接口就得由使用方来定义（consumer-defined interface），接口里只留调用方真正要用的方法",
+        "这样实现方不必知道谁在用它，换实现、改实现都不影响调用方；这正是「接受接口，返回结构体」的落地方式",
+        "代价是接口满天飞会让代码难读，所以只在真正需要替换的边界定义小接口，通用工具包直接用具体类型"
+      ],
+      "code": "// 接口定义在使用方：只声明自己要用的方法\ntype UserStore interface {\n\tFind(id int) (string, error)\n}\n\n// 依赖注入：把依赖当参数传进来，测试时传假实现\nfunc GetUserName(s UserStore) (string, error) {\n\treturn s.Find(1)\n}",
+      "lang": "go",
+      "notes": "常见追问：接口该定义在使用方还是实现方？—— 使用方，这是 Go 的惯例，实现方不该为想象中的调用方设计接口。返回值用接口还是具体类型？—— 返回具体类型，接收参数用接口。为什么不用 DI 框架？—— Go 的显式传参就是最朴素的 DI，框架反而多一层依赖。什么时候不该 mock？—— 被测逻辑本身和它的直接协作者。"
+    }
+  ]
+}

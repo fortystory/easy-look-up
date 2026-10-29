@@ -122,9 +122,16 @@ func loadGroup(fsys fs.FS, name string) (Group, error) {
 
 // displayNames 是已知类别的显示名。
 var displayNames = map[string]string{
-	"go":     "Go 语言",
-	"stdlib": "Go 标准库",
-	"gin":    "Gin 框架",
+	"go":                    "Go 语言",
+	"stdlib":                "Go 标准库",
+	"gin":                   "Gin 框架",
+	"interview-go":          "Go 面试题",
+	"interview-concurrency": "并发与高并发面试题",
+	"interview-gin":         "Gin 面试题",
+	"interview-mysql":       "MySQL 面试题",
+	"interview-redis":       "Redis 面试题",
+	"interview-web":         "Web 面试题",
+	"interview-network":     "网络面试题",
 }
 
 // displayTitle 从类别 id 推导显示名："go" → "Go 语言"。

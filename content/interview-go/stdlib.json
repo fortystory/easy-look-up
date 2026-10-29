@@ -1,0 +1,221 @@
+{
+  "id": "stdlib",
+  "title": "Go 常用标准库",
+  "entries": [
+    {
+      "title": "strings 包里最常用的函数有哪些？为什么大量拼字符串要用 strings.Builder？",
+      "description": "处理文本的日常函数，以及在高频拼接场景下用 Builder 代替 += 的原因。",
+      "code": "var b strings.Builder\nb.Grow(16)\nb.WriteString(\"hello\")\nb.WriteString(\" \")\nb.WriteString(\"world\")\nfmt.Println(b.String())",
+      "lang": "go",
+      "answer": [
+        "常用函数可以按用途记：查找定位 Contains/Index/LastIndex，前后缀 HasPrefix/HasSuffix，切分拼接 Split/Join/Fields/Cut，裁剪 TrimSpace/Trim/TrimPrefix/TrimSuffix，替换 Replace/ReplaceAll/NewReplacer",
+        "反复写 s += x 每次都要重新分配并拷贝整个字符串，是 O(n²) 的代价；strings.Builder 内部是一块可增长的 []byte 缓冲，WriteString 只是往末尾追加",
+        "Builder.String() 一次性把缓冲转成字符串，不会再复制一份；还可以用 Grow(n) 提前把容量预留好，减少扩容",
+        "Builder 不能被复制使用，必须以指针传递，值拷贝会 panic；调完 String() 之后也不要再往里写",
+        "要按多种模式替换文字时用 strings.NewReplacer，一次扫描完成，比链式调用 ReplaceAll 快"
+      ],
+      "notes": "常见追问：strings.Builder 和 bytes.Buffer 有什么区别？——Builder 专为拼字符串设计，String() 零拷贝转换；bytes.Buffer 是通用字节缓冲，能直接写 []byte。追问：为什么不直接 fmt.Sprintf？——Sprintf 要解析格式串并走反射，多参数时开销明显。"
+    },
+    {
+      "title": "strings.Split 和 strings.Fields 有什么区别？",
+      "description": "两种切分方式的分隔规则不同，解析用户输入时选错会得到空字段。",
+      "code": "fmt.Println(strings.Split(\"a,,b\", \",\"))\nfmt.Println(strings.Fields(\" a  b\\tc\\n\"))\nbefore, after, found := strings.Cut(\"key=value\", \"=\")\nfmt.Println(before, after, found)",
+      "lang": "go",
+      "answer": [
+        "Split 按给定的分隔符切分，分隔符是完整字符串匹配；Fields 按一段连续空白切分",
+        "Split 会保留空字段：\"a,,b\" 按 \",\" 切得到 [a 空 b]，结果长度固定为分隔符个数加一",
+        "Fields 会丢掉所有空字段：\"a  b\" 按空白切得 [a b]，连续多个空格只算一个分隔符",
+        "Fields 等价于 strings.FieldsFunc(s, unicode.IsSpace)，按 Unicode 空白切，空格、\\t、\\n 都算",
+        "只要分隔符两侧内容时用 Cut(s, sep)，它不额外分配切片；SplitN(s, sep, n) 可以限制切分次数"
+      ],
+      "notes": "常见追问：解析 CSV 用哪个？——别手写 Split，字段里可能有引号和转义分隔符，用 encoding/csv。追问：Split 的长度能确定吗？——能，分隔符出现次数加一；Fields 的长度则要切完才知道。"
+    },
+    {
+      "title": "string 和 []byte 互转的代价有多大？bytes 包和 strings 包是什么关系？",
+      "description": "两者的转换成本，以及 bytes 包作为 strings 包的字节版本各自负责什么。",
+      "code": "b := []byte(\"hello\")\nfmt.Println(len(b), string(b))\nvar buf bytes.Buffer\nbuf.WriteString(\"hello \")\nbuf.Write(b)\nfmt.Println(buf.String())",
+      "lang": "go",
+      "answer": [
+        "[]byte(s) 和 string(b) 都会复制一份数据，转换后两者互不影响；编译器只在 map 索引、字符串比较等少数场景省掉这次拷贝",
+        "热路径上反复转换就是反复分配加拷贝，尽量让数据全程保持一种形态：要么全程 []byte，要么全程 string",
+        "bytes 包是 strings 包的 []byte 版本，API 基本一一对应（bytes.Split 对应 strings.Split），因为方法接收者类型不同，必须写两套",
+        "strings 独有 strings.Builder、strings.Replacer、strings.Reader；bytes 独有 bytes.Buffer、bytes.Reader、bytes.NewBuffer",
+        "bytes.Buffer 可以直接写 []byte 并复用内部缓冲，不用绕道 string，省掉来回转换",
+        "确实需要零拷贝只读访问底层数据时可以用 unsafe.String / unsafe.Slice，但必须保证底层数组不被修改、生命周期足够长"
+      ],
+      "notes": "常见追问：哪些地方编译器会免拷贝？——map 查找取到的值、字符串比较、range 字符串取下标；把 []byte(s) 传给普通函数只要发生逃逸就照样拷贝。追问：strings.Builder 为什么不拷贝？——内部用 unsafe 把字节缓冲直接转成字符串。"
+    },
+    {
+      "title": "io.Reader / io.Writer 有哪些常用的组合器？",
+      "description": "只用 Reader 和 Writer 两个接口就能拼出各种数据流，不用关心具体类型。",
+      "code": "r := io.MultiReader(strings.NewReader(\"hello \"), strings.NewReader(\"world\"))\ndata, err := io.ReadAll(io.LimitReader(r, 5))\nfmt.Println(string(data), err)",
+      "lang": "go",
+      "answer": [
+        "io.Reader 只有一个 Read([]byte) (int, error)，io.Writer 只有一个 Write([]byte) (int, error)；实现了这两个方法的类型都能互相组合",
+        "io.Copy(dst, src) 负责拷贝数据，用 32KB 中转缓冲；src 实现了 WriterTo 或 dst 实现了 ReaderFrom 时会走更快的路径，比如复制文件",
+        "io.MultiReader 把多个 Reader 首尾相接当成一个来读；io.MultiWriter 把一次写同时分发给多个 Writer",
+        "io.LimitReader(r, n) 最多读 n 字节，防止读超量；io.LimitWriter 同理限制写入量",
+        "io.ReadAll(r) 读到内容结尾，io.Discard 可以直接当 Writer 用，把数据丢掉",
+        "io.TeeReader 在读取的同时把数据复制到另一个 Writer；io.Pipe 是同步的内存管道，用完要 Close"
+      ],
+      "notes": "常见追问：io.Copy 返回的 err 要不要判断？——要，非 nil 说明没拷完（EOF 已被内部消化，不会作为错误返回）。追问：自己写的函数只收 io.Reader 有什么好处？——文件、网络、字符串都能传进来，好测也好换。"
+    },
+    {
+      "title": "bufio 包解决了什么问题？什么时候需要它？",
+      "description": "缓冲 I/O 减少系统调用，以及哪些场景其实用不上它。",
+      "code": "f, err := os.Open(\"/etc/hostname\")\nif err != nil {\n\tfmt.Println(err)\n\treturn\n}\ndefer f.Close()\nsc := bufio.NewScanner(f)\nfor sc.Scan() {\n\tfmt.Println(sc.Text())\n}\nfmt.Println(sc.Err())",
+      "lang": "go",
+      "answer": [
+        "每次 Read/Write 落到文件或 socket 都是一次系统调用，代价很高；bufio 在中间加一层缓冲，把多次小读小写合并成少量大操作",
+        "要逐行或逐词读文本用 bufio.Scanner，缓冲默认 4KB，单个 token 上限 64KB（bufio.MaxScanTokenSize），超长行会返回 bufio.ErrTooLong",
+        "手写协议解析或者频繁小写入时用 bufio.NewReader / bufio.NewWriter 包装底层的 Reader、Writer",
+        "一次性读完整个文件不需要 bufio，用 os.ReadFile，它本来就是读全部",
+        "bufio.Writer 必须 Flush，否则缓冲区里没写出去的数据会丢，写文件后要 defer w.Flush()",
+        "Scanner 循环结束后要检查 sc.Err()，Scan 返回 false 可能是出错而不是读完"
+      ],
+      "notes": "常见追问：默认缓冲区多大？——Reader 和 Writer 都是 4096 字节，用 NewReaderSize / NewWriterSize 可以改。追问：Scanner 遇到超长行怎么办？——调 Scanner.Buffer 扩大缓冲上限。"
+    },
+    {
+      "title": "os.Open 返回的 *os.File 要怎么关闭？忘了 Close 会怎样？",
+      "description": "文件描述符是稀缺资源，写法上有关键的顺序要求。",
+      "code": "f, err := os.Open(\"/etc/hostname\")\nif err != nil {\n\tfmt.Println(err)\n\treturn\n}\ndefer f.Close()\nfmt.Println(f.Name())",
+      "lang": "go",
+      "answer": [
+        "os.Open 返回 *os.File，它持有文件描述符，用完必须 Close，否则描述符泄漏",
+        "标准写法是先判 err，确认没出错再立刻 defer f.Close()，defer 会在函数返回时执行",
+        "defer 必须写在 err 检查之后：出错时 f 是 nil，先 defer 会变成 defer nil.Close()，返回时 panic",
+        "一次性读写文件直接用 os.ReadFile / os.WriteFile，它们内部已经打开并关闭，不需要手动 Close",
+        "defer 写在循环里会累积到函数结束才执行，循环体里反复开关文件时应该把逻辑放进单独的函数",
+        "只读场景下 Close 的错误通常可以忽略，写场景建议检查；errcheck 之类的 lint 工具会专门提醒这件事"
+      ],
+      "notes": "常见追问：文件描述符上限是多少？——由 ulimit -n 决定，常见默认 1024，泄漏到上限后 open 直接返回 too many open files。追问：defer 什么时候执行？——函数返回时执行，不是离开当前作用域。"
+    },
+    {
+      "title": "encoding/json 的 struct tag 怎么用？omitempty、未知字段、[]byte 分别怎么处理？",
+      "description": "JSON 序列化里最容易踩坑的几个行为。",
+      "code": "type User struct {\n\tName  string `json:\"name\"`\n\tEmail string `json:\"email,omitempty\"`\n\tAge   int    `json:\"age\"`\n}\nb, err := json.Marshal(User{Name: \"tom\", Age: 18})\nfmt.Println(string(b), err)",
+      "lang": "go",
+      "answer": [
+        "tag 格式是 json:\"字段名,选项\"；json:\"-\" 表示忽略该字段，不写 tag 时默认用字段名，未导出字段永远不会被编码",
+        "omitempty 表示字段是零值时不出现在 JSON 里；零值指 0、空字符串、false 和 nil 的指针、切片、map、接口",
+        "非 nil 的空切片和空 map 不算零值，omitempty 也会照样输出，想省掉得自己写指针或加 IsZero 逻辑",
+        "解码时默认忽略未知字段；要报错就用 json.Decoder 的 DisallowUnknownFields()",
+        "[]byte 默认被编码成 base64 字符串，因为它是 uint8 切片；想输出数字数组要自己实现 MarshalJSON",
+        "map 的键必须是字符串类型或实现了 encoding.TextMarshaler；时间字段用 time.Time 自带的 MarshalJSON，输出 RFC3339 格式"
+      ],
+      "notes": "常见追问：omitempty 适合所有零值字段吗？——不一定，0 和「字段缺失」在 JSON 里是两回事，前端拿到的是 undefined。追问：Unmarshal 到 map 会怎样？——数字默认变成 float64，大整数会丢精度。"
+    },
+    {
+      "title": "json.Marshal 和 json.NewEncoder(w).Encode 有什么区别？",
+      "description": "一个是返回字节切片，一个是直接写进流里。",
+      "code": "enc := json.NewEncoder(os.Stdout)\nenc.SetEscapeHTML(false)\nerr := enc.Encode(map[string]int{\"a\": 1})\nfmt.Println(err)",
+      "lang": "go",
+      "answer": [
+        "Marshal 把值编码成 []byte 返回，调用方自己决定怎么写出去；Encoder.Encode(v) 直接写到 io.Writer",
+        "Encoder.Encode 每写一条会追加一个换行符，正好适合 NDJSON 这种一行一条的流式输出",
+        "Encoder 支持 SetIndent 缩进和 SetEscapeHTML(false) 关闭 HTML 字符转义；Marshal 想缩进得用 json.MarshalIndent",
+        "两者底层都是先在内存里编码再写出，遇到 chan、func、循环引用这类不支持的类型都会在写出之前返回错误",
+        "流式解码对应 json.NewDecoder(r).Decode(&v)，配合 bufio.Reader 可以逐条读取",
+        "一次 Marshal 整个大对象会把结果整个放进内存，Encoder 每次只编码一个值，更适合边生成边输出"
+      ],
+      "notes": "常见追问：Encoder 内部会缓冲吗？——每次 Encode 编码完直接写出，不攒批次。追问：Marshal 的错误为什么在写之前就报？——因为编码先在内存里完成，出错时还没有产生任何输出。"
+    },
+    {
+      "title": "regexp 为什么强调预编译？匹配本身的开销大吗？",
+      "description": "编译一次复用多次，以及 Go 正则引擎的性能特点。",
+      "code": "var re = regexp.MustCompile(`(\\w+)@(\\w+)\\.com`)\nfmt.Println(re.MatchString(\"tom@example.com\"))\nfmt.Println(re.FindStringSubmatch(\"mail tom@example.com now\"))",
+      "lang": "go",
+      "answer": [
+        "regexp.MustCompile 在包级变量初始化时编译一次，之后反复复用；regexp.Compile 每次调用都重新编译，编译开销远大于一次匹配",
+        "MustCompile 适合模式是常量的情况，模式写错会在程序启动时立刻 panic，而不是等到线上请求才暴露",
+        "模式要运行时才确定（比如来自用户输入）时只能用 regexp.Compile，并自己处理返回的 error",
+        "Go 的 regexp 走 RE2 引擎，保证线性时间匹配，不会出现某些正则引擎那种灾难性回溯把 CPU 打满的情况",
+        "只是判断是否包含某个子串时 strings.Contains 更快，regexp 适合需要分组、锚点、量词这些复杂模式的场景",
+        "匹配结果用 FindStringSubmatch / FindAllStringSubmatch 取分组，Go 1.11 起支持命名捕获组 (?P<name>...)"
+      ],
+      "notes": "常见追问：regexp 一定比 strings 慢吗？——只做子串判断时确实更慢。追问：MustCompile 放包级变量有什么坑？——包级初始化顺序按依赖关系决定，不能指望它先于别的包级变量初始化。"
+    },
+    {
+      "title": "time.Duration 是什么？为什么比较两个时间点要用 Equal 而不是 ==？",
+      "description": "时间类型的基础知识，以及最常见的比较写法错误。",
+      "code": "t1 := time.Now()\nt2 := t1.Add(time.Second)\nfmt.Println(t1.Equal(t2), t1.Before(t2))\nfmt.Println(time.Since(t1) > 500*time.Millisecond)",
+      "lang": "go",
+      "answer": [
+        "time.Duration 是 int64 的自定义类型，单位是纳秒；Nanosecond、Microsecond、Millisecond、Second、Minute、Hour 这些常量都基于它",
+        "Duration 本身就是个数字，可以直接加减和比较大小，常写 30 * time.Second；time.Since(t) 返回的也是 Duration",
+        "time.Time 是结构体，内部含挂钟时间、单调时钟读数和 Location 指针，两个 Time 表示同一时刻也可能字段不同",
+        "判断两个时间点是否相同时用 t1.Equal(t2)，判断先后用 Before / After，不要用 == 或 >",
+        "== 比较的是结构体的每个字段，location 不同（同一时刻不同时区）或者一个时间点经过了转换，都会判成不等",
+        "time.Time 带时区，格式化用 Format(\"2006-01-02 15:04:05\")，参考时间就是 2006-01-02 15:04:05"
+      ],
+      "notes": "常见追问：Equal 和 == 什么时候结果一样？——两边都来自 time.Now() 且同一个 Location 时通常一致，但代码里不要依赖这一点。追问：怎么只比较日期？——统一 Truncate 到天后比较，或用 Format(\"2006-01-02\") 转成字符串比。"
+    },
+    {
+      "title": "time.Timer 和 time.After 有什么区别？",
+      "description": "两个都能等一段时间，但能不能取消决定了适用场景。",
+      "code": "timer := time.NewTimer(50 * time.Millisecond)\ndefer timer.Stop()\nselect {\ncase <-timer.C:\n\tfmt.Println(\"定时器触发\")\ndefault:\n\tfmt.Println(\"还没触发\")\n}",
+      "lang": "go",
+      "answer": [
+        "time.After(d) 返回一个 channel，d 之后收到一次当前时间，用完即弃；time.NewTimer(d) 返回 *Timer，除了 C 通道还有 Stop() 和 Reset()",
+        "Timer 可以在用不到时立刻取消，占用的定时器资源也能马上释放，这是两者最实际的差别",
+        "在 select 里写 case <-time.After(5*time.Second)，每次进 select 都会新建一个 timer，放进循环会不断堆积",
+        "Go 1.23 之前，没被 Stop 的 timer 在 GC 里回收不掉，必须用 NewTimer 加 Stop；Go 1.23 起 GC 可以回收没人引用的 timer，time.After 才不再泄漏",
+        "需要连带取消 goroutine 时优先用 context.WithTimeout，它同时管定时器和取消信号",
+        "time.Tick 返回的 channel 没有停止方法，只适合进程级的后台任务；要可取消就用 NewTimer 加 Reset"
+      ],
+      "notes": "常见追问：Reset 有什么坑？——Go 1.23 之前 Reset 前必须先 Stop 并把 channel 里可能残留的值读干净，否则会立刻收到一次旧值；Go 1.23 起 Reset 保证不会收到旧值。追问：选 context 还是 timer？——涉及取消传播就用 context。"
+    },
+    {
+      "title": "http.Client 的连接是怎么复用的？为什么默认客户端没有超时？",
+      "description": "连接池的工作方式，以及默认超时为 0 带来的风险。",
+      "answer": [
+        "http.DefaultTransport 维护一个空闲连接池：总共最多保留 100 条空闲连接，每个 host 默认只保留 2 条（DefaultMaxIdleConnsPerHost = 2），空闲 90 秒后关闭",
+        "连接能复用的前提是响应 body 被读到 EOF 并 Close，连接才会回到池里；读一半就 Close 会直接丢弃这条连接，下次得重新握手",
+        "默认的 http.Client 没有整体超时（Timeout 为 0），只有分阶段超时：拨号 30 秒、TLS 握手 10 秒、等 Expect: 100-continue 1 秒，响应体可以无限期挂着",
+        "默认没有超时是因为这个 Client 面向命令行下载这类场景，超时该由调用方按业务决定；服务里必须自己设 Timeout 或用 context.WithTimeout",
+        "Transport 是并发安全的，应该全局复用一个 client，不要每次请求都新建，否则连接池等于没有",
+        "自定义 Transport 时记得设置 MaxIdleConnsPerHost 和 IdleConnTimeout，否则高并发下连接频繁重建，TLS 握手开销明显"
+      ],
+      "notes": "常见追问：为什么我的请求偶发变慢？——很可能是响应体没读完，连接不能回池。追问：Transport 和 RoundTripper 有什么区别？——Transport 是标准库的具体实现，RoundTripper 是接口，换 Transport 就是换 RoundTripper。"
+    },
+    {
+      "title": "http.Server 的 ReadTimeout、WriteTimeout、IdleTimeout 分别管什么？怎么设？",
+      "description": "服务端三个超时各管哪一段，以及它们的坑。",
+      "answer": [
+        "ReadTimeout：从接受连接开始到读完整个请求（含 body）的最长时间，零值表示不超时",
+        "ReadHeaderTimeout：只限制读请求头的时间；http.Server 默认所有超时都是零，不配它容易被 Slowloris 慢速头攻击占住连接",
+        "WriteTimeout：从读完请求头到写完响应的最长时间，零值表示不超时；它把 handler 的执行时间也算进去，handler 写得慢会被它截断",
+        "IdleTimeout：keep-alive 连接等待下一个请求的最长时间，零值时沿用 ReadTimeout",
+        "这几个都是连接级的粗粒度限制，handler 内部的业务超时要用 context.WithTimeout 配合请求的 ctx",
+        "流式场景不适合设 WriteTimeout：SSE、WebSocket、大文件下载会被超时切断，这类接口要单独处理"
+      ],
+      "notes": "常见追问：WriteTimeout 会打断 SSE 吗？——会，连接写超时就断，SSE 一般靠 IdleTimeout 或反向代理控制。追问：请求头大小有限制吗？——有，MaxHeaderBytes 控制，默认 1MB。"
+    },
+    {
+      "title": "log/slog 和老的 log 包有什么区别？",
+      "description": "Go 1.21 起标准库自带的结构化日志方案。",
+      "answer": [
+        "log/slog 是 Go 1.21 引入的结构化日志包；老的 log 包只有 Printf、Println、Fatal、Panic 这些纯文本打印函数，没有级别概念",
+        "slog 用「消息加键值对」的形式记录，比如 slog.Info(\"user login\", \"id\", 42, \"ip\", ip)，键值有类型，能被结构化输出",
+        "默认写 JSON，用 slog.New(slog.NewJSONHandler(os.Stdout, nil)) 创建；想看人读友好的文本就换 NewTextHandler，输出 logfmt 风格",
+        "slog.SetDefault(slog.New(handler)) 能替换掉标准 logger，其它库通过 slog.Default() 一起接进来",
+        "级别有 Debug、Info、Warn、Error，通过 slog.HandlerOptions{Level: ...} 控制",
+        "slog.Logger 可以绑定上下文：logger.With(\"request_id\", id) 存进 ctx，后面用 InfoContext 打印；还可用 slog.NewLogLogger 把 slog 接到老的 log.Logger 上"
+      ],
+      "notes": "常见追问：slog 性能比 zap 好？——早期版本不如 zap 这类专用库，Go 1.23 之后 slog 做了优化，差距明显缩小，可以用 pprof 看分配。追问：怎么同时输出到文件和 stdout？——用 io.MultiWriter 拼两个 writer。"
+    },
+    {
+      "title": "为什么 Go 标准库不提供通用的容器数据结构？",
+      "description": "标准库在容器这类东西上的取舍。",
+      "answer": [
+        "Go 1 的标准库里有 container/list、container/ring、container/heap，但它们要求元素装箱成 interface{}，写入和读取都要类型断言，还会有额外分配",
+        "官方一贯的态度是先在语言层面解决：slice 加 append 加 sort、slices 已经覆盖绝大多数需求，链表、堆这类结构的收益并不明显",
+        "通用容器的 API 很难同时满足所有人，要不要并发安全、要不要支持泛型、迭代器怎么设计都没有共识，标准库只收录有明确用途的包",
+        "Go 1.18 泛型出现后有人提议把容器搬进标准库（golang.org/x/exp/containers 里的 list、mapset），至今没有并入 std，因为「要不要有」始终没形成结论",
+        "需要树、图这类结构就直接用 golang.org/x/exp/containers 或第三方库，或者自己用泛型实现",
+        "map 的键类型、slice 的扩容策略这类「容器相关」能力，标准库都放在语言和基础类型里，而不是做成通用容器包"
+      ],
+      "notes": "常见追问：slice 就是链表吗？——不是，slice 是连续内存的数组视图，扩容时按倍数重新分配并拷贝，元素多了中间插删是 O(n)。追问：需要双端队列怎么办？——用 ring buffer 思路自己实现，或者用第三方库。"
+    }
+  ]
+}

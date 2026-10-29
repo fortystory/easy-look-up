@@ -1,0 +1,211 @@
+{
+  "id": "performance",
+  "title": "性能分析与优化",
+  "entries": [
+    {
+      "title": "怎么分析一个 Go 程序的性能？pprof 的四种 profile 分别看什么？",
+      "description": "性能问题先分类再取证：CPU 忙、内存涨、goroutine 卡住、锁等待，各有对应的 profile。",
+      "answer": [
+        "CPU profile 看谁在烧 CPU：记录采样到的调用栈和占比，用 `go tool pprof` 打开",
+        "heap profile 看内存：alloc_space 是累计分配量（找分配大户），inuse_space 是当前存活对象（找泄漏）",
+        "goroutine profile 看栈和阻塞点：加 `?debug=2` 打印全部 goroutine 的栈，定位 goroutine 泄漏和死锁",
+        "block profile 记同步原语上的阻塞时间（channel 收发、select、锁等待），mutex profile 记锁竞争和持有者；两者默认不采样，要用 `runtime.SetBlockProfileRate`、`runtime.SetMutexProfileFraction` 打开",
+        "heap profile 默认按 512KB 的采样率记录，不是全量；另有 runtime/trace 能看 goroutine 调度轨迹和 GC 停顿",
+        "定位顺序：先用 CPU profile 找到热点函数，再用 heap profile 确认热点是不是分配密集，两边交叉验证"
+      ],
+      "notes": "常见追问：线上服务怎么抓 profile？——导入 `net/http/pprof` 就会自动注册路由，`/debug/pprof/profile?seconds=30` 抓 CPU，`/debug/pprof/heap` 抓堆。常见错误回答：只说「用 pprof 看火焰图」，分不清四种 profile 各自回答什么问题。"
+    },
+    {
+      "title": "CPU profile 怎么用？",
+      "description": "想证明「是这段代码慢」，就得拿一份 CPU profile，而不是凭感觉读代码。",
+      "answer": [
+        "跑 benchmark 时一起抓：`go test -bench=. -benchmem -cpuprofile=cpu.out ./...`",
+        "`-benchmem` 顺带输出 B/op 和 allocs/op，这两项比 ns/op 更容易解释「为什么慢」",
+        "看结果：`go tool pprof -top cpu.out` 出文本摘要，`go tool pprof -http=:8080 cpu.out` 打开交互界面",
+        "线上服务抓 30 秒：`curl 'localhost:6060/debug/pprof/profile?seconds=30'`",
+        "CPU profile 只在真的在烧 CPU 时才有意义；进程在等锁、等 IO 应该抓 block profile",
+        "默认 100Hz 采样，`runtime.SetCPUProfileRate` 能调高采样率：采样越密开销越大，结果也越准"
+      ],
+      "notes": "常见追问：`go test -bench` 抓到的 profile 为什么不准？——benchmark 框架会反复校准 b.N 直到跑够目标时长，profile 覆盖的是整个测试进程；想只跑一次用 `-benchtime=1x`。另一个追问：多份 profile 能合并吗？——可以，`go tool pprof -proto a.out a.pprof b.pprof > merged.pprof`。"
+    },
+    {
+      "title": "火焰图怎么读？",
+      "description": "火焰图是 pprof 的默认视图，宽度代表时间占比。",
+      "answer": [
+        "纵轴是调用栈，越往上栈越深；横条的宽度代表这个栈上采样到的 CPU 时间占比",
+        "找最宽的那条路径，宽度突然变宽的那一层就是开销来源",
+        "pprof 的 top 视图区分 flat（函数自身耗时）和 cum（含子调用的总耗时）：先用 flat 找自身慢的函数，再用 cum 找调用链上的大头",
+        "从下往上读：底部是被频繁调用的叶子函数，顶部是业务入口",
+        "采样是统计意义上的：占比 1% 的条可能只有几百个采样，看比例别看绝对值",
+        "火焰图只告诉你「时间花在哪」，不告诉你「为什么」；要结合代码和 heap profile 一起判断"
+      ],
+      "notes": "常见追问：pprof 的火焰图和浏览器 Performance 面板的火焰图一样吗？——浏览器那个是逐调用精确记录，pprof 是采样统计。常见错误回答：把火焰图宽度当成调用次数。"
+    },
+    {
+      "title": "Go 的 benchmark 怎么写？b.N 是什么？",
+      "description": "benchmark 是 Go 里做微基准的标准工具，b.N 决定了一次跑多少次。",
+      "answer": [
+        "函数名必须写成 `BenchmarkXxx(b *testing.B)`，把被测操作放进 `for i := 0; i < b.N; i++` 循环体里",
+        "b.N 由框架决定：框架从 1 开始自动加大迭代次数，直到整个 benchmark 跑满目标时长（默认 1 秒），让结果有统计意义",
+        "准备数据放在循环外，用 `b.ResetTimer()` 把准备阶段的耗时和分配从统计里清掉",
+        "看分配：`b.ReportAllocs()` 或 `-benchmem` 输出 allocs/op 和 B/op；用 `b.StopTimer()`、`b.StartTimer()` 排除中间的非目标开销",
+        "结果三列的含义：ns/op 是每次迭代耗时，B/op 是每次迭代分配的字节数，allocs/op 是每次迭代的分配次数",
+        "Go 1.24 起可以用 `b.Loop()` 代替手写循环：它让准备和清理只执行一次，并防止编译器把循环体优化掉"
+      ],
+      "notes": "常见追问：为什么一定要写 b.ResetTimer()？——计时默认从函数入口就开始，准备数据的时间会被算进去。另一个追问：怎么测并发？——用 `b.RunParallel()`，配合 `-cpu=1,4` 看不同 GOMAXPROCS 下的差异。"
+    },
+    {
+      "title": "逃逸分析对性能有什么影响？",
+      "description": "逃逸分析决定变量在栈上还是堆上，是理解 Go 分配行为的第一站。",
+      "answer": [
+        "逃逸分析在编译期决定变量的分配位置，看它的命令是 `go build -gcflags='-m'`，加 `-m -m` 能看到更细的提示",
+        "输出里的 `moved to heap`、`escapes to heap` 表示变量逃逸到堆，`does not escape` 表示留在栈上",
+        "逃逸到堆意味着对象的生命周期交给 GC 管理：多一次堆分配，GC 还要扫描和标记它",
+        "常见触发原因：返回局部变量的指针、闭包捕获变量、值赋给接口、指针存进全局变量或发到 channel",
+        "常见改法：返回两个值而不是返回指针、避免闭包捕获循环里的变量、接口里只放指针",
+        "逃逸本身不是错，只有热路径上大量逃逸、堆分配成为瓶颈时才值得改"
+      ],
+      "notes": "常见追问：堆分配一定比栈分配慢吗？——分配本身差距不大，真正贵的是分配带来的 GC 扫描和缓存局部性变差。另一个追问：怎么知道是哪一行引起的逃逸？——`-gcflags='-m -m'` 的提示里带文件和行号。"
+    },
+    {
+      "title": "切片预分配（make with cap）能带来什么收益？",
+      "description": "已知要装多少个元素时，预分配容量是最省事的优化。",
+      "answer": [
+        "`make([]T, 0, n)` 一次分配够用的容量，循环 append 时不再触发扩容",
+        "扩容的代价是：重新分配一块更大的内存、拷贝已有元素、旧的那块内存变成垃圾交给 GC",
+        "容量增长不是固定步长：Go 1.18 起容量在 256 个元素以内大致翻倍，超过之后增速放缓到 1.25 倍左右",
+        "容量已知时按 n 预分配，省掉的就是扩容次数和扩容产生的垃圾",
+        "容量完全未知、只追加少量元素时不要预分配，预分配过大就是浪费内存",
+        "预分配只解决容量问题，单个元素的大小仍要单独考虑：存指针还是存大 struct 差别很大"
+      ],
+      "code": "items := make([]int, 0, 1000) // 预留容量，append 不再触发扩容\nfor i := 0; i < 1000; i++ {\n\titems = append(items, i)\n}\nfmt.Println(len(items), cap(items))",
+      "lang": "go",
+      "notes": "常见追问：`make([]T, 0, n)` 和 `make([]T, n)` 有什么区别？——前者长度 0、容量 n，后者长度就是 n。常见错误回答：说预分配能让 append 本身变快（它只是少了扩容，元素拷贝一样要做）。"
+    },
+    {
+      "title": "map 预分配能带来什么收益？",
+      "description": "元素个数大致能估出来时，提前 make 能省掉扩容和 rehash。",
+      "answer": [
+        "`make(map[K]V, n)` 告诉运行时这个 map 大概会有 n 个元素，提前把存储分好",
+        "不预分配时 map 边写边扩，扩容要重新计算所有键的哈希并搬运元素，期间有额外 CPU 和临时分配",
+        "预分配省掉的是扩容和 rehash 的抖动，对「一次性填满的大 map」最明显",
+        "元素个数估得准就预分配，估不准就别猜——map 本来就按需增长，猜错太多只是白占内存",
+        "Go 1.24 起 map 换成 Swiss Table 实现，扩容和哈希的内部细节和旧版本不同，但「提前 make 省掉扩容」这个结论不变",
+        "预分配解决不了 key 设计问题：key 要短、分布要均匀，别拿长字符串或大结构体当 key"
+      ],
+      "code": "m := make(map[string]int, 1000) // 预估有 1000 个元素\nfor i := 0; i < 1000; i++ {\n\tm[strconv.Itoa(i)] = i\n}\nfmt.Println(len(m))",
+      "lang": "go",
+      "notes": "常见追问：Go 1.24 的 map 有什么变化？——换成 Swiss Table 实现，小 map 更省内存、大 map 查找更快。另一个追问：map 的 value 存 struct 还是指针？——存指针，避免每次读写都拷贝整个 struct。"
+    },
+    {
+      "title": "怎么减少内存分配？sync.Pool 有什么用？",
+      "description": "分配少一分，GC 的活就少一分；sync.Pool 是复用临时对象的现成工具。",
+      "answer": [
+        "分配是 GC 压力的源头：先用 heap profile 的 alloc_space 找出分配大户，再决定怎么改",
+        "`sync.Pool` 复用临时对象（bufio.Reader、[]byte、临时结构体）：取出后重置状态再放回去，省掉反复 new",
+        "Pool 按 P 分片，没有全局锁争用；Go 1.13 起 GC 会把上一周期的对象挪到 victim 缓存，所以经过一次 GC 还能继续用",
+        "Pool 里的对象随时可能被 GC 丢弃，不能用它保存必须存活的数据，也不能假设 Get 一定返回新对象",
+        "用完要 `defer pool.Put(obj)`；放回前清空内部引用，避免整棵对象图被池拖住不释放",
+        "少做字符串拼接：`fmt.Sprintf` 换成 `strconv.Itoa`、`strconv.AppendInt`，循环里累积用 `strings.Builder` 并 `Grow` 预估大小"
+      ],
+      "code": "var bufPool = sync.Pool{\n\tNew: func() any { return new([]byte) },\n}\nbuf := bufPool.Get().(*[]byte)\n*buf = append((*buf)[:0], \"hello\"...)\nbufPool.Put(buf)\nfmt.Println(string(*buf))",
+      "lang": "go",
+      "notes": "常见追问：sync.Pool 和自己写全局 freelist 有什么区别？——Pool 是并发安全、按 P 分片的，freelist 要自己加锁。另一个追问：什么对象不适合池化？——本来就复用不划算的对象，或者体积很大的对象，池化省下的分配抵不上缓存成本。"
+    },
+    {
+      "title": "string 拼接和 []byte 拼接有什么区别？",
+      "description": "拼接方式选错，循环里的拷贝量能差一个数量级。",
+      "answer": [
+        "string 不可变，`s + t` 每次都新建一个字符串，并把两个操作数的内容拷贝进去",
+        "循环里写 `s += x`，每轮都要拷贝已有的全部内容，整体拷贝量是 O(n²)",
+        "`[]byte` 用 append 拼接可以复用同一块底层数组，只有扩容时才需要拷贝",
+        "`string(buf)` 会再拷贝一次 buf 的内容，所以「先拼 []byte 再转 string」整体是两次拷贝",
+        "`strings.Builder` 底层就是 []byte，额外提供 `String()` 和 `Grow()`，是 Go 里拼字符串的推荐做法",
+        "只拼两三次时差别不大；数量多或反复追加时用 Builder 并预分配大小，别在循环里用 `+=`"
+      ],
+      "code": "var sb strings.Builder\nsb.Grow(64) // 预估大小，避免多次扩容\nfor i := 0; i < 10; i++ {\n\tsb.WriteString(\"a\")\n}\nfmt.Println(sb.String())",
+      "lang": "go",
+      "notes": "常见追问：为什么循环里 `s += \"x\"` 这么慢？——每轮复制整个当前字符串。另一个追问：strings.Builder 线程安全吗？——不安全，它靠写保护检测并发写，多个 goroutine 一起写会 panic。"
+    },
+    {
+      "title": "反射的开销大吗？什么时候值得用？",
+      "description": "反射换来灵活性，代价是丢掉编译期类型检查和内联机会。",
+      "answer": [
+        "反射走的是 interface 加运行期查找：`reflect.ValueOf` 要装箱，`MethodByName` 每次按名字查方法表，这些路径都没法内联",
+        "一次反射调用通常在百纳秒到微秒量级，比直接调用慢一到两个数量级",
+        "反射更贵的代价往往是类型系统：为了用反射要传 `interface{}`，丢掉编译期检查，错误只能运行期暴露",
+        "值得用的场景：代码生成、序列化和 ORM、插件与依赖注入、需要处理任意类型的通用框架",
+        "不值得用的场景：热路径上的类型分支——用类型断言或 type switch 快得多，还保留编译期检查",
+        "Go 1.18 之后能用泛型表达的静态多态，优先写泛型而不是反射"
+      ],
+      "notes": "常见追问：reflect.ValueOf 为什么不返回指针？——为了不破坏调用方的值语义，Value 内部保存一份拷贝，所以要改原值得用可寻址的 Elem().Set()。常见错误回答：只说「反射很慢，不要用」，说不上什么时候值得用。"
+    },
+    {
+      "title": "interface 的装箱开销从哪来？",
+      "description": "把值类型塞进接口的那一刻，运行时往往要在堆上多分配一次。",
+      "answer": [
+        "接口值是两个字：类型描述指针（itab）和数据指针；把非指针类型放进接口时，数据要在堆上单独分配一份",
+        "所以 int 或 struct 赋给 interface 会多一次分配；0 到 255 的小整数在运行时有一块预分配的表，装箱不额外分配",
+        "struct 装箱是按值把整个结构体拷到堆上，结构体越大越贵，必要时改用指针",
+        "装箱还会让本来能待在栈上的变量逃逸到堆，GC 要跟踪它的生命周期",
+        "热路径上的做法：接口里存指针、大结构体用指针接收者方法、需要静态多态时用类型参数",
+        "用 `go build -gcflags='-m'` 能看到 `escapes to heap` 这类装箱导致的逃逸提示"
+      ],
+      "code": "type User struct {\n\tName string\n}\n\nusers := make([]*User, 0, 10)\nusers = append(users, &User{Name: \"a\"}) // &User{} 逃逸到堆\nfmt.Println(len(users))",
+      "lang": "go",
+      "notes": "常见追问：接口里存指针就完全没有开销了吗？——指针本身不装箱，但多一次间接寻址，而且被指对象不能内联。另一个追问：什么时候装箱无法避免？——任何把具体类型传给接受 interface{} 的 API 的地方。"
+    },
+    {
+      "title": "为什么 Go 的接口方法调用比直接调用慢一点？",
+      "description": "动态派发要多走一次间接跳转，差距通常在纳秒级。",
+      "answer": [
+        "接口调用要先通过 itab 找到具体类型的方法实现，再做一次间接跳转；直接调用是编译期定死的静态跳转",
+        "静态调用可以被内联，接口调用在编译器看不到具体类型时不能内联，多出一层函数调用开销",
+        "代价是纳秒级的，通常远小于一次堆分配或一次系统调用，实践中很少成为瓶颈",
+        "Go 1.22 起编译器把去虚拟化和内联交织起来，接口调用在能确定具体类型时会被优化成静态调用并内联",
+        "想让热路径更快：先用类型断言拿回具体类型再调用，或者在热路径上直接用具体类型或泛型",
+        "不要为了「接口调用慢」就把接口全换成具体类型——多态带来的可维护性收益通常远大于这点开销"
+      ],
+      "notes": "常见追问：方法值（method value）和接口调用有什么区别？——方法值会创建一个闭包并分配一次内存。另一个追问：动态派发到底慢多少？——多一次间接跳转，量级是几纳秒。"
+    },
+    {
+      "title": "怎么减少 GC 压力？",
+      "description": "GC 压力归根到底来自分配速率，能少分配就是最有效的优化。",
+      "answer": [
+        "GC 压力来自分配速率和存活对象数量，先用 heap profile 的 alloc_space 找出分配大头",
+        "最有效的手段是少分配：复用对象（sync.Pool）、预分配容器、避免接口装箱、避免循环里的字符串拼接",
+        "调大 GOGC（比如 200）能降低 GC 频率，用更多内存换更少 CPU；运行时可以用 `debug.SetGCPercent` 调整",
+        "Go 1.19 起用 `GOMEMLIMIT` 或 `debug.SetMemoryLimit` 设内存软上限，避免调大 GOGC 后把机器撑爆",
+        "GC 是并发的，大部分工作与应用线程并行；优化时更该看 GC 占用的 CPU 比例，而不是 STW 停顿时间",
+        "runtime/trace 能看到每轮 GC 的触发原因、标记时间和 STW 时长，是判断 GC 是否拖慢响应的直接工具"
+      ],
+      "notes": "常见追问：STW 会停多久？——现代 Go 的 STW 通常在几十微秒以内，但会阻塞所有 P。另一个追问：调大 GOGC 的风险是什么？——内存峰值成倍上涨，容器里容易 OOM，所以必须配合 GOMEMLIMIT。"
+    },
+    {
+      "title": "为什么用 time.Now 计时不准？该怎么正确计时？",
+      "description": "微秒级的操作，单次计时的噪声往往比信号还大。",
+      "answer": [
+        "`time.Now` 读的是单调时钟，不受系统时间调整影响；`time.Since(start)` 用的就是这个单调差值",
+        "单次计时不可靠：被测操作可能只有几十纳秒，计时器读取开销、时钟精度、缓存冷热、GC 和调度抢占的噪声都可能和信号同量级",
+        "正确做法是重复测很多次取统计量（取中位数或最小值比取平均值稳），或者交给 testing.B 自动校准 b.N",
+        "计时区间只包住目标操作：准备数据放在计时外，用 `b.ResetTimer()` 或 `time.Since` 卡准边界",
+        "单 goroutine 的微基准结果不能直接外推到多核场景，并发路径要单独用 `-cpu` 组合测",
+        "不要用 `time.Sleep` 当计时器：它至少是毫秒级，测出来的数混进了睡眠和调度误差"
+      ],
+      "notes": "常见追问：time.Now 本身开销大吗？——现代 Linux 上通常几十纳秒，测极小操作时这点开销本身就是噪声。另一个追问：为什么取最小值而不是平均值？——最小值最接近不受干扰的真实耗时，平均会被抢占和 GC 拉高。"
+    },
+    {
+      "title": "什么时候该考虑 cgo？",
+      "description": "cgo 是跨语言边界的最后手段，不是性能捷径。",
+      "answer": [
+        "cgo 的价值是复用成熟的 C/C++ 库，或者调用没有纯 Go 替代的系统库、图形库、硬件加速库",
+        "代价一：每次调用要在 Go 栈和 C 栈之间来回切换，开销在几十到上百纳秒，热路径上不可接受",
+        "代价二：Go 指针不能直接交给 C 保存（C 不认识 Go 的 GC），要用 C 分配的内存配合 `runtime/cgo.Handle` 或 `C.CBytes`",
+        "代价三：C 侧的段错误会直接杀掉整个进程，Go 的 recover 拦不住；调试和构建链也比纯 Go 复杂",
+        "代价四：会失去纯静态链接和跨平台构建能力，依赖 cgo 的包在 CGO_ENABLED=0 时编译不过",
+        "判断标准：只在边界上做块状数据交换、调用次数很少时用；调用频繁或数据零碎时，cgo 的开销会吃掉收益"
+      ],
+      "notes": "常见追问：Go 1.24 给 cgo 加了什么优化？——支持 `#cgo noescape` 和 `#cgo nocallback` 标注，减少不必要的逃逸分析和回调开销。另一个追问：CGO_ENABLED=0 有什么用？——生成纯 Go 的静态二进制，不带 cgo 支持。"
+    }
+  ]
+}

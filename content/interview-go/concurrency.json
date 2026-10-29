@@ -1,0 +1,207 @@
+{
+  "id": "concurrency",
+  "title": "Go 并发原语",
+  "entries": [
+    {
+      "title": "goroutine 是怎么创建的？主 goroutine 退出时其他 goroutine 会怎样？",
+      "answer": [
+        "用 go 语句启动：go f() 或 go func() { ... }()；新 goroutine 只是进入调度器的就绪队列，什么时候真正开始执行由调度器决定",
+        "goroutine 的初始栈只有 2KB 并按需增长，操作系统线程的栈通常是 MB 级，所以启动 goroutine 比启动线程便宜得多",
+        "同一进程内的 goroutine 共享地址空间，共享变量可能出现 data race，跨 goroutine 传数据必须显式同步",
+        "main goroutine 一旦返回，整个程序立即退出，其它 goroutine 即使没跑完也会被一起终止",
+        "所以要等子任务必须显式同步：sync.WaitGroup、channel、context 取消，或者 errgroup"
+      ],
+      "notes": "常见追问：goroutine 泄露怎么排查？——盯 runtime.NumGoroutine() 的增长趋势，用 pprof 的 goroutine profile 看卡在哪一行；「既然 main 退出就结束，为什么还要用 goroutine」——后台任务必须在 main 返回前显式等待。"
+    },
+    {
+      "title": "channel 是单向还是双向的？发送和接收什么时候会阻塞？缓冲 channel 解决了什么？",
+      "answer": [
+        "chan int 是双向的，能发也能收；chan<- int 是只写方向，<-chan int 是只读方向，方向写进类型里，可以直接出现在函数签名和接口中",
+        "无缓冲 channel 是「会合式」的：发送方要等接收方接手才返回，接收方要等发送方才有值",
+        "带缓冲 channel（make(chan int, n)）在缓冲区没满时发送不阻塞、没空时接收不阻塞，发送方和接收方可以错开时间",
+        "缓冲常用于生产者-消费者（任务队列）、批量聚合和削峰；缓冲大小按能吸收的突发量定，没有标准答案",
+        "阻塞的 goroutine 不占着操作系统线程，运行时会把 P 让给别的 goroutine，所以阻塞不等于浪费 CPU",
+        "所有 goroutine 都在等 channel、又没有任何发送方时，Go 判定为死锁，直接报 fatal error: all goroutines are asleep - deadlock! 退出"
+      ],
+      "code": "ch := make(chan int, 1) // 缓冲 1：发送方不必等接收方\nch <- 42\nfmt.Println(<-ch)             // 42\nfmt.Println(len(ch), cap(ch)) // 0 1",
+      "lang": "go",
+      "notes": "常见追问：无缓冲 channel 是不是更「安全」？——它只是把同步点写得更显式，不解决死锁；「把 channel 传给别的 goroutine 会怎样」——复制的是同一个 channel（引用类型），两边操作同一条管道。"
+    },
+    {
+      "title": "channel 应该由谁 close？重复 close 会怎样？往已关闭的 channel 发送呢？",
+      "answer": [
+        "惯例是发送方负责 close，close 表示「不会再有新数据了」，不是释放内存的手段",
+        "重复 close 同一个 channel 会 panic: close of closed channel，属于运行期错误，编译器查不出来",
+        "往已关闭的 channel 发送会 panic: send on closed channel，整个程序崩掉（能 recover，但设计上不该发生）",
+        "关闭之后接收不会阻塞，会立刻返回：用 v, ok := <-ch，ok 为 false 表示 channel 已关闭，拿到的是零值",
+        "多个发送方时不要让它们各自 close，用 WaitGroup 统计发送方数量、由一个协调者统一 close，或者单独发一条 done 信号",
+        "close 一个 nil channel 会 panic；对 <-chan int 这种只读方向调用 close 编译不过"
+      ],
+      "code": "ch := make(chan int, 2)\nch <- 1\nclose(ch)           // 发送方负责关闭\nfor v := range ch { // 收到关闭信号后 range 才结束\n\tfmt.Println(v)\n}",
+      "lang": "go",
+      "notes": "常见追问：关闭后接收方拿到什么？——零值加 ok=false；「谁 close 写错了怎么办」——Go 没有强制，靠约定和代码评审；「close 和发送竞态」——也是 data race，race detector 能报出来。"
+    },
+    {
+      "title": "select 是怎么工作的？多个 case 同时就绪选哪个？default 有什么作用？",
+      "answer": [
+        "select 同时等多个 channel 的收发，哪个先就绪就走哪个分支；都没就绪就整体阻塞",
+        "多个 case 同时就绪时选中哪个是随机的（实现上从随机起点轮转），所以不能依赖 case 的书写顺序",
+        "加上 default 分支就是非阻塞 select：没有 case 就绪时立刻走 default，不会卡住",
+        "每个 case 是独立的：一个 case 阻塞不影响其它 case 继续等",
+        "最常见的用法是加超时兜底：case <-time.After(d)，或者 case <-ctx.Done()",
+        "没有 default 且所有 case 都阻塞时，select 会一直挂着，goroutine 就停在这儿"
+      ],
+      "code": "ch := make(chan int)\nselect {\ncase v := <-ch:\n\tfmt.Println(\"收到\", v)\ndefault:\n\tfmt.Println(\"没有数据，立刻返回\")\n}",
+      "lang": "go",
+      "notes": "常见追问：为什么同时就绪时是随机的？——防止代码依赖 select 里 case 的先后顺序；「select 里能写普通语句吗」——只能放 channel 的发送和接收；「default 必须写在最后吗」——语法上 default 是独立分支，习惯写在最后。"
+    },
+    {
+      "title": "select 里的 nil channel 能用来干什么？",
+      "answer": [
+        "对 nil channel 收发会永远阻塞，所以把它放进 select 等于「关掉这个分支」",
+        "典型用法：运行时把某个 channel 变量置成 nil，就能在不改动 select 结构的前提下动态禁用一条 case",
+        "和「已关闭的 channel」正好相反：关闭后接收会立刻就绪，那个分支反而总是被选中；想禁用分支必须用 nil",
+        "close 一个 nil channel 会 panic: close of nil channel",
+        "如果 select 里所有 case 都指向 nil channel 且没有 default，这个 goroutine 会永久阻塞",
+        "nil channel 最常见的来源是「声明了但还没赋值」的变量，比如某个初始化分支没走到"
+      ],
+      "code": "var nilCh chan int // nil channel：收发都永久阻塞\nselect {\ncase v := <-nilCh:\n\tfmt.Println(v)\ndefault:\n\tfmt.Println(\"nil channel 不会就绪，走 default\")\n}",
+      "lang": "go",
+      "notes": "常见追问：nil channel 和 closed channel 的区别？——nil 是永久阻塞，closed 是立即返回；「select 里没有 default 会不会卡死」——只要有真实 channel 的 case 不会全 nil 就不会。"
+    },
+    {
+      "title": "怎么等一批 goroutine 全部结束？WaitGroup 的 Add 应该在什么时机调用？",
+      "answer": [
+        "wg.Add(n) 把计数加 n，wg.Done() 减一，wg.Wait() 等计数归零才返回",
+        "Add 必须在 go 之前调用：先 Add、再启动 goroutine、最后 Wait；顺序反了 Wait 可能在 goroutine 启动前就返回",
+        "惯用写法是 wg.Add(1) 紧跟 go func() { defer wg.Done(); ... }()，defer 保证异常路径也会减计数",
+        "所有 Add 都必须发生在第一次 Wait 之前；计数归零之后再 Add 是允许的，但不能和 Wait 并发进行",
+        "Go 1.25 起可以直接用 wg.Go(task)，它把 Add 和启动 goroutine 合成一步，不会漏计数",
+        "WaitGroup 只管计数不传错误；要收集错误、要在出错时取消同组其它任务，用 errgroup"
+      ],
+      "code": "var wg sync.WaitGroup\nwg.Add(1) // 先加计数，再启动 goroutine\ngo func() {\n\tdefer wg.Done() // 结束时减一\n\tfmt.Println(\"子任务完成\")\n}()\nwg.Wait() // 等计数归零",
+      "lang": "go",
+      "notes": "常见追问：Add 写在 goroutine 内部有什么问题？——Wait 可能提前返回，主流程误以为都做完了；「同一个 WaitGroup 能复用做两批任务吗」——可以，但两批之间必须等前一批彻底结束。"
+    },
+    {
+      "title": "sync.Mutex 零值可用吗？有哪些容易踩的点？",
+      "answer": [
+        "零值可用：var mu sync.Mutex 之后直接 Lock/Unlock，不需要任何初始化",
+        "不可重入：同一个 goroutine 持锁时再 Lock 会把自己卡死（死锁），不会像某些语言的锁那样自动计数释放",
+        "固定写法是 mu.Lock() 紧跟 defer mu.Unlock()，中途 return 或 panic 也会解锁；手动 Unlock 容易漏掉某条路径",
+        "临界区要短：不要在持锁期间做 I/O、调用不熟悉的外部函数或等待其它 goroutine，会把整条链拖长",
+        "Mutex 不能被复制：复制之后两份各有一把锁，等于没加锁，go vet 的 copylocks 检查会报出来",
+        "Go 1.18 起还有 TryLock()：抢不到锁就返回 false 且不阻塞，常用于「拿不到就跳过」的场景"
+      ],
+      "code": "var mu sync.Mutex\ncount := 0\nmu.Lock()\ncount++ // 临界区\nmu.Unlock()\nfmt.Println(count)",
+      "lang": "go",
+      "notes": "常见追问：为什么用 defer Unlock？——保证所有退出路径都解锁；「能不能用 atomic 代替锁」——只动一个变量时可以，见 atomic 那题；「锁竞争激烈怎么办」——先缩小临界区，再考虑分片或换无锁结构。"
+    },
+    {
+      "title": "RWMutex 和 Mutex 有什么区别？读多写少时该选哪个？",
+      "answer": [
+        "Mutex 是互斥的，任何时刻只有一个 goroutine 能进临界区",
+        "RWMutex 分 RLock 和 Lock：多个读者可以同时持有读锁，写锁是独占的，会把读者和写者一起挡住",
+        "适用场景是读远多于写、且临界区不太短；读写比例接近或临界区很短时 Mutex 反而更快，因为 RWMutex 的读锁计数本身也要原子操作",
+        "规则一：读锁不能升级成写锁——持有 RLock 的 goroutine 再去 Lock 会死锁；写锁也不能降级成读锁",
+        "规则二：读锁不能递归——一旦有写者在等 Lock，后续 RLock 会被挡住，同一 goroutine 递归 RLock 就可能卡死",
+        "现在的实现里有写者优先的保证：只要有写者在等，新的 RLock 会先让位给写者，避免写者被读者饿死"
+      ],
+      "code": "var mu sync.RWMutex\ndata := map[string]int{\"a\": 1}\nmu.RLock() // 读锁：多个读者可以同时进\nv := data[\"a\"]\nmu.RUnlock()\nfmt.Println(v)",
+      "lang": "go",
+      "notes": "常见追问：RWMutex 一定比 Mutex 快吗？——不一定，短临界区里读写锁更慢；「读锁里能修改共享数据吗」——不能，读锁只保证没有写者在写，读者之间照样竞争同一个变量。"
+    },
+    {
+      "title": "sync.Once 和 sync.Map 分别适合什么场景？",
+      "answer": [
+        "sync.Once 保证一段初始化代码只执行一次，适合单例、配置加载、连接池初始化这类「只需要做一次」的事",
+        "Once.Do 里的函数 panic 时，panic 会继续往外抛，但 Once 依然被标记为已执行，之后再调 Do 不会重跑",
+        "Once 没有 Reset，想重复执行要自己在外面包一层标志位",
+        "sync.Map 是并发安全的 map，官方明确说「大多数代码应该用普通 map 加锁」，它只针对两种场景做优化",
+        "适合 sync.Map 的两种情况：某个 key 只写一次读很多次（比如只增不减的缓存）；多个 goroutine 操作互不相交的 key 集合",
+        "key 类型是 any，存进去的值类型要一致，取出来要做类型断言；遍历用 Range"
+      ],
+      "code": "var once sync.Once\nonce.Do(func() { fmt.Println(\"只执行一次\") })\nvar m sync.Map\nm.Store(\"k\", 1)\nv, _ := m.Load(\"k\")\nfmt.Println(v)",
+      "lang": "go",
+      "notes": "常见追问：普通 map 加 RWMutex 行不行？——行，而且多数场景更简单；「sync.Map 的 key 能用 struct 吗」——能，只要它是可比较类型；「Once 能当初始化开关反复用吗」——不能，它只做一次。"
+    },
+    {
+      "title": "atomic 包提供了什么？什么时候用 atomic 替代锁？",
+      "answer": [
+        "atomic 提供对单个变量的原子操作：Add（加减）、Load/Store（读写）、Swap（交换）、CompareAndSwap（CAS），以及对应的指针版本",
+        "核心是 CAS：CompareAndSwap 比较当前值和期望值，相等才写入并返回 true，不等返回 false，由调用方决定要不要重试",
+        "Go 只提供 CompareAndSwap 系列，没有「任意函数原子执行」这种通用接口",
+        "适合 atomic 的场景：计数器、状态标志位、替换一个指针这类「只动一个变量」的操作",
+        "不适合：多个字段之间要保持一致的保护（比如 map、复合结构体），这类必须用锁",
+        "替代锁的条件是临界区里只有一个变量、且不需要「先读-判断-再写」的复合逻辑；需要复合逻辑就用 CAS 循环或锁"
+      ],
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"sync/atomic\"\n)\n\nfunc main() {\n\tvar n int64\n\tatomic.AddInt64(&n, 1) // 原子加一，不用加锁\n\tfor {\n\t\tif atomic.CompareAndSwapInt64(&n, 1, 2) { // 值是 1 才改成 2\n\t\t\tbreak\n\t\t}\n\t}\n\tfmt.Println(n)\n}",
+      "lang": "go",
+      "notes": "常见追问：atomic 和 Mutex 哪个快？——atomic 不阻塞、没有上下文切换，固定计数场景明显更快；「CAS 循环会不会一直空转」——会自旋，靠竞争减少收敛，所以临界区必须很短。"
+    },
+    {
+      "title": "sync.Pool 是缓存吗？什么时候用它？",
+      "answer": [
+        "sync.Pool 是一块「临时对象池」，对象随时可能被移除，GC 时池里的内容会被丢弃（放进 victim 的对象还能再活一轮 GC，但不会长期保留），所以它不是缓存",
+        "适合复用一个包内共享的临时对象：bytes.Buffer、编解码用的 []byte、大一点的 protobuf message，目的是摊薄分配和 GC 压力",
+        "用法：Get 时池空就调 New 造一个，用完 Put 放回去；放之前要 reset 状态，否则会把脏数据带给下一个使用者",
+        "Pool 自己是并发安全的，不用额外加锁；但同一个池里的对象可能落到不同 goroutine 手里，不要在池外共享它们",
+        "不适合需要长期驻留、不能丢的对象（比如全局连接池、LRU 缓存），那要用专门的缓存结构",
+        "不适合本来就便宜的小对象：池的开销大于省下的分配"
+      ],
+      "code": "var pool sync.Pool\npool.New = func() any { return new(bytes.Buffer) }\nbuf := pool.Get().(*bytes.Buffer)\nbuf.WriteString(\"hello\")\npool.Put(buf) // 放回之前记得 reset\nfmt.Println(buf.String())",
+      "lang": "go",
+      "notes": "常见追问：Pool 里的东西什么时候会被回收？——每次 GC 周期会丢掉 victim 缓存；「New 可以返回 nil 吗」——可以，但 Get 的调用方要能处理 nil；「和对象池第三方库比」——标准库这个够用且不用担心内存泄漏。"
+    },
+    {
+      "title": "context 能做什么？为什么说不要用 context 传参数？",
+      "answer": [
+        "context 提供跨调用链的取消信号、超时控制和少量请求作用域的值传递",
+        "常用派生函数：WithCancel（手动取消）、WithTimeout/WithDeadline（超时）、WithValue（带值）；派生出来的 ctx 必须 cancel，用 defer cancel() 释放定时器",
+        "取消是协作式的：下游要自己检查 ctx.Done()，不检查的话取消不会打断正在阻塞的操作",
+        "超时是最常见的用法：ctx, cancel := context.WithTimeout(parent, 2*time.Second)，再把这个 ctx 传给所有下游调用",
+        "不要用 context 传业务参数：它是隐式依赖，参数藏在 ctx.Value 里编译期查不到、类型是 any 要自己断言，读代码时只剩一个 ctx",
+        "context.Value 只适合放贯穿整条调用链的元数据，比如 request ID、trace ID；key 用自定义类型，别用裸 string 免得撞车"
+      ],
+      "code": "ctx, cancel := context.WithTimeout(context.Background(), time.Second)\ndefer cancel() // 必须调用，释放定时器\nselect {\ncase <-ctx.Done():\n\tfmt.Println(\"超时或被取消:\", ctx.Err())\ncase <-time.After(2 * time.Second):\n\tfmt.Println(\"提前完成\")\n}",
+      "lang": "go",
+      "notes": "常见追问：context 能不能当结构体字段？——不建议，它是控制信号不是数据通道；「父 context 被取消子 context 会怎样」——自动一起取消；「后台任务要不要用 context.Background()」——不用就别造，用 TODO 标明是刻意为之。"
+    },
+    {
+      "title": "errgroup 解决了什么问题？和 WaitGroup 有什么区别？",
+      "answer": [
+        "errgroup.Group 让一组 goroutine 并发执行，并收集第一个非 nil 错误；第一个错误出现时会取消由它派生的 context，通知同组其它任务收工",
+        "基本用法：g, ctx := errgroup.WithContext(ctx)；g.Go(func() error { ... })；err := g.Wait()",
+        "和 WaitGroup 的区别：WaitGroup 只计数、只管「等不等得到」，errgroup 同时负责等待、传递第一个错误、并且能取消同组的其它任务",
+        "因为会被取消，每个任务内部要用 errgroup 派生的那个 ctx 去发请求，否则第一个错误出现后其它请求还在跑",
+        "不需要取消时可以直接用零值 errgroup.Group{}，此时只有 Wait 返回第一个错误",
+        "它在 golang.org/x/sync/errgroup，不在标准库里，要 go get golang.org/x/sync 引入"
+      ],
+      "notes": "常见追问：多个错误都要拿到怎么办？——errgroup 只保留第一个，想拿全部得自己把错误收集进 slice；「x/sync 稳定吗」——是官方维护的扩展模块，但不在标准库，版本跟着 go.mod 走；「和 WaitGroup 能一起用吗」——可以，errgroup 内部就是用计数实现的。"
+    },
+    {
+      "title": "什么是 data race？怎么检测？",
+      "answer": [
+        "data race 是两个 goroutine 并发访问同一块内存、至少有一个是写、并且没有任何同步关系（happens-before）",
+        "后果不是「结果算错一点」，而是未定义行为：并发写 map 会直接 fatal error: concurrent map writes，程序退出，recover 也救不回来",
+        "检测工具是 go test -race ./...，编译时插桩，运行时发现竞争会打印两处冲突访问的调用栈",
+        "race detector 只报告「确实发生了」的竞争，跑一次没报不等于没有竞争——竞争窗口小、调度顺序不固定时才更难复现",
+        "修法：加锁（Mutex/RWMutex）、用 channel 把数据传出去而不是共享、用 atomic 做单变量的原子操作，或者从设计上就不共享",
+        "go build -race 也能给二进制插桩，但会变慢，一般只在测试和排查时用"
+      ],
+      "notes": "常见追问：为什么平时跑测试没发现？——竞争窗口小，调度顺序又不固定；「race detector 能发现死锁吗」——不能，它只管数据竞争，不管死锁和逻辑错误；「和 GOMAXPROCS 有关吗」——有关，多核才更容易暴露竞争。"
+    },
+    {
+      "title": "什么时候用 channel，什么时候用 Mutex？",
+      "answer": [
+        "用 channel：要把数据交给别的 goroutine、把多个来源汇到一个地方、用信号通知（发值或关闭）、或者想让对方决定什么时候能继续",
+        "用 Mutex：多个 goroutine 要改同一份共享状态，尤其是「读出来-改一改-写回去」这种复合操作",
+        "判据是所有权：数据的所有权能明确移交就用 channel，数据必须共享就用锁",
+        "两者可以混用：channel 传消息、锁保护共享的结构体，真实代码里经常是这种组合",
+        "不要用 channel 模拟互斥锁：写个「令牌 channel」绕一圈还容易漏 close，直接用 Mutex 更清楚",
+        "共享状态越来越复杂时优先考虑 channel：把「共享」改成「传递」，问题往往自己就没了"
+      ],
+      "notes": "常见追问：Go 官方更推荐哪个？——官方说法是「用 channel 传递数据、用锁保护共享状态」；「什么时候 channel 更合适」——当你想把「谁先做、什么时候做」的控制权交给对端时；「两者性能差多少」——channel 有调度开销，锁更轻但更易写错。"
+    }
+  ]
+}

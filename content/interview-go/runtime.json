@@ -1,0 +1,215 @@
+{
+  "id": "runtime",
+  "title": "Go 运行时与调度器",
+  "entries": [
+    {
+      "title": "Go 程序的初始化顺序是怎样的？",
+      "description": "包级变量、init 函数、main 的先后顺序由规范定死，写全局状态或 init 逻辑时必须按它设计。",
+      "answer": [
+        "运行时先把自己初始化好（内存分配器、调度器），再按依赖关系初始化各个包：被依赖的包先初始化，main 包最后",
+        "同一个包内的包级变量按声明顺序求值，但会先把被它引用的变量算好，所以 var a = b、var b = 1 也是安全的",
+        "包级变量全部初始化完之后，才执行这个包的 init() 函数；同一个文件里多个 init 按声明顺序执行",
+        "main 包的 init() 全部执行完，才调用 main.main()",
+        "init() 和包级变量初始化都在 main goroutine 里串行执行；init 里 go 出去的 goroutine 谁先跑不保证",
+        "init() 里可以启动 goroutine，但不能假设 main 已经开始执行，也不能从 init 里读 main 的返回值"
+      ],
+      "notes": "常见追问：init() 能返回错误吗？init() 里 panic 会怎样？——init 不能返回错误，只能 panic；init 里 panic 会让程序在 main 之前就崩掉。常见错误回答：「init 一定先于包级变量初始化」，顺序反了。",
+      "code": "package main\n\nimport \"fmt\"\n\nvar order = []string{\"包级变量\"}\n\nfunc init() {\n\torder = append(order, \"init\")\n}\n\nfunc main() {\n\torder = append(order, \"main\")\n\tfmt.Println(order)\n}",
+      "lang": "go"
+    },
+    {
+      "title": "goroutine 有哪些状态？它的生命周期是怎样的？",
+      "description": "调度器眼里 goroutine 只是一个状态机，问生命周期基本就是在问这些状态之间怎么流转。",
+      "answer": [
+        "G 的状态固定为 idle、runnable、running、syscall、waiting、dead 六种，定义在 runtime/runtime2.go",
+        "idle 表示已创建但没在运行，dead 表示函数已经返回；这两种状态的 g 会回收进空闲列表复用",
+        "runnable 是就绪待调度，running 是正在某个 M 上执行，一个 G 同一时刻只能挂在一个 M 上",
+        "waiting 是阻塞在 channel、锁、select、网络 I/O 上；syscall 是陷入内核还没回来",
+        "完整生命周期：go 语句创建 → runnable → running → 阻塞时变 waiting 或 syscall → 被唤醒回 runnable → 函数返回变 dead",
+        "Go 没有暴露查询 goroutine 状态的 API，只能用 runtime.NumGoroutine 看数量、用 pprof 的 goroutine profile 侧面观察"
+      ],
+      "notes": "常见追问：goroutine 的执行顺序能保证吗？——不能，Go 不保证任何执行顺序。常见错误回答：「goroutine 会在用户态和内核态之间切换」——只有做系统调用时才会进内核。"
+    },
+    {
+      "title": "GMP 模型是什么？G、M、P 分别代表什么？",
+      "description": "Go 调度器的核心数据结构，面试里几乎一定会问，属于必须能一口气讲清三层的题。",
+      "answer": [
+        "G（goroutine）是 goroutine 的描述结构 runtime.g：保存栈指针、栈大小、调度状态、入口函数等信息",
+        "M（machine）是 OS 线程的封装 runtime.m：绑定一个真实线程，保存当前正在跑的 g，线程退出 M 才结束",
+        "P（processor）是逻辑处理器 runtime.p：数量等于 GOMAXPROCS，持有本地运行队列、内存分配缓存 mcache 和 GC 状态",
+        "一个 M 同一时刻只能绑一个 P，一个 P 同一时刻只能挂一个 M；P 是工位，M 是干活的人",
+        "引入 P 是为了把「同时执行多少段 Go 代码」和「有多少个 M」解耦：M 可以多于 P（系统调用阻塞时多开），P 则贴着 CPU 核数",
+        "调度流程：M 绑上 P → 依次从 runnext、本地 runq、全局队列取 G → 执行 → G 阻塞就把 P 让给下一个 G"
+      ],
+      "notes": "常见追问：为什么不是 G-M 两层？——两层的调度队列要加全局锁，多核下竞争严重；P 把队列做成 per-P 的无锁结构。常见错误回答：「G 就是 goroutine，M 就是线程」——G 是数据结构，不是执行流。"
+    },
+    {
+      "title": "P 自己的活干完了，Go 怎么从别的 P 手里抢任务？",
+      "description": "work stealing 是 GMP 模型的负载均衡机制，也是「为什么 Go 不需要全局调度锁」的答案。",
+      "answer": [
+        "每个 P 有自己的本地运行队列 runq（最多 256 个）、最近一个 runnext，以及所有 P 共享的全局队列",
+        "取任务的顺序是 runnext → 本地 runq（队列超过 256 个时把一半倒进全局队列）→ 全局队列（一次取一半）",
+        "本地队列空了才进入 stealing：随机挑一个别的 P，从它的队列尾部偷走一半（runqsteal）",
+        "偷尾部是因为生产者往头部 push，只动尾部才能不跟生产者抢锁，这是无锁实现的关键",
+        "全局队列每 61 次调度会被强制检查一次，避免某个 P 一直占着全局队列里的活不干活",
+        "全都偷不到时，P 会去看有没有网络 I/O 就绪（netpoll）、要不要帮忙 GC，最后 M 才进入空闲状态"
+      ],
+      "notes": "常见追问：为什么偷一半而不是全部？——一半能快速平衡负载，又减少两个 P 盯着同一个队列的竞争。常见错误回答：「work stealing 是 Go 1.14 才有的」——更早的调度器就有，Go 1.14 改的是抢占机制。"
+    },
+    {
+      "title": "sysmon 是干什么的？",
+      "description": "运行时的看门狗线程，面试官常拿它考「调度器之外还有谁在干活」。",
+      "answer": [
+        "sysmon 是运行时的后台线程，不绑定任何 G，专门做监控和干预类的工作",
+        "抢占：发现有 P 上的 G 连续运行超过 10ms，就对它发起异步抢占（preemptM）",
+        "抢回 P：某个 M 卡在系统调用里超过 10ms 时，把它的 P 抢回来交给别的 M，并销毁多余的空闲 P",
+        "驱动网络轮询：调用 netpoll 把已就绪的连接唤醒，唤醒阻塞在网络 I/O 上的 goroutine",
+        "强制 GC：每约 2 分钟检查一次，上次 GC 之后分配得太快就强制触发一次 GC",
+        "它的休眠是自适应的：空闲时 20µs 起步，逐步拉长到最多 10ms 一轮"
+      ],
+      "notes": "常见追问：sysmon 是不是一个 goroutine？——不是，它是一个系统线程（M），跑在运行时自己的栈上。常见错误回答：「sysmon 负责调度」——调度是 M 自己在做，sysmon 只做监控和干预。"
+    },
+    {
+      "title": "什么是协作式抢占？它为什么会让程序卡死？",
+      "description": "Go 1.14 之前的抢占方式，也是解释「为什么我的程序有时候整个卡住」的经典答案。",
+      "answer": [
+        "协作式抢占指：运行时要抢走一个 G，必须等它自己跑到「安全点」主动让出",
+        "安全点由编译器插入，位置包括函数调用、循环回边、栈增长检查、内存分配等",
+        "抢占标志由 sysmon 设置，G 在下一个安全点检查到标志才切换出去",
+        "所以一个纯计算的死循环（没有函数调用）永远走不到安全点，这个 G 会一直霸占它的 P",
+        "Go 1.14 之前这样的死循环能让同 P 上的其它 goroutine 全部饿死，表现为程序毫无反应",
+        "抢占本身有代价，运行时不能无条件打断任意指令，所以才有「安全点」这个概念"
+      ],
+      "notes": "常见追问：怎么判断一段代码会不会卡住别人？——看循环体里有没有函数调用，`for { i++ }` 这种最危险。常见错误回答：「Go 的抢占靠操作系统时间片」——Go 自己调度，不依赖内核时间片。"
+    },
+    {
+      "title": "Go 1.14 的异步抢占是怎么做到的？",
+      "description": "Go 1.14 发布说明里写明「Goroutines are now asynchronously preemptible」，是版本差异必考点。",
+      "answer": [
+        "Go 1.14 起 goroutine 可以被异步抢占，解决死循环饿死其它 goroutine 的老问题",
+        "sysmon 发现某个 G 连续跑了超过 10ms，就调用 preemptM 给它打上抢占标记",
+        "如果这个 M 正在执行纯 Go 代码，运行时给它所在的线程发信号（Linux 上是 SIGURG），由信号处理程序把 G 切回调度器",
+        "线程被打断后不是立刻换人，而是跳到运行时的抢占跳板，在那里保存状态、重新调度",
+        "限制：cgo 调用、正在执行的系统调用、运行时内部的临界区不能被异步打断",
+        "信号机制不可用的平台（如 js/wasm）退化成协作式抢占，写代码时不能假设死循环一定被打断"
+      ],
+      "notes": "常见追问：异步抢占等于操作系统的抢占吗？——不等于，OS 线程仍被 Go 完全占有，信号只是打断 Go 代码的手段。常见错误回答：「Go 1.14 之后靠时间片抢占」——Go 没有时间片，是 sysmon 定时检查加信号。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\tgo func() {\n\t\tx := 0\n\t\tfor i := 0; i < 200000000; i++ {\n\t\t\tx += i\n\t\t}\n\t\tfmt.Println(\"计算结束\", x)\n\t}()\n\ttime.Sleep(50 * time.Millisecond)\n\tfmt.Println(\"主 goroutine 没被计算循环卡住\")\n}",
+      "lang": "go"
+    },
+    {
+      "title": "goroutine 的栈有多大？栈是怎么增长的？",
+      "description": "栈是 goroutine 便宜的关键，也是「为什么 Go 能开百万个 goroutine」这个问题的一半答案。",
+      "answer": [
+        "goroutine 初始栈是 2KB（runtime 里的 _StackMin 常量），64 位下一个 goroutine 的栈最大 1GB",
+        "栈由运行时分配和管理，跟操作系统线程的栈是两套东西，线程栈通常 MB 级由内核管理",
+        "需要更多空间时触发 morestack：新栈按 2 倍增长，然后把旧栈内容拷贝过去（copystack）",
+        "拷贝时还要扫描栈上所有指针，把指向栈内的引用修正到新栈，这一步比拷贝本身更贵",
+        "GC 扫描栈时发现某个 goroutine 只用了不到 1/4 的空间，会把它的栈收缩回去",
+        "深递归或大块栈上局部变量会频繁触发扩容拷贝，这是 Go 早期栈性能问题的根源"
+      ],
+      "notes": "常见追问：拷贝栈时正在运行的 goroutine 怎么办？——它自己就是拷贝过程的一部分，切到新栈后继续跑。常见错误回答：「goroutine 栈也是 8MB」——那是线程栈，goroutine 栈是 2KB 起步按需增长。"
+    },
+    {
+      "title": "Go 1.19 之后 goroutine 栈的分配方式有什么变化？",
+      "description": "版本差异题，答「没变化」或者「取消了栈拷贝」都是错的。",
+      "answer": [
+        "Go 1.19 的发布说明写明：runtime 现在按历史上 goroutine 的平均栈使用量来分配新 goroutine 的初始栈",
+        "以前新 goroutine 一律从 2KB 起步，用得稍深就得扩容并拷贝；现在初始大小贴合平均值，平均情况下不再有早期扩容和拷贝",
+        "代价是偏浅的 goroutine 最多浪费约 2 倍栈空间",
+        "扩容机制本身没变：仍然按 2 倍增长并拷贝栈，2KB 仍是下限",
+        "所以「每个 goroutine 初始 2KB」只对 Go 1.19 之前成立，Go 1.19 及以后初始大小是自适应的",
+        "排查内存别拿 2KB 当基准：runtime.ReadMemStats 的 StackInuse 是当前所有 goroutine 栈占用的总量"
+      ],
+      "notes": "常见追问：这是不是意味着栈不再拷贝了？——不是，copystack 还在，只是初始分配更贴合实际用量，减少了拷贝次数。常见错误回答：「Go 1.19 取消了栈拷贝」——取消的是「每个 goroutine 都从 2KB 起步」。"
+    },
+    {
+      "title": "goroutine 泄露是怎么产生的？怎么排查？",
+      "description": "线上服务最常见的故障之一，面试官想听的是成因分类和定位手段。",
+      "answer": [
+        "成因是 goroutine 被永久阻塞、再也醒不过来：channel 没人发送或接收、WaitGroup 漏了 Done、锁死锁",
+        "常见来源：context 没有 cancel、time.Ticker 没 Stop、http.Response.Body 没 Close、errgroup 的子任务卡住",
+        "典型症状是 goroutine 数量只增不减，内存被栈和堆一起拖高，GC 压力变大甚至 OOM",
+        "看数量用 runtime.NumGoroutine()，适合做监控指标，涨上去不回落就是泄露信号",
+        "看位置用 runtime.Stack(buf, true) 打印所有 goroutine 的栈，或用 pprof 的 goroutine profile（/debug/pprof/goroutine?debug=2）看每个 goroutine 卡在哪一行",
+        "防和测：给 goroutine 配 context 超时、defer cancel()、defer ticker.Stop()；单测里用 uber-go/goleak 断言没有残留"
+      ],
+      "notes": "常见追问：pprof 的 goroutine profile 怎么用来查泄露？——它直接给出每个 goroutine 的阻塞点和等待原因，是定位泄露最直接的手段。常见错误回答：「goroutine 泄露就是内存泄漏」——goroutine 泄露会连带造成内存泄露，根因是 goroutine 卡住。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n\t\"time\"\n)\n\nfunc main() {\n\tfmt.Println(\"启动前:\", runtime.NumGoroutine())\n\tch := make(chan int)\n\tgo func() {\n\t\t<-ch // 永远等不到值，这个 goroutine 就泄漏了\n\t}()\n\ttime.Sleep(100 * time.Millisecond)\n\tfmt.Println(\"启动后:\", runtime.NumGoroutine())\n}",
+      "lang": "go"
+    },
+    {
+      "title": "Go 在什么情况下会创建新的 M（OS 线程）？",
+      "description": "M 的数量不受 GOMAXPROCS 约束，面试官常拿它和「一个 goroutine 一个线程」的老模型对比。",
+      "answer": [
+        "程序启动时：运行时创建主线程 m0，再单独创建一个跑 sysmon 的线程",
+        "go 语句创建 G 时，如果当前 M 不可用（比如它正阻塞在系统调用里），运行时会 newm 出一个新 M 来接手",
+        "sysmon 从卡在系统调用里的 M 手里抢回 P 时，需要另一个 M 来执行被抢下来的 G",
+        "cgo 场景：可能从 C 回调进 Go 的线程需要提前准备模板线程（template thread）",
+        "M 的数量没有硬上限，也不受 GOMAXPROCS 限制——GOMAXPROCS 限制的是 P，M 可以比 P 多",
+        "空闲的 M 会放进 idle 列表留着复用，M 太多时多余的会退出回收"
+      ],
+      "notes": "常见追问：M 会不会无限增长？——不会，空闲 M 会复用并在超限时销毁，但系统调用密集时 M 数确实会超过核数。常见错误回答：「一个 goroutine 一个线程」——那是 Go 1.2 之前的模型。"
+    },
+    {
+      "title": "GOMAXPROCS 是什么？它和 CPU 核数是什么关系？",
+      "description": "最常被追问的运行时参数，面试官通常还会追问「调大调小分别什么时候用」。",
+      "answer": [
+        "GOMAXPROCS 就是 P 的数量，决定同一时刻最多有多少个 goroutine 在执行 Go 代码",
+        "Go 1.5 起默认值是逻辑 CPU 数（runtime.NumCPU()）；Go 1.25 起在 Linux 容器里还会参考 cgroup 的 CPU 限额",
+        "设置方式：启动时用环境变量 GOMAXPROCS=n，或运行时调 runtime.GOMAXPROCS(n)；runtime.GOMAXPROCS(0) 只是查询当前值",
+        "它不是 CPU 配额：设成 1 只是不能并行，不会限制单个 goroutine 能占多少 CPU",
+        "阻塞在系统调用的 goroutine 会把 P 让出去，所以 syscall 密集的程序即使 GOMAXPROCS=1 也可能用满多核",
+        "调参方向：IO 密集适当调大以掩盖等待，CPU 密集一般贴着核数或留一两个核给 GC 和其它进程"
+      ],
+      "notes": "常见追问：调小 GOMAXPROCS 会立刻杀掉正在跑的 goroutine 吗？——不会，它在下一个调度点才生效，属于软限制。常见错误回答：「GOMAXPROCS 越大 CPU 占用越高」——IO 密集时调大提升的是并发吞吐，不是 CPU 占用。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n)\n\nfunc main() {\n\tfmt.Println(\"逻辑核数:\", runtime.NumCPU())\n\tfmt.Println(\"GOMAXPROCS:\", runtime.GOMAXPROCS(0))\n}",
+      "lang": "go"
+    },
+    {
+      "title": "goroutine 阻塞的时候，P 是交给别人还是继续占着 M？",
+      "description": "这一问直接决定了对 Go 调度器的理解是否到位，答案要区分两类阻塞。",
+      "answer": [
+        "分两种阻塞：阻塞在 channel、锁、select、网络 I/O 上属于用户态阻塞",
+        "用户态阻塞时 goroutine 进入 waiting 状态，把 M 让出来给 P 上的下一个 G 用，P 始终绑在这个 M 上",
+        "所以 Go 的协程阻塞不会浪费 OS 线程，这也是 Go 比「线程池加阻塞 IO」高效的根本原因",
+        "阻塞在系统调用里则不同：goroutine 进入 syscall 状态，M 陷在内核里，P 必须通过 handoff 交给别的 M",
+        "如果一时没有 M 接手，这个 P 就变成空闲态，并行度下降——这就是系统调用昂贵的代价",
+        "Go 1.14 之后 sysmon 会盯着：某个 M 在系统调用里超过 10ms，就把它的 P 抢回来交给别的 M"
+      ],
+      "notes": "常见追问：阻塞在 channel 上和阻塞在 syscall 上有什么本质区别？——前者不占 M，后者占 M 还要让出 P。常见错误回答：「goroutine 阻塞会占住一个线程」——只有系统调用才会。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\tch := make(chan int)\n\tgo func() {\n\t\t<-ch // 永久阻塞，不占用 OS 线程\n\t}()\n\ttime.Sleep(50 * time.Millisecond)\n\tfmt.Println(\"主 goroutine 照样往下走\")\n}",
+      "lang": "go"
+    },
+    {
+      "title": "“all goroutines are asleep - deadlock!” 是怎么判定出来的？",
+      "description": "Go 特有的死锁检测，面试官爱问它的判定边界在哪里。",
+      "answer": [
+        "运行时每轮调度结束后都会做一次死锁检查，看是不是所有 goroutine 都处于不可运行状态",
+        "判定条件：没有 goroutine 处于 running 或 runnable，并且没有正在等待的定时器、没有正在进行的系统调用",
+        "满足条件就打印 fatal error: all goroutines are asleep - deadlock! 并直接结束进程",
+        "典型场景：main 里向一个无缓冲 channel 发送，而唯一能接收它的 goroutine 已经在等别的东西",
+        "反过来，只要还有定时器或系统调用悬着，运行时就不判死锁——程序会一直挂着，看起来像卡死却没有报错",
+        "这个检查是全局的：单个 goroutine 永久阻塞而别的 goroutine 还在跑，不会触发这个 fatal error"
+      ],
+      "notes": "常见追问：main 返回时所有 goroutine 都阻塞，会报死锁吗？——不会，main 返回就是正常退出，运行时直接结束进程。常见错误回答：「死锁检测能发现所有死锁」——它只覆盖「全员睡着」这一种。",
+      "code": "ch := make(chan int)\n<-ch // 所有 goroutine 都在等，运行时判定死锁并结束进程\nfmt.Println(\"执行不到这里\")",
+      "lang": "go"
+    },
+    {
+      "title": "goroutine 和操作系统线程是什么关系？",
+      "description": "面试里问「goroutine 是不是轻量级线程」的根源题，答清楚对应关系才算过关。",
+      "answer": [
+        "goroutine 是 Go 运行时的调度单元，由用户态的 Go 调度器直接调度，不需要内核参与",
+        "M 才是真正绑在 OS 线程上跑指令的，一个 M 同一时刻只跑一个 goroutine",
+        "大量 goroutine 复用少量 M：M 的数量大致等于 GOMAXPROCS，再加上系统调用阻塞时的额外线程",
+        "切换 goroutine 只是换栈和寄存器，在用户态完成，不需要内核态切换，代价远小于切换线程",
+        "goroutine 阻塞在 channel 或锁上时完全不占 OS 线程；阻塞在系统调用里才会占住 M 并连带影响 P",
+        "Go 1.2 之前还是「一个 goroutine 对应一个线程」的老模型，2013 年重写调度器之后才变成现在这样"
+      ],
+      "notes": "常见追问：goroutine 是协程吗？——是 Go 实现的协程，但和用户自己写的非抢占式协程不同，Go 的 goroutine 是可抢占的。常见错误回答：「goroutine 就是轻量级线程」——它不绑定线程，栈和调度都由运行时管。",
+      "code": "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n\t\"sync\"\n)\n\nfunc main() {\n\tvar wg sync.WaitGroup\n\tfor i := 0; i < 1000; i++ {\n\t\twg.Add(1)\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\truntime.Gosched() // 主动把 CPU 让给别的 goroutine\n\t\t}()\n\t}\n\twg.Wait()\n\tfmt.Println(\"跑完了\", runtime.NumGoroutine(), \"个 goroutine\")\n}",
+      "lang": "go"
+    }
+  ]
+}
