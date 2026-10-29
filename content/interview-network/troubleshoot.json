@@ -1,0 +1,177 @@
+{
+  "id": "troubleshoot",
+  "title": "网络问题排查",
+  "entries": [
+    {
+      "title": "常用网络排查工具有哪些？分别用来查什么？",
+      "answer": [
+        "ping：发 ICMP echo 请求，验证三层可达性并测往返时延；ping 通只说明主机会回包，不代表任何端口是开放的",
+        "traceroute / tracepath / mtr：靠递减 TTL 逐跳探测，定位在哪一跳开始不通、延迟在哪跳跳变；mtr 持续统计丢包率，排查链路质量更实用",
+        "telnet host port 或 nc -vz host port：纯 TCP 建连测试，判断某个端口通不通；现代镜像里 telnet 常被裁掉，可以用 nc 或 bash 的 /dev/tcp 替代",
+        "nslookup / dig / host：查 DNS 解析结果；dig 最完整，支持指定 A/AAAA/CNAME 等记录类型，+trace 从根域逐级追查、+short 只输出结果",
+        "ss -lntp / netstat -lntp：看本机监听了哪些端口、分别属于哪个进程；ss 来自 iproute2，比 netstat 快且信息更全，netstat 所在的 net-tools 已停止维护",
+        "curl -v / curl -w：从应用层探活，-v 打印 DNS、TCP、TLS、HTTP 各阶段细节，-w 能分别打出 time_namelookup、time_connect、time_starttransfer 的耗时",
+        "curl --resolve 还能指定域名对应的 IP，绕过 DNS 直接验证服务本身；mtr、ss、dig、tcpdump 这一组组合基本能覆盖绝大多数网络问题"
+      ],
+      "notes": "常见追问：telnet 和 nc 有什么区别？——nc（netcat）功能更多，-z 只探端口不发数据，telnet 连上后会先发协议协商字节。常见追问：为什么现在不推荐 telnet？——明文协议、镜像里常被裁掉、容易和「HTTP 请求」混淆。常见追问：ping 通为什么还是访问不了？——ping 走 ICMP，访问走 TCP，端口、路由、防火墙策略是三套独立机制。常见错误回答：「ping 不通就是主机挂了」——大量云环境默认屏蔽 ICMP，机器活着只是不回 echo。"
+    },
+    {
+      "title": "tcpdump 怎么抓包才能看清连接过程？",
+      "answer": [
+        "先框范围再抓：tcpdump -i any -nn -s 0 'tcp port 8080'，-i any 抓所有网卡、-nn 不做主机名和服务名反查（否则慢且看不出真实 IP）、-s 0 保存完整包不截断",
+        "只看握手用过滤器：'tcp port 8080 and (tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0)'，纯 ACK 和数据段会被滤掉，握手与断开一眼看清",
+        "只看 SYN 重传：'tcp port 8080 and tcp[tcpflags] & tcp-syn != 0'，同一个 SYN 出现多次就是重传，说明对端一直没回 SYN-ACK",
+        "存文件再分析：加 -w /tmp/cap.pcap，用 tcpdump -r 回放、用 Wireshark 打开，比在终端里实时刷屏容易读得多",
+        "抓包里读方向和状态：只有客户端的 SYN、没有服务端的 SYN-ACK，说明包在到达服务端之前就被丢了（防火墙或链路）；有 SYN-ACK 但紧跟 RST，说明端口没有进程监听",
+        "抓包点会影响结果：网卡上的 TSO/GRO 合并会让包看起来异常大，必要时用 ethtool -k eth0 确认 offload 状态、用 ethtool -K eth0 tso off gro off 关掉再抓",
+        "抓包有成本：会占 CPU 和内存，高流量机器上要限制网卡、端口和时长，必要时用 -c 限制包数或用 --immediate-mode 及时落盘"
+      ],
+      "notes": "常见追问：为什么抓出来的包有 65KB？——网卡 offload 把多个段合并了，要在抓包点之前关掉 TSO/GRO。常见追问：-nn 到底解决什么？——不做 PTR 反查，避免 DNS 阻塞拖慢抓包，也能看清真实 IP。常见追问：抓包会不会影响线上？——会，尽量用窄过滤条件并控制时长。常见错误回答：「抓包能看出所有问题」——抓包只反映抓包那个点的视角，上游丢包要在链路两端对照着抓。"
+    },
+    {
+      "title": "ping 通但访问不了服务，可能是什么原因？",
+      "answer": [
+        "端口没在监听：服务没起来、起在别的端口，或者只监听了 127.0.0.1；用 ss -lntp 看清绑定地址是 0.0.0.0 还是 127.0.0.1",
+        "防火墙或安全组按端口丢包：ping 走 ICMP、访问走 TCP，两套策略互相独立，ICMP 放行不代表 TCP 端口放行",
+        "DNS 解析到了另一台机器：多 IP、轮询 DNS 或 CDN，ping 的目标和实际建立连接的机器不是同一台",
+        "协议或 TLS 不匹配：把 HTTPS 请求发到 80 端口、服务端只支持特定 TLS 版本或证书链不全，TCP 能建连但应用层失败",
+        "MTU/PMTU 黑洞：小包能通、大包卡住，表现为 TCP 握手成功但请求或响应发不出去",
+        "容器端口没映射：docker run 缺 -p、K8s 的 Service 没暴露端口，宿主机本地能通而集群外不通",
+        "服务进程在但业务线程卡死：端口接受连接后不再响应数据，属于应用层问题，不是网络问题"
+      ],
+      "notes": "常见追问：ping 不通但服务访问正常？——ICMP 被防火墙禁掉或主机禁用了 ICMP 响应。常见追问：怎么快速区分「端口没开」和「被防火墙挡」？——被 DROP 会一直等到超时，被 REJECT 会立刻返回 connection refused。常见追问：ping 用大包测还通吗？——ping -M do -s 1472 可以发现 MTU 黑洞。常见错误回答：「ping 通说明服务正常」——ping 只覆盖三层可达性，四层和应用层的问题一概照不出来。"
+    },
+    {
+      "title": "怎么确认是 DNS 问题还是服务问题？",
+      "answer": [
+        "先读报错原文：Could not resolve host、temporary failure in name resolution 是 DNS 侧；Connection refused、Connection reset 是连接侧",
+        "拿到解析结果对比：dig +short example.com 看最终 IP，dig example.com A +trace 看解析链在哪一级断掉",
+        "关键手法是绕过 DNS 直连：curl --resolve example.com:443:1.2.3.4 https://example.com/，能通就是 DNS 问题，不能通就是服务或网络问题",
+        "直接用 IP 试：curl -v http://1.2.3.4/ 看是不是应用层报错，再配 -H 'Host: example.com' 复现虚拟主机和路由的差异",
+        "查本机 DNS 配置：/etc/resolv.conf 的 nameserver、search、ndots，/etc/nsswitch.conf 的查询顺序，/etc/hosts 的静态覆盖；容器里还要看是否继承了宿主机的 resolv.conf",
+        "分层验证 DNS 服务本身：dig @8.8.8.8 example.com 与 dig @公司DNS example.com 对比，只有内网 DNS 失败说明是它的转发或缓存配置有问题"
+      ],
+      "notes": "常见追问：dig +trace 有什么用？——从根域逐级查，能看出解析是在哪一级断掉的。常见追问：改了 hosts 为什么不生效？——看 nsswitch.conf 的查询顺序、容器内改的是不是真的那个文件、以及 DNS 缓存。常见追问：DNS 时好时坏怎么查？——多个 nameserver 是否全挂、超时是否设得太短、是否有 IPv6 解析只拿到 AAAA 的情况。常见错误回答：「换个公网 DNS 就好了」——内网是 split-horizon DNS，换公网 DNS 会解析到错误的地址。"
+    },
+    {
+      "title": "connection refused 和 connection reset 有什么区别？",
+      "answer": [
+        "refused 表示报文到达了主机、但目标端口没有进程监听，内核直接回一个 RST，所以客户端几乎瞬间就失败",
+        "reset 表示连接已经建立（或正在建立）后被对端强行断开，常见于服务进程崩溃或重启、连接被服务端主动 RST 掉",
+        "典型 reset 场景：负载均衡或 NAT 上的 idle timeout 回收了空闲连接，客户端复用这条死连接发请求就收到 RST，重试一次又好了",
+        "抓包能直接分辨：refused 是 [R.]（RST+ACK），出现在握手之前；reset 通常发生在握手之后。用 tcpdump -i any -nn 'tcp port 8080 and tcp[tcpflags] & tcp-rst != 0' 看 RST 由哪个 IP 发出",
+        "服务端侧要核对：ss -lnt 看进程是否还活着、监听端口是否换过、服务日志里有没有崩溃或重启记录",
+        "中间的防火墙和 LB 也可能是发 RST 的那一方：它们的 REJECT 策略在客户端看来和 refused 一模一样"
+      ],
+      "notes": "常见追问：refused 能不能说明防火墙没拦？——不能，防火墙用 REJECT 策略也会回 RST，客户端表现完全一样。常见追问：为什么请求体上传到一半断了？——常见于中途被 RST，要看两端的 MTU 和中间设备的连接跟踪表。常见追问：reset 一定是服务端发的吗？——不一定，客户端收到的是对端方向的 RST，发起方可能是中间设备。常见错误回答：「refused 是客户端的问题、reset 是服务端的问题」——两者都可能是网络设备发出的。"
+    },
+    {
+      "title": "服务端口通但服务无响应，怎么排查？",
+      "answer": [
+        "先分清是连不上还是连上没反应：curl -v --max-time 5 http://ip:port/，看它停在 DNS、TCP 连接、TLS 握手还是等待首字节",
+        "端口通但握手发不出去：ss -lnt 看监听端口的 Recv-Q（当前已完成握手、等待 accept 的连接数）是否贴住 Send-Q（backlog 上限），贴满说明全连接队列溢出，新连接被内核悄悄丢掉",
+        "端口通、握手成功但应用层卡住：查服务端进程，Go 服务抓 pprof 的 goroutine profile 或 kill -QUIT 打栈，看是不是死锁、GC 停顿、下游调用超时",
+        "最常见的原因是慢在依赖上：数据库、缓存、第三方接口超时或锁等待，服务端口正常但业务线程全卡在下游调用上",
+        "客户端侧也要取证：抓包确认请求报文发出去没有、服务端有没有回；有请求无响应是服务端问题，有响应但很慢是处理慢",
+        "别漏了 MTU 黑洞：小的 GET 正常、大的响应卡住，用 ping -M do -s 1472 测路径 MTU 能验出来"
+      ],
+      "notes": "常见追问：连接建起来但服务端不返回，算超时还是拒绝？——超时是一直等到自己的 connect timeout 才报错。常见追问：怎么快速判断是服务端慢还是链路慢？——分别量服务端处理耗时和客户端 TCP 层耗时。常见追问：服务假死时先做什么？——先看 ss -lnt 的队列长度和 goroutine 栈，别急着重启。常见错误回答：「端口通就说明服务是好的」——TCP 握手和业务处理是两码事。"
+    },
+    {
+      "title": "TIME_WAIT 状态太多怎么排查和处理？",
+      "answer": [
+        "先量规模再看来源：ss -ant state time-wait | wc -l 统计总数，再按本地端口聚合 ss -ant state time-wait | awk '{print $3}' | sort | uniq -c | sort -rn | head 找出是哪段流量在刷",
+        "定位是哪一方在攒：TIME_WAIT 落在主动关闭连接的一方，谁先发 FIN 谁背锅；客户端主动关就是客户端攒，服务端主动关就是服务端攒",
+        "真正要防的是临时端口耗尽：net.ipv4.ip_local_port_range 默认 32768-60999，约 2.8 万个端口，耗尽时报 cannot assign requested address，这时客户端才是真正的受害者",
+        "Go 侧最常见的根因是连接池配置：http.DefaultTransport 的 MaxIdleConnsPerHost 默认只有 2，高并发下连接反复创建关闭，要显式调大并配合长连接",
+        "三个系统参数别搞混：tcp_tw_reuse=1 让主动发起连接时复用 TIME_WAIT（Linux 4.12 起默认是 2，只对 loopback 生效）；tcp_max_tw_buckets 限制总数，超了内核直接回收；tcp_fin_timeout 管的是 FIN_WAIT2，调它对 TIME_WAIT 没用",
+        "别和 CLOSE_WAIT 混了：CLOSE_WAIT 是对端已发 FIN 而本地没 close，说明应用代码漏了关闭；TIME_WAIT 只是正常关闭的尾巴，本身不代表故障"
+      ],
+      "notes": "常见追问：TIME_WAIT 能不能直接砍掉？——它保护最后 ACK 的重传和旧报文的隔离，砍掉要付出重传和串包的代价。常见追问：服务端 TIME_WAIT 多怎么办？——先查是谁主动关的连接，尽量改成客户端主动关；再考虑 tcp_tw_reuse。常见追问：tcp_tw_recycle 呢？——它对 NAT 后的客户端会丢包，已在 Linux 4.12 移除，别再用。常见错误回答：「把 tcp_fin_timeout 调小就能减少 TIME_WAIT」——那个参数管 FIN_WAIT2。"
+    },
+    {
+      "title": "怎么定位是服务端慢还是网络慢？",
+      "answer": [
+        "把延迟拆开量：curl -o /dev/null -s -w 'dns:%{time_namelookup} conn:%{time_connect} ttfb:%{time_starttransfer} total:%{time_total}\\n' http://ip:port/，ttfb 减 conn 是服务端处理时间，conn 减 dns 是建连往返",
+        "服务端自己也要量一遍：在 Go 服务里用中间件统计 handler 耗时，和客户端看到的对不上，差值就落在网络或排队上",
+        "看丢包重传：ss -ti 看每条连接的 retrans 计数，netstat -s | grep -i retrans 看累计重传；重传多说明链路质量差，延迟会被放大一个 RTO",
+        "定位是哪一段链路：mtr 或 traceroute 看延迟在哪一跳跳变，再在同网段的机器上 ping 对比，区分是中间设备还是最后一段",
+        "大流量传输慢但小请求正常，是带宽或 BDP 问题（长肥管道），看网卡利用率和 qdisc 丢包 tc -s qdisc",
+        "客户端用长连接复用时 connect 耗时会被摊薄，看着一切正常，所以要单独看新建连接的首包时间"
+      ],
+      "notes": "常见追问：服务端 CPU 不高但延迟高？——瓶颈在等待（下游、锁、磁盘 IO），不在算力。常见追问：怎么确认有重传？——抓包里同一个序号的包重复出现，或 ss -ti 的 retrans 计数在涨。常见追问：怎么排除是服务端排队？——对比在途请求数、并发上限和实际处理耗时。常见错误回答：「延迟高就是带宽不够」——带宽、时延、丢包是三件事，必须分开量。"
+    },
+    {
+      "title": "什么是半连接队列和全连接队列？满了会怎样？",
+      "answer": [
+        "半连接队列（syn queue）存放已收到 SYN 但握手还没完成的连接，处于 SYN_RECV 状态，长度上限由 net.ipv4.tcp_max_syn_backlog 控制",
+        "全连接队列（accept queue）存放握手已完成、等着应用调 accept() 取走的连接，长度上限是 listen() 的 backlog 参数，并且被 net.core.somaxconn 封顶",
+        "半连接队列满：开了 SYN cookies 时内核把连接状态编码进 SYN-ACK 的序号里、不占服务端状态，队列满也不会丢；没开则新 SYN 被丢弃，客户端重传 SYN，表现为连接建立极慢或最终超时",
+        "全连接队列满：默认 tcp_abort_on_overflow=0，内核丢掉完成握手的那个 ACK，客户端以为已经连上、发数据后收到 RST；设成 1 则直接回 RST，失败得更快更明确",
+        "现场确认：ss -lnt 里监听端口的 Recv-Q 是当前全连接队列长度、Send-Q 是 backlog 上限，两者贴得很近就是队列满了，服务端日志里会出现 accept queue overflow",
+        "处置顺序：调大应用 listen 的 backlog、同步调大 somaxconn 和 tcp_max_syn_backlog、打开 tcp_syncookies，再考虑打开 tcp_abort_on_overflow 让失败快速暴露"
+      ],
+      "notes": "常见追问：SYN cookies 怎么工作？——把连接状态编码进 SYN-ACK 的初始序号，不占服务端内存，代价是不能在握手前存数据。常见追问：为什么全连接队列满了客户端还觉得连上了？——握手最后一步是客户端发 ACK，服务端把这个 ACK 丢了，但客户端已经进 ESTABLISHED。常见追问：两个队列是一回事吗？——一个在握手完成前，一个在握手完成后。常见错误回答：「队列满就意味着连不上」——连得上，只是数据发过去会被 RST 掉。"
+    },
+    {
+      "title": "服务端 listen 的 backlog 到底控制什么？",
+      "answer": [
+        "backlog 是全连接队列的长度上限：握手已经完成、排队等着被 accept() 领走的连接最多能有多少个",
+        "它会被内核的 somaxconn 封顶，实际生效值取 min(backlog, net.core.somaxconn)；只改代码里的 backlog 而不同步调 sysctl 是没用的",
+        "Go 的 net.Listen 在 Linux 上直接取 /proc/sys/net/core/somaxconn 当 backlog，想调大就改 sysctl；要精确指定更小的值或自己控制 accept 节奏，得走 syscall.Listen",
+        "队列满时的行为：默认内核丢掉完成握手的 ACK 或者直接回 RST，客户端表现为「刚连上就断」或者「卡住直到超时」",
+        "backlog 太小的直接征兆：ss -lnt 里该端口的 Recv-Q 常年贴着 Send-Q，服务端日志持续出现 accept queue overflow",
+        "它只管 accept 阶段，不限制已经建立的连接总数；并发连接数是另一个维度，由应用逻辑和连接池控制"
+      ],
+      "notes": "常见追问：backlog 传 0 会怎样？——各系统行为不一致，不要依赖它，显式传值并同步调 somaxconn。常见追问：调了 backlog 还是溢出？——多半被 somaxconn 封顶了，或者应用 accept 得太慢、请求处理速度跟不上。常见追问：Go 里怎么设 backlog？——标准 net 包没有直接参数，Linux 上靠 somaxconn 间接控制。常见错误回答：「backlog 是同时能连进来的最大连接数」——它是等待 accept 的队列长度，不是连接总数上限。"
+    },
+    {
+      "title": "什么是 SYN Flood？怎么防护？",
+      "answer": [
+        "攻击者用伪造的源 IP 大量发 SYN，服务端为每个 SYN 分配半连接状态，把半连接队列和内存占满，正经用户的 SYN 被丢弃，表现为服务不可用",
+        "识别特征：SYN_RECV 状态的连接数暴涨却几乎没有一条进 ESTABLISHED，可用 ss -ant | grep SYN-RECV 计数，nstat -az TcpExt_ListenOverflows TcpExt_SyncookiesSent 看内核统计",
+        "首选防护是 SYN cookies：net.ipv4.tcp_syncookies=1（多数发行版默认开启），队列满时内核把状态编码进 SYN-ACK 序号，不占服务端半连接状态",
+        "SYN cookies 的代价：只在队列满时生效，且不适合需要握手前保存数据的场景（例如 TCP MD5 校验）",
+        "网络层再加两道：iptables 限速或丢弃标志位异常的包（--tcp-flags ALL NONE 这类规则），云上则用安全组与 DDoS 清洗服务",
+        "单纯调大 tcp_max_syn_backlog 只能扛小流量，扛不住真正的洪泛；有效的防护要在网络边缘做，必要时前面放 L4 负载均衡"
+      ],
+      "notes": "常见追问：SYN cookies 为什么能防住？——不需要为每个 SYN 存服务端状态，伪造源 IP 也占不到资源。常见追问：怎么确认是 SYN Flood？——SYN_RECV 数量暴涨、Established 反而下降，且 ListenOverflows 和 SyncookiesSent 同步上涨。常见追问：靠半连接超时能防住吗？——只能拖慢攻击者，内存仍被占着。常见错误回答：「把 tcp_syncookies 关掉换性能」——恰恰是打开它才能扛洪泛。"
+    },
+    {
+      "title": "为什么改完 iptables 规则不生效？",
+      "answer": [
+        "规则按顺序匹配，第一条命中的就决定结果，同一条链上后面的规则不再被评估；新加的 DROP 前面如果有一条宽松的 ACCEPT，它永远不会被执行到",
+        "用 iptables -L -n -v --line-numbers 看每条规则的 pkts 计数，计数为 0 说明从没被命中过，多半是被前面的规则抢先匹配",
+        "链走错了：入站流量走 PREROUTING → INPUT，出站走 OUTPUT → POSTROUTING；只改 INPUT 对本机主动发出的连接（比如调外部接口）不起作用",
+        "匹配条件里的网卡可能不对：流量实际从 docker0、veth 或 bond 进来，写成 -i eth0 就一条都匹配不上，用 ip route get 对端 IP 能看到真实路径",
+        "容器环境有专门的链：Docker 走 DOCKER-USER，Kubernetes Calico 走 cali-INPUT，规则加在 INPUT 里对容器流量可能无效",
+        "还要确认是否持久化：iptables-save 存盘或用 netfilter-persistent、firewalld reload，只在内存里改重启就丢；IPv6 流量走 ip6tables 或 nftables"
+      ],
+      "notes": "常见追问：DROP 和 REJECT 有什么区别？——REJECT 会回 ICMP 或 RST，客户端立刻报错；DROP 静默丢弃，客户端一直等到超时。常见追问：怎么验证规则真的生效？——看 -v 的 pkts 计数有没有在涨。常见追问：iptables 和 nft 什么关系？——新内核上 iptables 只是 nft 的兼容层，iptables -V 能看出来。常见错误回答：「规则写了就一定生效」——顺序、接口、链选错都可能导致它从不被评估。"
+    },
+    {
+      "title": "内网能通外网不通，怎么排查？",
+      "answer": [
+        "按层推进：ip route get 8.8.8.8 看路由和出口网卡，再 ping 默认网关、再 ping 外网 IP，这两步能把「路由或网关问题」和「出网被拦问题」分开",
+        "解析可能只在内网可用：外网域名依赖公司 DNS 的转发，转发器配错就解析失败；用 dig @8.8.8.8 对比，并确认 /etc/resolv.conf 里的 nameserver 可达",
+        "出口可能要求走代理：检查 http_proxy、https_proxy、no_proxy 环境变量，很多环境是内网直连、外网必须走代理；漏配 no_proxy 还会让内网请求也绕代理",
+        "防火墙与出口 ACL：检查本机 OUTPUT 链、网关上的出方向策略、云上安全组的出方向规则，iptables -L -n -v 看 OUTPUT 链的计数",
+        "转发场景还要看 NAT：网关的 MASQUERADE/SNAT 规则在不在、net.ipv4.ip_forward 是不是 1、conntrack 表有没有满（dmesg 里会有丢包记录）",
+        "剩下两个常见坑：只解析出 AAAA 但没有 IPv6 路由（curl -4 试试），以及 PMTU 黑洞（ping 通、小包正常、大包卡住）"
+      ],
+      "notes": "常见追问：ping 外网 IP 通、ping 域名不通？——纯 DNS 问题。常见追问：为什么容器里出不去？——宿主机有代理而容器没继承，或者容器的默认路由指向了错误的网关。常见追问：怎么确认是出口 ACL 挡的？——在网关上抓包，看包有没有发出去。常见错误回答：「内网通说明网络没问题」——内网和外网走的是完全不同的路由与策略。"
+    },
+    {
+      "title": "什么是 MTU 和 MSS？",
+      "answer": [
+        "MTU 是链路上单个 IP 包的最大字节数，以太网默认 1500；MTU 是逐跳的，PPPoE、隧道、VPN 都会让路径上的有效 MTU 变小",
+        "MSS 是 TCP 段里能装的最大数据长度，在 SYN 的 MSS 选项里协商：IPv4 是 MTU 减 40（20 字节 IP 头加 20 字节 TCP 头），所以 MTU 1500 时 MSS 是 1460；IPv6 是 MTU 减 60，MSS 是 1440",
+        "路径 MTU 发现靠 ICMP：路由器发不出更大的包时回 Fragmentation Needed（IPv6 是 Packet Too Big，而且 IPv6 路由器自己不 fragmentation），发送方据此调小后续报文",
+        "最典型的故障是 PMTU 黑洞：防火墙把 ICMP 挡了，发送方永远不知道路径 MTU 变小，小包正常、大报文卡住，表现为 curl 小 URL 正常、下载大文件卡在中间",
+        "排查手段：ip link show 看本机接口 MTU，ping -M do -s 1472 试探路径能承载的包长，tracepath 或 mtr --mtu 直接读路径上的 MTU",
+        "三种修法：把接口 MTU 改对（ip link set dev eth0 mtu 1400）、在网关做 MSS 钳制（iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu）、或开 TCP MTU 探测（net.ipv4.tcp_mtu_probing=1）"
+      ],
+      "notes": "常见追问：MTU 和 MSS 到底差在哪？——MTU 是 IP 层的包上限，MSS 是 TCP 层扣掉头部后可装的数据上限。常见追问：怎么确认是 MTU 问题？——小请求正常大请求卡住，加上 ping -M do 试探和抓包看到重传就能确认。常见追问：为什么 IPv6 更容易出问题？——中间设备一挡 ICMPv6 Packet Too Big 就彻底不通。常见错误回答：「把本机 MTU 改小就行」——多数场景是路径 MTU 比本机小，必须靠钳制 MSS 或改全路径。"
+    }
+  ]
+}
