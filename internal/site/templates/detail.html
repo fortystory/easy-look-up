@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>{{.Title}} · 快速查找</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script>
+		// 尽早套用已保存的主题，避免刷新时闪一下白底
+		(function () {
+			try {
+				var saved = localStorage.getItem("theme");
+				if (saved === "light" || saved === "dark") {
+					document.documentElement.setAttribute("data-theme", saved);
+				}
+			} catch (e) {
+				// 隐私模式下 localStorage 不可用，忽略
+			}
+		})();
+	</script>
+	<script src="/static/app.js" defer></script>
+</head>
+<body>
+	<header class="site-header">
+		<a class="brand" href="/">快速查找</a>
+		<div class="header-actions">
+			<label class="search">
+				<input id="search" type="search" placeholder="搜索条目…" autocomplete="off" aria-label="搜索条目">
+			</label>
+			<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换亮色/暗色主题">🌙</button>
+		</div>
+	</header>
+
+	<main>
+		<h1>{{.Title}}</h1>
+
+		<nav class="group-nav">
+			{{range .Groups}}<a href="#{{.ID}}">{{.Title}}</a>{{end}}
+		</nav>
+
+		{{range .Groups}}
+		<section class="group" id="{{.ID}}">
+			<h2>{{.Title}}</h2>
+			{{range .Entries}}
+			<article class="entry" data-search="{{.SearchText}}">
+				<h3>{{.Title}}</h3>
+				<p class="desc">{{.Description}}</p>
+				{{if .Notes}}<aside class="notes">{{.Notes}}</aside>{{end}}
+				<div class="code">
+					<button class="copy-btn" type="button" data-code="{{.RawCode}}">复制</button>
+					{{.Code}}
+				</div>
+			</article>
+			{{end}}
+		</section>
+		{{end}}
+	</main>
+
+	<footer class="site-footer">快速查找 · 内容以 JSON 存放于仓库</footer>
+</body>
+</html>

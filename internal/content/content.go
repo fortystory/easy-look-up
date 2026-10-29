@@ -1,0 +1,133 @@
+package content
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"path"
+	"strings"
+)
+
+type Entry struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Code        string `json:"code"`
+	Lang        string `json:"lang"`
+	Notes       string `json:"notes"`
+}
+
+type Group struct {
+	ID      string  `json:"id"`
+	Title   string  `json:"title"`
+	Entries []Entry `json:"entries"`
+}
+
+type Category struct {
+	ID     string
+	Title  string
+	Groups []Group
+}
+
+// List 列出内容目录下的所有类别 id，按字典序。
+// 一个目录下只要有 .json 文件就算一个类别。
+func List(fsys fs.FS) ([]string, error) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, fmt.Errorf("读取内容目录: %w", err)
+	}
+
+	var ids []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		files, err := fs.ReadDir(fsys, entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("读取类别目录 %q: %w", entry.Name(), err)
+		}
+		for _, file := range files {
+			if !file.IsDir() && strings.HasSuffix(file.Name(), ".json") {
+				ids = append(ids, entry.Name())
+				break
+			}
+		}
+	}
+	return ids, nil
+}
+
+// Load 读取 fsys 里某个类别目录下的全部分组文件。
+// 解析失败返回 error，error 的信息里必须包含出错的文件名。
+func Load(fsys fs.FS, categoryID string) (Category, error) {
+
+	category := Category{
+		ID:    categoryID,
+		Title: displayTitle(categoryID),
+	}
+
+	entries, err := fs.ReadDir(fsys, categoryID)
+	if err != nil {
+		return Category{}, fmt.Errorf("读取类别目录 %q: %w", categoryID, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		name := entry.Name()
+		full := path.Join(categoryID, name)
+
+		group, err := loadGroup(fsys, full)
+		if err != nil {
+			return Category{}, err
+		}
+		category.Groups = append(category.Groups, group)
+	}
+
+	if len(category.Groups) == 0 {
+		return Category{}, fmt.Errorf("类别 %q 下没有任何分组文件", categoryID)
+	}
+	return category, nil
+}
+
+func loadGroup(fsys fs.FS, name string) (Group, error) {
+	data, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return Group{}, fmt.Errorf("读取 %s: %w", name, err)
+	}
+
+	var group Group
+	if err := json.Unmarshal(data, &group); err != nil {
+		return Group{}, fmt.Errorf("解析 %s: %w", name, err)
+	}
+
+	if group.Title == "" {
+		return Group{}, fmt.Errorf("解析 %s: 缺少 title 字段", name)
+	}
+
+	for i, entry := range group.Entries {
+		if entry.Title == "" || entry.Code == "" {
+			return Group{}, fmt.Errorf("解析 %s: 第 %d 个条目缺少 title 或 code", name, i+1)
+		}
+	}
+
+	return group, nil
+
+}
+
+// displayNames 是已知类别的显示名。
+var displayNames = map[string]string{
+	"go":     "Go 语言",
+	"stdlib": "Go 标准库",
+	"gin":    "Gin 框架",
+}
+
+// displayTitle 从类别 id 推导显示名："go" → "Go 语言"。
+func displayTitle(categoryID string) string {
+	if name, ok := displayNames[categoryID]; ok {
+		return name
+	}
+	if categoryID == "" {
+		return ""
+	}
+	return strings.ToUpper(categoryID[:1]) + categoryID[1:]
+}

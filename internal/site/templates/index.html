@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>快速查找</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<script>
+		// 尽早套用已保存的主题，避免刷新时闪一下白底
+		(function () {
+			try {
+				var saved = localStorage.getItem("theme");
+				if (saved === "light" || saved === "dark") {
+					document.documentElement.setAttribute("data-theme", saved);
+				}
+			} catch (e) {
+				// 隐私模式下 localStorage 不可用，忽略
+			}
+		})();
+	</script>
+	<script src="/static/app.js" defer></script>
+</head>
+<body>
+	<header class="site-header">
+		<a class="brand" href="/">快速查找</a>
+		<div class="header-actions">
+			<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换亮色/暗色主题">🌙</button>
+		</div>
+	</header>
+
+	<main>
+		<h1>快速查找</h1>
+		<p class="desc">按类别查阅代码片段。</p>
+
+		<ul class="category-grid">
+			{{range .Categories}}
+			<li>
+				<a class="category-card" href="/{{.ID}}">
+					<h2>{{.Title}}</h2>
+					<p>{{.GroupCount}} 个分组 · {{.EntryCount}} 条内容</p>
+				</a>
+			</li>
+			{{end}}
+		</ul>
+	</main>
+
+	<footer class="site-footer">快速查找 · 内容以 JSON 存放于仓库</footer>
+</body>
+</html>
